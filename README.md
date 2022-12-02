@@ -8,7 +8,7 @@ The configuration UI is not (currently) a _pip_-installable Python package.
 
 > **Note**
 > As of 2022-11-30, Python **3.9** or **3.10** is required. Some required libraries (including wxPython) 
-> have issues with Python 3.11. Python versions 3.6 to 3.8 may work, but have not been thoroughly tested.
+> have issues with Python 3.11. Python versions 3.7 to 3.8 may work, but have not been thoroughly tested.
 
 Installing
 ----------
@@ -19,6 +19,8 @@ Installing
 2. In the repo directory, install the requirements:
     * `python -m pip install -r requirements.txt`
 
+Note: using a virtual environment is *highly* recommended.
+
 Running
 -------
-* In the repo directory, `python run.py`
+* In the repo directory, `python -m config_dialog`
