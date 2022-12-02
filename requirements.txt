@@ -1,0 +1,5 @@
+endaq-device @ git+https://github.com/MideTechnology/endaq-device.git@develop
+idelib
+numpy
+pyserial
+wxPython==4.2.0
