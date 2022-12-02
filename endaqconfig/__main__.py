@@ -4,14 +4,17 @@ __main__.py: allows the package to be run as a command-line utility.
 This should contain as little code as possible, just what's related to
 running from the command line.
 """
-
 import wx
 
 from .config_dialog import configureRecorder
 from .widgets import device_dialog
 
-if __name__ == "__main__":
+
+def run():
+    """ Run the configuration utility from the command line.
+    """
     import argparse
+
     parser = argparse.ArgumentParser(description="enDAQ Configuration GUI")
     parser.add_argument("-a", '--advanced', action="store_true",
                         help="Show advanced configuration options")
@@ -25,3 +28,8 @@ if __name__ == "__main__":
             configureRecorder(dev, showAdvanced=args.advanced)
     finally:
         wx.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+
+
+
+if __name__ == "__main__":
+    run()
