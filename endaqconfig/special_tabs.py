@@ -251,6 +251,8 @@ class InfoPanel(HtmlWindow):
                     v = self.field_types[k](v)
                 elif isinstance(v, int):
                     v = "0x%08X" % v
+                elif isinstance(v, dict) and len(v) == 0:
+                    v = "True"
             except TypeError:
                 pass
 
@@ -308,10 +310,11 @@ class SSXInfoPanel(InfoPanel):
     ICONS = ('resources/info.png', 'resources/warn.png', 'resources/error.png')
 
     def getDeviceData(self):
+        super(SSXInfoPanel, self).getDeviceData()
         man = self.root.device.manufacturer
         if man:
             self.data['Manufacturer'] = man
-        super(SSXInfoPanel, self).getDeviceData()
+            self.data = {k: self.data[k] for k in sorted(self.data)}
 
 
     def buildUI(self):
