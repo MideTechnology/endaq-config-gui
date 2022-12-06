@@ -19,9 +19,9 @@ import wx
 from .base import logger, ConfigBase, Group
 
 
-# ===============================================================================
+# ===========================================================================
 #
-# ===============================================================================
+# ===========================================================================
 
 def makeExpression(exp, configId=None, label=None):
     """ Helper method for compiling an expression in a string into a code
@@ -71,9 +71,9 @@ def makeGainOffsetFormat(gain=1.0, offset=0.0, configId=None, label=None):
     return displayFormat
 
 
-# ===============================================================================
+# ===========================================================================
 #
-# ===============================================================================
+# ===========================================================================
 
 def getConverters(configUi, data=None):
     """ Recursively get "DisplayFormat" expressions from dumped CONFIG.UI
@@ -120,9 +120,9 @@ def getConverters(configUi, data=None):
     return data
 
 
-# ===============================================================================
+# ===========================================================================
 #
-# ===============================================================================
+# ===========================================================================
 
 def checkCompatibility(dev, configUi, devprops):
     """ Score the compatibility of imported config data with a given device.
@@ -163,9 +163,9 @@ def checkCompatibility(dev, configUi, devprops):
     return result
 
 
-# ===============================================================================
+# ===========================================================================
 #
-# ===============================================================================
+# ===========================================================================
 
 def loadExport(filename):
     """ Load data from an exported configuration file.
@@ -245,9 +245,9 @@ def loadExport(filename):
 #     return (config, configUi, props)
 
 
-# ===============================================================================
+# ===========================================================================
 #
-# ===============================================================================
+# ===========================================================================
 
 def applyImportedConfig(dlg, config, configUi, props=None,
                         exclude=(0x8ff7f, 0x9ff7f), reset=True):
@@ -290,9 +290,21 @@ def applyImportedConfig(dlg, config, configUi, props=None,
             dlg.configItems[cid].setDisplayValue(value)
 
 
-# ===============================================================================
+# ============================================================================
 #
-# ===============================================================================
+# ============================================================================
+
+def cleanProps(el: dict):
+    """ Recursively emove unknown elements from a dictionary of device
+        properties.
+    """
+    if isinstance(el, list):
+        return [cleanProps(x) for x in el]
+    elif not isinstance(el, dict):
+        return el
+
+    return {k: cleanProps(v) for k, v in el.items() if k != "UnknownElement"}
+
 
 def exportConfig(device, filename, config=None, configUi=None, props=None):
     """ Generate a configuration export file. Writes the device's current
@@ -341,7 +353,7 @@ def exportConfig(device, filename, config=None, configUi=None, props=None):
 
     # Encode and write
     data = {'RecorderConfigurationList': config,
-            'RecordingProperties': props,
+            'RecordingProperties': cleanProps(props),
             'ConfigUI': configUi.getRaw()}
 
     with open(filename, 'wb') as f:
