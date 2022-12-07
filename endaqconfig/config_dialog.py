@@ -34,12 +34,12 @@ import wx.lib.sized_controls as SC
 
 from ebmlite import loadSchema
 import endaq.device
+from endaq.device import configio
 
 from .base import __DEBUG__, logger
 from . import base
 from .common import isCompiled
 from .widgets import icons
-from . import import_export
 
 # Widgets. Even though these modules aren't used directly, they need to be
 # imported so that their contents can get into the `base.TAB_TYPES` dictionary.
@@ -387,7 +387,13 @@ class ConfigDialog(SC.SizedDialog):
     def OnImportButton(self, _evt: Optional[wx.Event]):
         """ Handle the "Import..." button.
         """
-        import_export.importConfig(self)
+        wildcard = "Exported configuration data (*.xcg)|*.xcg"
+
+        dlg = wx.FileDialog(self, message="Export Device Configuration",
+                            style=wx.FD_OPEN, wildcard=wildcard)
+        if dlg.ShowModal() == wx.ID_OK:
+            configio.importConfig(self.device, dlg.GetPath())
+            self.applyConfigData()
 
 
     def OnExportButton(self, _evt: Optional[wx.Event]):
@@ -401,9 +407,8 @@ class ConfigDialog(SC.SizedDialog):
         if dlg.ShowModal() == wx.ID_OK:
             try:
                 self.updateConfigData()
-                data = self.encodeConfigData()
-
-                import_export.exportConfig(self.device, dlg.GetPath(), data)
+                self.updateDeviceConfig()
+                configio.exportConfig(self.device, dlg.GetPath())
 
             except Exception as err:
                 # TODO: More specific error message
