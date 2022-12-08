@@ -20,7 +20,6 @@ Basic theory of operation:
     have checkboxes, the checkbox is left unchecked.
 
 :todo: Clean up (maybe replace) the old calibration and info tabs.
-:todo: Implement configuration import/export (refactor in `devices` module).
 :todo: There are some redundant calls to update enabled and checkbox states.
     They don't cause a problem, but they should be cleaned up.
 """
@@ -123,7 +122,7 @@ class ConfigDialog(SC.SizedDialog):
 
         self.tabs = []
 
-        self.hasWifi = False
+        self.wifiTab = None
         self.hasCal = False
 
         self.hints = self.device.config.getConfigUI()
@@ -160,7 +159,7 @@ class ConfigDialog(SC.SizedDialog):
         exportTT = "Export device configuration data."
         importTT = "Import device configuration data."
 
-        x = self.hasWifi << 1 | self.hasCal
+        x = (0b10 if self.wifiTab is not None else 0) | self.hasCal
         if x:
             exportTT = f"{exportTT}\n{self.EXPORT_TOOLTIPS[x]}"
             importTT = f"{importTT}\n{self.EXPORT_TOOLTIPS[x]}"
@@ -211,7 +210,9 @@ class ConfigDialog(SC.SizedDialog):
                 tabType = base.TAB_TYPES[el.name]
                 tab = tabType(self.notebook, -1, element=el, root=self)
 
-                self.hasWifi = self.hasWifi or tabType == wifi_tab.WiFiSelectionTab
+                if tabType == wifi_tab.WiFiSelectionTab:
+                    self.wifiTab = tab
+
                 self.hasCal = self.hasCal or isinstance(tab, special_tabs.FactoryCalibrationTab)
 
                 if not tab.isAdvancedFeature or self.showAdvanced:
@@ -360,6 +361,9 @@ class ConfigDialog(SC.SizedDialog):
         if self.setClockCheck.IsEnabled() and self.setClockCheck.GetValue():
             logger.info("Setting clock...")
             try:
+                if self.wifiTab is not None:
+                    #  Stop the scan thread first to avoid conflicts
+                    self.wifiTab.shutdown()
                 self.device.setTime()
             except Exception as err:
                 logger.error(f"Error setting clock: {err!r}")
@@ -375,7 +379,8 @@ class ConfigDialog(SC.SizedDialog):
             if not isinstance(tab, wifi_tab.WiFiSelectionTab):
                 if tab.save() is False:
                     return
-            elif self.applyWifiChangesCheck is not None and self.applyWifiChangesCheck.GetValue():
+            elif (self.applyWifiChangesCheck is not None and
+                  self.applyWifiChangesCheck.GetValue()):
                 tab.save()
 
 
@@ -389,37 +394,39 @@ class ConfigDialog(SC.SizedDialog):
         """
         wildcard = "Exported configuration data (*.xcg)|*.xcg"
 
-        dlg = wx.FileDialog(self, message="Export Device Configuration",
-                            style=wx.FD_OPEN, wildcard=wildcard)
-        if dlg.ShowModal() == wx.ID_OK:
-            configio.importConfig(self.device, dlg.GetPath())
-            self.applyConfigData()
+        with wx.FileDialog(self, message="Export Device Configuration",
+                           style=wx.FD_OPEN, wildcard=wildcard) as dlg:
+            if dlg.ShowModal() == wx.ID_OK:
+                configio.importConfig(self.device, dlg.GetPath())
+                self.loadConfigData()
 
 
     def OnExportButton(self, _evt: Optional[wx.Event]):
         """ Handle the "Export..." button.
         """
         wildcard = "Exported configuration data (*.xcg)|*.xcg"
+        if self.device.serial:
+            defaultFile = "{}_config.xcg".format(self.device.serial)
+        else:
+            defaultFile = "config.xcg"
 
-        dlg = wx.FileDialog(self, message="Export Device Configuration",
-                            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
-                            wildcard=wildcard)
-        if dlg.ShowModal() == wx.ID_OK:
-            try:
-                self.updateConfigData()
-                self.updateDeviceConfig()
-                configio.exportConfig(self.device, dlg.GetPath())
+        with wx.FileDialog(self, message="Export Device Configuration",
+                           defaultFile=defaultFile, wildcard=wildcard,
+                           style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dlg:
+            if dlg.ShowModal() == wx.ID_OK:
+                try:
+                    self.updateConfigData()
+                    self.updateDeviceConfig()
+                    configio.exportConfig(self.device, dlg.GetPath())
 
-            except Exception as err:
-                # TODO: More specific error message
-                logger.error('Could not export configuration ({}: {})'
-                             .format(type(err).__name__, err))
-                self.showError(
-                        "The configuration data could not be exported to the "
-                        "specified file.", "Config Export Failed",
-                        style=wx.OK | wx.ICON_EXCLAMATION)
-
-        dlg.Destroy()
+                except Exception as err:
+                    # TODO: More specific error message
+                    logger.error('Could not export configuration ({}: {})'
+                                 .format(type(err).__name__, err))
+                    self.showError(
+                            "The configuration data could not be exported to the "
+                            "specified file.", "Config Export Failed",
+                            style=wx.OK | wx.ICON_EXCLAMATION)
 
 
     # ===========================================================================
@@ -587,25 +594,22 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
     if not dev.config.configUi:
         raise ValueError("The device appears to have corrupted configuration UI data.")
 
-    dlg = ConfigDialog(parent, device=dev, setTime=setTime,
-                       useUtc=useUtc, saveOnOk=saveOnOk,
-                       showAdvanced=showAdvanced,
-                       icon=icon)
+    with ConfigDialog(parent, device=dev, setTime=setTime,
+                      useUtc=useUtc, saveOnOk=saveOnOk,
+                      showAdvanced=showAdvanced,
+                      icon=icon) as dlg:
+        if modal:
+            dlg.ShowModal()
+        else:
+            dlg.Show()
 
-    if modal:
-        dlg.ShowModal()
-    else:
-        dlg.Show()
+        result = dlg.configData
+        setTime = dlg.setClockCheck.GetValue()
+        useUtc = dlg.useUtc
+        msg = dlg.postConfigMessage or getattr(dev, "POST_CONFIG_MSG", None)
 
-    result = dlg.configData
-    setTime = dlg.setClockCheck.GetValue()
-    useUtc = dlg.useUtc
-    msg = dlg.postConfigMessage or getattr(dev, "POST_CONFIG_MSG", None)
-
-    if not modal:
-        return dlg
-
-    dlg.Destroy()
+        if not modal:
+            return dlg
 
     if result is None:
         return None

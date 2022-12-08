@@ -604,6 +604,21 @@ class WiFiSelectionTab(Tab):
         return enable
 
 
+    def shutdown(self):
+        """ Kill the Wi-Fi scanning and status threads.
+        """
+        try:
+            logger.debug('Shutting down Wi-Fi scan and status threads')
+            self.scanThread.cancel.set()
+            self.networkStatusThread.cancel.set()
+            while ((self.scanThread and self.scanThread.is_alive()) or
+                   (self.networkStatusThread and self.networkStatusThread.is_alive())):
+                pass
+        except AttributeError:
+            # Can sometimes occur in race conditions during shutdown.
+            pass
+
+
     # ===========================================================================
     #
     # ===========================================================================
@@ -806,16 +821,7 @@ class WiFiSelectionTab(Tab):
     def OnClose(self, evt):
         """ Handle dialog closed.
         """
-        try:
-            self.scanThread.cancel.set()
-            self.networkStatusThread.cancel.set()
-            while ((self.scanThread and self.scanThread.is_alive())
-                   or (self.networkStatusThread and self.networkStatusThread.is_alive())):
-                pass
-
-        except AttributeError:
-            pass
-
+        self.shutdown()
         self.parent.Close()
         evt.Skip()
 
