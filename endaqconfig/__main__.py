@@ -20,7 +20,10 @@ def run():
                         help="Show advanced configuration options")
     args = parser.parse_args()
 
-    app = wx.App()
+    app = wx.GetApp()
+    if not app:
+        app = wx.App()
+
     try:
         dev = device_dialog.selectDevice(showAdvanced=args.advanced)
         wx.SetCursor(wx.Cursor(wx.CURSOR_WAIT))

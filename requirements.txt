@@ -1,5 +1,6 @@
 endaq-device @ git+https://github.com/MideTechnology/endaq-device.git@develop
 idelib
+ebmlite
 numpy
 pyserial
-wxPython==4.2.0
+wxPython>=4.1.1
