@@ -3,4 +3,4 @@ idelib
 ebmlite
 numpy
 pyserial
-wxPython==4.2.0
+wxPython>=4.1.1

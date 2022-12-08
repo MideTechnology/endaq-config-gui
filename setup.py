@@ -5,7 +5,7 @@ with open('README.md', 'r') as fh:
 
 INSTALL_REQUIRES = [
     "endaq-device @ git+https://github.com/MideTechnology/endaq-device.git@develop",
-    "wxPython==4.2.0",
+    "wxPython>=4.1.1",
 ]
 
 setuptools.setup(
