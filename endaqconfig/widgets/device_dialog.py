@@ -4,8 +4,9 @@ Dialog for selecting recording devices.
 """
 
 from collections import namedtuple
-from datetime import datetime
-import time
+from datetime import datetime, timedelta
+import logging
+import os.path
 
 import wx
 import wx.lib.sized_controls as sc
@@ -13,12 +14,28 @@ import wx.lib.mixins.listctrl as listmix
 
 from endaq.device import getDevices, getDeviceList, RECORDERS
 from endaq.device import deviceChanged
+from endaq.device.base import os_specific
 
 from . import icons
 
-#===============================================================================
+logger = logging.getLogger('endaqconfig')
+
+# ===========================================================================
+# Threshold values for showing warning or error icons
+# ===========================================================================
+
+# Thresholds for showing device low free space messages, severe and moderate
+SPACE_MIN_MB = 4
+SPACE_WARN_MB = SPACE_MIN_MB * 2
+
+# Thresholds for showing warning when device and calibration getting old,
+# moderate. Severe is always less than 0 days.
+CAL_WARN_DAYS = timedelta(days=120)
+DEV_WARN_DAYS = timedelta(days=182)
+
+# ===========================================================================
 #
-#===============================================================================
+# ===========================================================================
 
 
 class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
@@ -52,9 +69,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     RECORD_UNSUPPORTED = "Device does not support recording via software"
     RECORD_ENABLED = "Initiate recording on the selected device"
 
-    # ===============================================================================
+    # ==============================================================================
     #
-    # ===============================================================================
+    # ==============================================================================
 
     class DeviceListCtrl(wx.ListCtrl, listmix.ListCtrlAutoWidthMixin):
         # Required to create a sortable list
@@ -67,9 +84,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             wx.ListCtrl.__init__(self, parent, ID, pos, size, style)
             listmix.ListCtrlAutoWidthMixin.__init__(self)
 
-    # ===============================================================================
+    # ==============================================================================
     #
-    # ===============================================================================
+    # ==============================================================================
 
 
     def GetListCtrl(self):
@@ -87,12 +104,12 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # Clear cached devices
         RECORDERS.clear()
 
-        style = wx.DEFAULT_DIALOG_STYLE \
-            | wx.RESIZE_BORDER \
-            | wx.MAXIMIZE_BOX \
-            | wx.MINIMIZE_BOX \
-            | wx.DIALOG_EX_CONTEXTHELP \
-            | wx.SYSTEM_MENU
+        style = (wx.DEFAULT_DIALOG_STYLE |
+                 wx.RESIZE_BORDER |
+                 wx.MAXIMIZE_BOX |
+                 wx.MINIMIZE_BOX |
+                 wx.DIALOG_EX_CONTEXTHELP |
+                 wx.SYSTEM_MENU)
 
         self.root = kwargs.pop('root', None)
         self.autoUpdate = kwargs.pop('autoUpdate', 500)
@@ -120,8 +137,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.selected = None
         self.selectedIdx = None
         self.firstDrawing = True
-
-        # TODO: listWidth was supposed to be used for something, but it isn't.
         self.listWidth = 420
 
         pane = self.GetContentsPane()
@@ -230,34 +245,39 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         tips = []
         icon = self.ICON_NONE
-        try:
-            life = dev.getEstLife()
-            calExp = dev.getCalExpiration()
-            freeSpace = dev.getFreeSpace() / 1024 / 1024
+        now = datetime.now()
 
-            if freeSpace is not None and freeSpace < 1:
-                tips.append("This device is nearly full (%.2f MB available). "
-                            "This may prevent configuration." % freeSpace)
-                icon = self.ICON_ERROR
+        if dev.birthday:
+            age = now - dev.birthday
+            lifeleft = dev.LIFESPAN - age
+        else:
+            age = lifeleft = None
 
-            if life is not None and life < 0:
-                tips.append("This devices is %d days old; battery life "
-                            "may be limited." % dev.getAge())
+        calExp = dev.getCalExpiration()
+
+        if os.path.exists(dev.path):
+            icon = self.ICON_INFO
+            freeSpace = os_specific.getFreeSpace(dev.path) / 1024 / 1024
+            if freeSpace < SPACE_WARN_MB:
+                tip = f"This device is nearly full ({freeSpace:.2f} MB available)."
+                if freeSpace < SPACE_MIN_MB:
+                    tip += " This may prevent configuration."
+                    icon = self.ICON_ERROR
+                tips.append(tip)
+
+        if lifeleft is not None and lifeleft < DEV_WARN_DAYS:
+            icon = max(icon, self.ICON_INFO)
+            tips.append(f"This devices is {age.days} days old; battery life may be limited.")
+            if lifeleft.days < 0:
                 icon = max(icon, self.ICON_WARN)
 
-            if calExp:
-                calExpDate = datetime.fromtimestamp(calExp).date()
-                if calExp < time.time():
-                    tips.append("This device's calibration has expired on %s."
-                                % calExpDate)
-                    icon = max(icon, self.ICON_WARN)
-                elif calExp < time.time() - 8035200:
-                    tips.append("This device's calibration will expire on %s."
-                                % calExpDate)
-                    icon = max(icon, self.ICON_INFO)
-
-        except (AttributeError, KeyError):
-            pass
+        if calExp:
+            if calExp < now:
+                tips.append(f"This device's calibration has expired on {calExp.date()}.")
+                icon = max(icon, self.ICON_WARN)
+            elif now - calExp < CAL_WARN_DAYS:
+                tips.append(f"This device's calibration will expire on {calExp.date()}.")
+                icon = max(icon, self.ICON_INFO)
 
         if len(tips) == 0:
             self.listToolTips[index] = None
@@ -267,7 +287,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         if icon > self.ICON_NONE:
             self.list.SetItemImage(index, icon)
         self.listToolTips[index] = '\n'.join(tips)
-        self.listMsgs[index] = '\n'.join([u'\u2022 %s' % s for s in tips])
+        self.listMsgs[index] = '\n'.join([f'\u2022 {s}' for s in tips])
 
 
     def _thing2string(self, dev, col):
@@ -325,9 +345,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
             except IOError:
                 wx.MessageBox(
-                    "An error occurred while trying to access a recorder (%s)."
+                    f"An error occurred while trying to access a recorder ({dev.path})."
                     "\n\nThe device's configuration data may be damaged. "
-                    "Try disconnecting and reconnecting the device." % dev.path,
+                    "Try disconnecting and reconnecting the device.",
                     "Device Error", parent=self)
                 if index is not None:
                     self.list.DeleteItem(index)
@@ -420,10 +440,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         if evt.IsShown():
             if self.autoUpdate:
                 self.timer.Start(self.autoUpdate)
-#                 print("XXX: timer started")
         else:
             self.timer.Stop()
-#             print("XXX: timer stopped")
         evt.Skip()
 
 
@@ -436,13 +454,16 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         for b in butts:
             b.Enable(False)
 
+        timerRunning = self.timer.IsRunning()
+        self.timer.Stop()
+
         for rec in self.recorders.values():
             try:
                 rec.setTime()
-            except Exception:  # as err:
-                name = "%s SN:%s (%s)" % (rec.productName, rec.serial, rec.path)
+            except Exception as err:
+                name = f"{rec.productName} SN:{rec.serial} ({rec.path})"
                 fails.append(name)
-                # logger.error("%s setting clock on %s: %s" % (type(err).__name__, name, err))
+                logger.error(f"{type(err)} setting clock on {name}: {err}")
 
         for b in butts:
             b.Enable(True)
@@ -452,14 +473,17 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 names = "\u2022 " + ('\n\u2022 '.join(fails))
                 msg = ("Could not set recorder clocks.\n\n"
                        "Errors prevented the clocks being set on these recorders:\n\n"
-                       "%s" % names)
+                       f"{names}")
             else:
                 msg = ("Could not set recorder clock.\n\n"
                        "An error prevented the clock from being set on "
-                       "recorder %s." % fails[0])
+                       f"recorder {fails[0]}.")
 
             wx.MessageBox(msg, "Device Error", parent=self,
                           style=wx.OK | wx.ICON_ERROR)
+
+        if timerRunning:
+            self.timer.Start(self.autoUpdate)
 
         self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
 
@@ -467,14 +491,21 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def startRecording(self, _evt=None):
         """ Initiate a recording.
         """
-        recorder = self.recorders.get(self.selected, None)
-        if recorder and recorder.canRecord:
-            recorder.startRecording()
+        timerRunning = self.timer.IsRunning()
+        self.timer.Stop()
+
+        try:
+            recorder = self.recorders.get(self.selected, None)
+            if recorder and recorder.canRecord:
+                recorder.startRecording()
+        finally:
+            if timerRunning:
+                self.timer.Start(self.autoUpdate)
 
 
-#===============================================================================
+# ===========================================================================
 #
-#===============================================================================
+# ===========================================================================
 
 def selectDevice(title="Select Recorder", parent=None, **kwargs):
     """ Display a device-selection dialog and return the path to a recorder.
@@ -511,9 +542,9 @@ def selectDevice(title="Select Recorder", parent=None, **kwargs):
     return result
 
 
-#===============================================================================
+# ===========================================================================
 #
-#===============================================================================
+# ===========================================================================
 
 if __name__ == '__main__':
     app = wx.App()

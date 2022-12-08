@@ -591,8 +591,8 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
     if not dev:
         raise ValueError("Path '{}' does not appear to be a recorder".format(path))
 
-    if not dev.config.configUi:
-        raise ValueError("The device appears to have corrupted configuration UI data.")
+    if not dev.config.getConfigUI():
+        raise endaq.device.DeviceError("The device appears to have corrupted configuration UI data.")
 
     with ConfigDialog(parent, device=dev, setTime=setTime,
                       useUtc=useUtc, saveOnOk=saveOnOk,

@@ -12,10 +12,16 @@ __copyright__ = "Copyright 2022 Mide Technology Corporation"
 #
 # ===============================================================================
 
+__DEBUG__ = True
+
+# ===============================================================================
+#
+# ===============================================================================
+
 import logging
 
-logger = logging.getLogger('endaq.config_dialog')
-logger.setLevel(logging.INFO)
+logger = logging.getLogger('endaqconfig')
+logger.setLevel(logging.DEBUG if __DEBUG__ else logging.INFO)
 logging.basicConfig(format="%(asctime)s %(levelname)s: %(message)s")
 
 # ===============================================================================
@@ -32,14 +38,6 @@ import wx.lib.scrolledpanel as SP
 
 from .common import getUtcOffset, isCompiled
 from .widgets.shared import DateTimeCtrl, wx_DateTime_FromTimeT
-
-
-# ===============================================================================
-#
-# ===============================================================================
-
-__DEBUG__ = True
-
 
 # ===============================================================================
 # --- Utility functions
