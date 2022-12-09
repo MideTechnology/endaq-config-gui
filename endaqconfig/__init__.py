@@ -1,3 +1,8 @@
+"""
+A GUI for configuring enDAQ data recoders. This can be run standalone, or
+imported into another script.
+"""
+
 import logging
 
 logger = logging.getLogger('endaqconfig')
