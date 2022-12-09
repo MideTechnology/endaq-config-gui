@@ -553,9 +553,9 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
                       useUtc: bool = True,
                       parent: Optional[wx.Window] = None,
                       saveOnOk: bool = True,
-                      modal: bool = True,
                       showAdvanced: bool = False,
-                      icon: Optional[wx.Icon] = None) -> Union[tuple, None]:
+                      icon: Optional[wx.Icon] = None,
+                      exceptions: bool = True) -> Union[tuple, None]:
     """ Create the configuration dialog for a recording device.
 
         :param path: The path to the data recorder (e.g. a mount point under
@@ -567,13 +567,13 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
         :param parent: The parent window, or `None`.
         :param saveOnOk: If `False`, exiting the dialog with OK will not save
             to the recorder. Primarily for debugging.
-        :param modal: If `True`, the dialog will display modally. If `False`,
-            the dialog will be non-modal, and the function will return the
-            dialog itself. For debugging.
         :param showAdvanced: If `True`, show configuration options flagged
             as 'advanced.'
         :param icon: An icon to appear in the window's titlebar (not
             visible in all operating systems/window managers).
+        :param exceptions: If `True`, allow all exceptions to be raised. If
+            `False`, show descriptive message boxes when anticipated errors
+             occur, intended for standalong use.
         :return: `None` if configuration was cancelled, else a tuple
             containing:
                 * The data written to the recorder (a nested dictionary)
@@ -589,27 +589,47 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
         dev = endaq.device.getRecorder(path)
 
     if not dev:
-        raise ValueError("Path '{}' does not appear to be a recorder".format(path))
+        msg = "Path '{}' does not appear to be a recorder".format(path)
+        if exceptions:
+            raise ValueError(msg)
+
+        wx.MessageBox(msg, "Configuration Error",
+                      parent=parent,
+                      style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
+        return None
 
     if not dev.config.getConfigUI():
-        raise endaq.device.DeviceError("The device appears to have corrupted configuration UI data.")
+        if exceptions:
+            raise endaq.device.DeviceError("The device appears to have corrupted configuration UI data.", dev)
 
-    with ConfigDialog(parent, device=dev, setTime=setTime,
-                      useUtc=useUtc, saveOnOk=saveOnOk,
-                      showAdvanced=showAdvanced,
-                      icon=icon) as dlg:
-        if modal:
+        wx.MessageBox("Could not configure recorder\n\n"
+                      "Valid configuration UI data could not be retrieved for the device.",
+                      "Configuration Error",
+                      parent=parent,
+                      style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
+        return None
+
+    try:
+        with ConfigDialog(parent, device=dev, setTime=setTime,
+                          useUtc=useUtc, saveOnOk=saveOnOk,
+                          showAdvanced=showAdvanced,
+                          icon=icon) as dlg:
             dlg.ShowModal()
-        else:
-            dlg.Show()
+            result = dlg.configData
+            setTime = dlg.setClockCheck.GetValue()
+            useUtc = dlg.useUtc
+            msg = dlg.postConfigMessage or getattr(dev, "POST_CONFIG_MSG", None)
 
-        result = dlg.configData
-        setTime = dlg.setClockCheck.GetValue()
-        useUtc = dlg.useUtc
-        msg = dlg.postConfigMessage or getattr(dev, "POST_CONFIG_MSG", None)
+    except PermissionError:
+        if exceptions:
+            raise
 
-        if not modal:
-            return dlg
+        wx.MessageBox("Another process appears to have control of the device.\n\n"
+                      "Close other application that could be using the recorder and try again.",
+                      "Configuration Error",
+                      parent=parent,
+                      style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
+        return None
 
     if result is None:
         return None
