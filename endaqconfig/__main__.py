@@ -20,18 +20,20 @@ def run():
                         help="Show advanced configuration options")
     args = parser.parse_args()
 
-    app = wx.GetApp()
-    if not app:
-        app = wx.App()
+    # Create a wx.App if one not already running (the latter is an edge case).
+    _app = wx.GetApp()
+    if not _app:
+        _app = wx.App()
 
     try:
         dev = device_dialog.selectDevice(showAdvanced=args.advanced)
         wx.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
         if dev:
-            configureRecorder(dev, showAdvanced=args.advanced)
+            configureRecorder(dev,
+                              showAdvanced=args.advanced,
+                              exceptions=False)
     finally:
         wx.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-
 
 
 if __name__ == "__main__":

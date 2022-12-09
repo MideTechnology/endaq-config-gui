@@ -97,9 +97,25 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def __init__(self, *args, **kwargs):
         """ Constructor. Takes standard dialog arguments, plus:
 
-            :keyword root: The parent object (e.g. a viewer window).
-            :keyword autoUpdate: The time between updates of the device list.
-            :keyword types: A list of known recorder subclasses.
+            :keyword autoUpdate: A number of milliseconds to delay between
+                checks for changes to attached recorders. 0 will never
+                automatically refresh.
+            :keyword showWarnings: If `True`, battery age and calibration
+                expiration warnings will be shown for selected devices.
+            :keyword showAdvanced: If `True`, show additional columns
+                of information (hardware/firmware version, etc.).
+            :keyword hideClock: If `True`, the "Set all clocks" button will
+                be hidden.
+            :keyword hideRecord: If `True`, the "Start Recording" button
+                will be hidden.
+            :keyword okText: Alternate text to display on the OK/Configure
+                button.
+            :keyword okHelp: Alternate tooltip for the OK/Configure button.
+            :keyword cancelText: Alternate text to display on the
+                Cancel/Close button.
+            :keyword icon: A `wx.Icon` for the dialog (for platforms that
+                support title bar icons). `None` (or unsupplied) will use
+                the package default. `False` will show no icon.
         """
         # Clear cached devices
         RECORDERS.clear()
@@ -111,7 +127,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                  wx.DIALOG_EX_CONTEXTHELP |
                  wx.SYSTEM_MENU)
 
-        self.root = kwargs.pop('root', None)
         self.autoUpdate = kwargs.pop('autoUpdate', 500)
         self.hideClock = kwargs.pop('hideClock', False)
         self.hideRecord = kwargs.pop('hideRecord', False)
@@ -512,13 +527,14 @@ def selectDevice(title="Select Recorder", parent=None, **kwargs):
         The dialog will (optionally) update automatically when devices are
         added or removed.
 
-        :keyword title: A title string for the dialog
+        :param title: A title string for the dialog
+        :param parent: The parent window, if any.
         :keyword autoUpdate: A number of milliseconds to delay between checks
             for changes to attached recorders. 0 will never update.
-        :keyword parent: The parent window, if any.
-        :keyword types: A list of possible recorder classes.
         :keyword showWarnings: If `True`, battery age and calibration
             expiration warnings will be shown for selected devices.
+        :keyword showAdvanced: If `True`, show additional columns
+            of information (hardware/firmware version, etc.).
         :keyword hideClock: If `True`, the "Set all clocks" button will be
             hidden.
         :keyword hideRecord: If `True`, the "Start Recording" button will be
@@ -527,6 +543,9 @@ def selectDevice(title="Select Recorder", parent=None, **kwargs):
         :keyword okHelp: Alternate tooltip for the OK/Configure button.
         :keyword cancelText: Alternate text to display on the Cancel/Close
             button.
+        :keyword icon: A `wx.Icon` for the dialog (for platforms that
+            support title bar icons). `None` (or unsupplied) will use
+            the package default. `False` will show no icon.
         :return: The path of the selected device.
     """
     result = None
@@ -540,14 +559,3 @@ def selectDevice(title="Select Recorder", parent=None, **kwargs):
     if isinstance(result, dict):
         result = result.get('_PATH', None)
     return result
-
-
-# ===========================================================================
-#
-# ===========================================================================
-
-if __name__ == '__main__':
-    app = wx.App()
-
-    result = selectDevice(showAdvanced=True)  # hideClock=True, hideRecord=True)
-    print("Result:", result)
