@@ -138,6 +138,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         icon = kwargs.pop('icon', None)
         kwargs.setdefault('style', style)
 
+        # Not currently used, but consistent with the main dialog.
+        self.DEBUG = kwargs.pop('debug', False)
+
         sc.SizedDialog.__init__(self, *args, **kwargs)
 
         if icon is not False:

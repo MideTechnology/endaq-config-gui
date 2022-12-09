@@ -25,6 +25,7 @@ Basic theory of operation:
 """
 
 import errno
+import logging
 import os
 from typing import Any, Dict, Optional, Union
 
@@ -35,7 +36,7 @@ from ebmlite import loadSchema
 import endaq.device
 from endaq.device import configio
 
-from .base import __DEBUG__, logger
+from .base import logger
 from . import base
 from .common import isCompiled
 from .widgets import icons
@@ -45,10 +46,16 @@ from .widgets import icons
 from . import special_tabs
 from . import wifi_tab
 
+# ===============================================================================
+#
+# ===============================================================================
+
+__DEBUG__ = False
 
 # ===============================================================================
 #
 # ===============================================================================
+
 
 class ConfigDialog(SC.SizedDialog):
     """ Root window for recorder configuration.
@@ -83,8 +90,14 @@ class ConfigDialog(SC.SizedDialog):
         self.saveOnOk = kwargs.pop('saveOnOk', True)
         self.useUtc = kwargs.pop('useUtc', True)
         self.showAdvanced = kwargs.pop('showAdvanced', False)
+        self.DEBUG = kwargs.pop('debug', __DEBUG__)
+        icon = kwargs.pop('icon', None)
 
         self.postConfigMessage = None
+
+        if self.DEBUG:
+            # May be redundant when running standalone, but just in case:
+            logger.setLevel(logging.DEBUG)
 
         try:
             devName = self.device.productName
@@ -94,15 +107,14 @@ class ConfigDialog(SC.SizedDialog):
             # Typically, this won't happen outside of testing.
             devName = "Recorder"
 
-        icon = kwargs.pop('icon', None)
-
         kwargs.setdefault("title", f"Configure {devName}")
         kwargs.setdefault("style", wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
         super(ConfigDialog, self).__init__(*args, **kwargs)
 
-        icon = icon or icons.icon.GetIcon()
-        self.SetIcon(icon)
+        icon = icons.icon.GetIcon() if icon is None else icon
+        if icon:
+            self.SetIcon(icon)
 
         pane = self.GetContentsPane()
         self.notebook = wx.Notebook(pane, -1)
@@ -451,7 +463,7 @@ class ConfigDialog(SC.SizedDialog):
             self.saveConfigData()
 
         except (IOError, WindowsError) as err:
-            if __DEBUG__ and not isCompiled():
+            if self.DEBUG and not isCompiled():
                 raise
 
             msg = ("An error occurred when trying to update the recorder's "
@@ -472,7 +484,7 @@ class ConfigDialog(SC.SizedDialog):
             return
 
         except Exception as err:
-            if __DEBUG__ and not isCompiled():
+            if self.DEBUG and not isCompiled():
                 raise
 
             msg = ("An unexpected {} occurred when trying to update the "
@@ -555,7 +567,8 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
                       saveOnOk: bool = True,
                       showAdvanced: bool = False,
                       icon: Optional[wx.Icon] = None,
-                      exceptions: bool = True) -> Union[tuple, None]:
+                      exceptions: bool = True,
+                      debug: bool = __DEBUG__) -> Union[tuple, None]:
     """ Create the configuration dialog for a recording device.
 
         :param path: The path to the data recorder (e.g. a mount point under
@@ -613,7 +626,7 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
         with ConfigDialog(parent, device=dev, setTime=setTime,
                           useUtc=useUtc, saveOnOk=saveOnOk,
                           showAdvanced=showAdvanced,
-                          icon=icon) as dlg:
+                          icon=icon, debug=debug) as dlg:
             dlg.ShowModal()
             result = dlg.configData
             setTime = dlg.setClockCheck.GetValue()
