@@ -25,6 +25,7 @@ Basic theory of operation:
 """
 
 import errno
+import logging
 import os
 from typing import Any, Dict, Optional, Union
 
@@ -35,7 +36,7 @@ from ebmlite import loadSchema
 import endaq.device
 from endaq.device import configio
 
-from .base import __DEBUG__, logger
+from .base import logger
 from . import base
 from .common import isCompiled
 from .widgets import icons
@@ -45,10 +46,16 @@ from .widgets import icons
 from . import special_tabs
 from . import wifi_tab
 
+# ===============================================================================
+#
+# ===============================================================================
+
+__DEBUG__ = False
 
 # ===============================================================================
 #
 # ===============================================================================
+
 
 class ConfigDialog(SC.SizedDialog):
     """ Root window for recorder configuration.
@@ -83,8 +90,14 @@ class ConfigDialog(SC.SizedDialog):
         self.saveOnOk = kwargs.pop('saveOnOk', True)
         self.useUtc = kwargs.pop('useUtc', True)
         self.showAdvanced = kwargs.pop('showAdvanced', False)
+        self.DEBUG = kwargs.pop('debug', __DEBUG__)
+        icon = kwargs.pop('icon', None)
 
         self.postConfigMessage = None
+
+        if self.DEBUG:
+            # May be redundant when running standalone, but just in case:
+            logger.setLevel(logging.DEBUG)
 
         try:
             devName = self.device.productName
@@ -94,15 +107,14 @@ class ConfigDialog(SC.SizedDialog):
             # Typically, this won't happen outside of testing.
             devName = "Recorder"
 
-        icon = kwargs.pop('icon', None)
-
         kwargs.setdefault("title", f"Configure {devName}")
         kwargs.setdefault("style", wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
         super(ConfigDialog, self).__init__(*args, **kwargs)
 
-        icon = icon or icons.icon.GetIcon()
-        self.SetIcon(icon)
+        icon = icons.icon.GetIcon() if icon is None else icon
+        if icon:
+            self.SetIcon(icon)
 
         pane = self.GetContentsPane()
         self.notebook = wx.Notebook(pane, -1)
@@ -451,7 +463,7 @@ class ConfigDialog(SC.SizedDialog):
             self.saveConfigData()
 
         except (IOError, WindowsError) as err:
-            if __DEBUG__ and not isCompiled():
+            if self.DEBUG and not isCompiled():
                 raise
 
             msg = ("An error occurred when trying to update the recorder's "
@@ -472,7 +484,7 @@ class ConfigDialog(SC.SizedDialog):
             return
 
         except Exception as err:
-            if __DEBUG__ and not isCompiled():
+            if self.DEBUG and not isCompiled():
                 raise
 
             msg = ("An unexpected {} occurred when trying to update the "
@@ -553,9 +565,10 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
                       useUtc: bool = True,
                       parent: Optional[wx.Window] = None,
                       saveOnOk: bool = True,
-                      modal: bool = True,
                       showAdvanced: bool = False,
-                      icon: Optional[wx.Icon] = None) -> Union[tuple, None]:
+                      icon: Optional[wx.Icon] = None,
+                      exceptions: bool = True,
+                      debug: bool = __DEBUG__) -> Union[tuple, None]:
     """ Create the configuration dialog for a recording device.
 
         :param path: The path to the data recorder (e.g. a mount point under
@@ -567,13 +580,13 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
         :param parent: The parent window, or `None`.
         :param saveOnOk: If `False`, exiting the dialog with OK will not save
             to the recorder. Primarily for debugging.
-        :param modal: If `True`, the dialog will display modally. If `False`,
-            the dialog will be non-modal, and the function will return the
-            dialog itself. For debugging.
         :param showAdvanced: If `True`, show configuration options flagged
             as 'advanced.'
         :param icon: An icon to appear in the window's titlebar (not
             visible in all operating systems/window managers).
+        :param exceptions: If `True`, allow all exceptions to be raised. If
+            `False`, show descriptive message boxes when anticipated errors
+             occur, intended for standalong use.
         :return: `None` if configuration was cancelled, else a tuple
             containing:
                 * The data written to the recorder (a nested dictionary)
@@ -589,27 +602,47 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
         dev = endaq.device.getRecorder(path)
 
     if not dev:
-        raise ValueError("Path '{}' does not appear to be a recorder".format(path))
+        msg = "Path '{}' does not appear to be a recorder".format(path)
+        if exceptions:
+            raise ValueError(msg)
 
-    if not dev.config.configUi:
-        raise ValueError("The device appears to have corrupted configuration UI data.")
+        wx.MessageBox(msg, "Configuration Error",
+                      parent=parent,
+                      style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
+        return None
 
-    with ConfigDialog(parent, device=dev, setTime=setTime,
-                      useUtc=useUtc, saveOnOk=saveOnOk,
-                      showAdvanced=showAdvanced,
-                      icon=icon) as dlg:
-        if modal:
+    if not dev.config.getConfigUI():
+        if exceptions:
+            raise endaq.device.DeviceError("The device appears to have corrupted configuration UI data.", dev)
+
+        wx.MessageBox("Could not configure recorder\n\n"
+                      "Valid configuration UI data could not be retrieved for the device.",
+                      "Configuration Error",
+                      parent=parent,
+                      style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
+        return None
+
+    try:
+        with ConfigDialog(parent, device=dev, setTime=setTime,
+                          useUtc=useUtc, saveOnOk=saveOnOk,
+                          showAdvanced=showAdvanced,
+                          icon=icon, debug=debug) as dlg:
             dlg.ShowModal()
-        else:
-            dlg.Show()
+            result = dlg.configData
+            setTime = dlg.setClockCheck.GetValue()
+            useUtc = dlg.useUtc
+            msg = dlg.postConfigMessage or getattr(dev, "POST_CONFIG_MSG", None)
 
-        result = dlg.configData
-        setTime = dlg.setClockCheck.GetValue()
-        useUtc = dlg.useUtc
-        msg = dlg.postConfigMessage or getattr(dev, "POST_CONFIG_MSG", None)
+    except PermissionError:
+        if exceptions:
+            raise
 
-        if not modal:
-            return dlg
+        wx.MessageBox("Another process appears to have control of the device.\n\n"
+                      "Close other application that could be using the recorder and try again.",
+                      "Configuration Error",
+                      parent=parent,
+                      style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
+        return None
 
     if result is None:
         return None

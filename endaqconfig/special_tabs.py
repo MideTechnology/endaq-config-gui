@@ -309,13 +309,6 @@ class SSXInfoPanel(InfoPanel):
 
     ICONS = ('resources/info.png', 'resources/warn.png', 'resources/error.png')
 
-    def getDeviceData(self):
-        super(SSXInfoPanel, self).getDeviceData()
-        man = self.root.device.manufacturer
-        if man:
-            self.data['Manufacturer'] = man
-            self.data = {k: self.data[k] for k in sorted(self.data)}
-
 
     def buildUI(self):
         self.life = None  # self.root.device.getEstLife() XXX: FIX
@@ -384,7 +377,7 @@ class SSXInfoPanel(InfoPanel):
 #===============================================================================
 
 class CalibrationPanel(InfoPanel):
-    """ Panel for displaying SSX calibration polynomials. Read-only.
+    """ Panel for displaying calibration polynomials. Read-only.
     """
     ID_CREATE_CAL = wx.NewIdRef()
 
@@ -697,9 +690,12 @@ class DeviceInfoTab(Tab):
         info['CalibrationExpirationDate'] = dev.getCalExpiration()
 
         self.sizer = wx.BoxSizer(wx.VERTICAL)
-        self.field = SSXInfoPanel(self, -1,
+        self.field = InfoPanel(self, -1,
                                   root=self.root,
                                   info=info)
+        # self.field = SSXInfoPanel(self, -1,
+        #                           root=self.root,
+        #                           info=info)
         self.sizer.Add(self.field, 1, wx.EXPAND)
         self.SetSizer(self.sizer)
 

@@ -12,11 +12,12 @@ __copyright__ = "Copyright 2022 Mide Technology Corporation"
 #
 # ===============================================================================
 
-import logging
+# ===============================================================================
+#
+# ===============================================================================
 
-logger = logging.getLogger('endaq.config_dialog')
-logger.setLevel(logging.INFO)
-logging.basicConfig(format="%(asctime)s %(levelname)s: %(message)s")
+import logging
+logger = logging.getLogger('endaqconfig')
 
 # ===============================================================================
 #
@@ -32,14 +33,6 @@ import wx.lib.scrolledpanel as SP
 
 from .common import getUtcOffset, isCompiled
 from .widgets.shared import DateTimeCtrl, wx_DateTime_FromTimeT
-
-
-# ===============================================================================
-#
-# ===============================================================================
-
-__DEBUG__ = True
-
 
 # ===============================================================================
 # --- Utility functions
@@ -546,11 +539,11 @@ class ConfigWidget(wx.Panel, ConfigBase):
             :keyword group: The parent group containing the Field (if any).
         """
         element = kwargs.pop('element', None)
-        root = kwargs.pop('root', None)
+        self.root = kwargs.pop('root', None)
         self.group = kwargs.pop('group', None)
         self.field = None
 
-        ConfigBase.__init__(self, element, root)
+        ConfigBase.__init__(self, element, self.root)
         wx.Panel.__init__(self, *args, **kwargs)
 
         self.initUI()
@@ -595,7 +588,7 @@ class ConfigWidget(wx.Panel, ConfigBase):
         else:
             self.unitLabel = None
 
-        if __DEBUG__:
+        if self.root.DEBUG:
             tt = f"{self.tooltip}\n" if self.tooltip else ""
             self.tooltip = f"{tt}({self.element.name}, ConfigId={hex(self.configId)})"
 
@@ -1614,7 +1607,7 @@ class CheckDriftButton(ConfigWidget):
         try:
             times = self.root.device.getTime()
         except Exception:
-            if __DEBUG__ and not isCompiled():
+            if self.root.DEBUG and not isCompiled():
                 raise
             self.showError("Could not read the recorder's clock!", self.label,
                            style=wx.OK | wx.ICON_ERROR)
@@ -1756,7 +1749,7 @@ class Group(ConfigWidget):
         self.fields = []
         outerSizer = wx.BoxSizer(wx.VERTICAL)
 
-        if __DEBUG__:
+        if self.root.DEBUG:
             tt = f"{self.tooltip}\n" if self.tooltip else ""
             cid = hex(self.configId) if self.configId else None
             self.tooltip = f"{tt}({self.element.name}, ConfigId={cid})"
