@@ -101,13 +101,13 @@ class InfoPanel(HtmlWindow):
 
     # Formatters for specific fields. The keys should be the string as
     # displayed (de-camel-cased or replaced by field_names)
-    field_types = {'Date of Manufacture': datetime.fromtimestamp,
+    field_types = {'Date of Manufacture': lambda x: datetime.fromtimestamp(x).date(),
                    'Hardware Revision': str,
                    'Firmware Revision': str,
                    'Config. Format Version': str,
                    'Recorder Serial': str,
-                   'Calibration Date': datetime.fromtimestamp,
-                   'Calibration Expiration Date': datetime.fromtimestamp,
+                   'Calibration Date': str,
+                   'Calibration Expiration Date': str,
                    'Calibration Serial Number': lambda x: "C%05d" % x
                    }
 
@@ -332,7 +332,7 @@ class SSXInfoPanel(InfoPanel):
                 self.lifeMsg = self.ICONS[self.lifeIcon], "This devices is %d days old; battery life may be limited." % self.root.device.getAge()
 
         if self.calExp is not None:
-            calExpDate = datetime.fromtimestamp(self.calExp).date()
+            calExpDate = self.calExp.date()
             if self.calExp < time.time():
                 self.calIcon = self.root.ICON_ERROR
                 self.calMsg = self.ICONS[self.calIcon], "This device's calibration expired on %s; it may require recalibration." % calExpDate
@@ -484,11 +484,9 @@ class CalibrationPanel(InfoPanel):
         if self.calDate or self.calExpiry:
             self.html.append("<p>")
             if self.calDate:
-                d = datetime.fromtimestamp(self.calDate).date()
-                self.html.append("<b>Calibration Date:</b> %s" % d)
+                self.html.append("<b>Calibration Date:</b> %s" % self.calDate.date())
             if self.calExpiry:
-                d = datetime.fromtimestamp(self.calExpiry).date()
-                self.html.append(" <b>Expires:</b> %s" % d)
+                self.html.append(" <b>Expires:</b> %s" % self.calExpiry.date())
             self.html.append("</p>")
 
         if len(self.info) == 0:

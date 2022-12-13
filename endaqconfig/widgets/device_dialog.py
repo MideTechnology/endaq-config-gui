@@ -311,7 +311,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def _thing2string(self, dev, col):
         """ Helper method for doing semi-smart formatting of a column. """
         try:
-            return col.formatter(getattr(dev, col.propName, col.default))
+            val = getattr(dev, col.propName, None)
+            return col.formatter(val) if val is not None else col.default
         except TypeError:
             return col.default
 
