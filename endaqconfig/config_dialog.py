@@ -316,8 +316,8 @@ class ConfigDialog(SC.SizedDialog):
     def saveConfigData(self):
         """ Save edited config data to the recorder.
         """
-        version = self.device.config.configVersionRead
         maxVersion = max(self.device.config.supportedConfigVersions)
+        version = self.device.config.configVersionRead or maxVersion
         if version < maxVersion:
             if version in self.device.config.supportedConfigVersions:
                 # Prompt to save in old version.
@@ -325,7 +325,7 @@ class ConfigDialog(SC.SizedDialog):
                   f"The configuration data loaded from the device used an outdated format (v{version}).\n"
                   f"The recorder's firmware can use a later version (v{maxVersion}). Some newer configuration\n"
                   "options in the dialog may be lost if the older version is used.\n\n"
-                  "'Yes' will save using the newer version.\n"
+                  "'Yes' will save using the newer version (recommended).\n"
                   "'No' will save using the file's original version."
                                   "Apply Configuration",
                                   wx.YES_NO | wx.YES_DEFAULT | wx.ICON_QUESTION,
