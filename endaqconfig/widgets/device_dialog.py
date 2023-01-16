@@ -11,6 +11,7 @@ import os.path
 import wx
 import wx.lib.sized_controls as sc
 import wx.lib.mixins.listctrl as listmix
+from wx.lib.agw import ultimatelistctrl as ULC
 
 from endaq.device import getDevices, getDeviceList, RECORDERS
 from endaq.device import deviceChanged
@@ -162,7 +163,17 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.itemDataMap = {}  # required by ColumnSorterMixin
 
-        self.list = self.DeviceListCtrl(pane, -1)
+        # self.list = self.DeviceListCtrl(pane, -1)
+        self.list = ULC.UltimateListCtrl(pane, -1,
+                                         agwStyle=wx.LC_REPORT
+                                                  # | wx.BORDER_SUNKEN
+                                                  | wx.BORDER_NONE
+                                                  # | wx.LC_EDIT_LABELS
+                                                  # | wx.LC_SORT_ASCENDING
+                                                  # | wx.LC_NO_HEADER
+                                                  | wx.LC_VRULES
+                                                  | wx.LC_HRULES
+                                         )
 
         images = wx.ImageList(16, 16)
         empty = wx.Bitmap(16, 16)
@@ -237,6 +248,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         # For doing per-item tool tips in the list
         self.lastToolTipItem = -1
+        # XXX: Removed (temporarily) - has issue with UltimateListCtrl
         self.list.Bind(wx.EVT_MOTION, self.OnListMouseMotion)
 
         self.timer = wx.Timer(self)
@@ -347,10 +359,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         index = None
         for idx, dev in enumerate(getDevices()):
             try:
-                index = self.list.InsertItem(idx, dev.path)
+                index = self.list.InsertImageStringItem(idx, dev.path, [0])
                 self.recorders[index] = dev
                 for i, col in enumerate(self.COLUMNS[1:], 1):
-                    self.list.SetItem(index, i, self._thing2string(dev, col))
+                    self.list.SetStringItem(index, i, self._thing2string(dev, col), [])
                     self.list.SetColumnWidth(i, wx.LIST_AUTOSIZE)
                     self.listWidth = max(self.listWidth,
                                          self.list.GetItemRect(index)[2])
@@ -359,8 +371,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 self.itemDataMap[index] = [getattr(dev, c.propName, c.default)
                                            for c in self.COLUMNS]
 
-                if self.showWarnings:
-                    self.setItemIcon(index, dev)
+                # if self.showWarnings:
+                #     self.setItemIcon(index, dev)
 
             except IOError:
                 wx.MessageBox(
@@ -399,7 +411,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     def OnItemSelected(self, evt):
-        self.selected = self.list.GetItemData(evt.Item.GetId())
+        self.selected = self.list.GetItemData(evt.Index)
         if self.listMsgs[self.selected] is not None:
             self.infoText.SetLabel(self.listMsgs[self.selected])
         self.okButton.Enable(True)
@@ -439,9 +451,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
     def OnListMouseMotion(self, evt):
         """ Handle mouse movement, updating the tool tips, etc.
+            This determines the list item under the mouse and shows the
+            appropriate tool tip, if any
         """
-        # This determines the list item under the mouse and shows the
-        # appropriate tool tip, if any
+        if not self.recorders:
+            evt.Skip()
+            return
+
         index, _ = self.list.HitTest(evt.GetPosition())
         if index != -1 and index != self.lastToolTipItem:
             item = self.list.GetItemData(index)
