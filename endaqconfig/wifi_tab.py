@@ -17,7 +17,9 @@ from .base import Tab
 from .base import logger, registerTab
 from .widgets import icons
 
-from endaq.device import DeviceTimeout
+from endaq.device import DeviceError, DeviceTimeout
+from endaq.device.command_interfaces import CommandInterface
+
 
 # ===============================================================================
 #
@@ -135,6 +137,17 @@ class ContinousNetworkStatusChecker(threading.Thread):
                 evt = EvtConfigWiFiConnectionCheck(result=result)
                 if bool(self.parent):
                     wx.PostEvent(self.parent, evt)
+
+            except DeviceTimeout as E:
+                logger.warning("Timed out when checking the network connection, retrying")
+
+            except DeviceError as E:
+                if E.args and E.args[0] == CommandInterface.ERR_BUSY:
+                    logger.info("Device repoted ERR_BUSY, retrying")
+                else:
+                    logger.error(E)
+                    raise
+
             except IOError as E:
                 logger.warning(E)
 
@@ -143,8 +156,6 @@ class ContinousNetworkStatusChecker(threading.Thread):
                     wx.PostEvent(self.parent, evt)
 
                 return
-            except DeviceTimeout as E:
-                logger.warning("Timed out when checking the network connection!  Retrying")
 
             to_sleep = max(0, self.interval - (time() - start_time))
             sleep(to_sleep)
@@ -593,6 +604,21 @@ class WiFiSelectionTab(Tab):
         return enable
 
 
+    def shutdown(self):
+        """ Kill the Wi-Fi scanning and status threads.
+        """
+        try:
+            logger.debug('Shutting down Wi-Fi scan and status threads')
+            self.scanThread.cancel.set()
+            self.networkStatusThread.cancel.set()
+            while ((self.scanThread and self.scanThread.is_alive()) or
+                   (self.networkStatusThread and self.networkStatusThread.is_alive())):
+                pass
+        except AttributeError:
+            # Can sometimes occur in race conditions during shutdown.
+            pass
+
+
     # ===========================================================================
     #
     # ===========================================================================
@@ -795,16 +821,7 @@ class WiFiSelectionTab(Tab):
     def OnClose(self, evt):
         """ Handle dialog closed.
         """
-        try:
-            self.scanThread.cancel.set()
-            self.networkStatusThread.cancel.set()
-            while ((self.scanThread and self.scanThread.is_alive())
-                   or (self.networkStatusThread and self.networkStatusThread.is_alive())):
-                pass
-
-        except AttributeError:
-            pass
-
+        self.shutdown()
         self.parent.Close()
         evt.Skip()
 

@@ -101,13 +101,13 @@ class InfoPanel(HtmlWindow):
 
     # Formatters for specific fields. The keys should be the string as
     # displayed (de-camel-cased or replaced by field_names)
-    field_types = {'Date of Manufacture': datetime.fromtimestamp,
+    field_types = {'Date of Manufacture': lambda x: datetime.fromtimestamp(x).date(),
                    'Hardware Revision': str,
                    'Firmware Revision': str,
                    'Config. Format Version': str,
                    'Recorder Serial': str,
-                   'Calibration Date': datetime.fromtimestamp,
-                   'Calibration Expiration Date': datetime.fromtimestamp,
+                   'Calibration Date': str,
+                   'Calibration Expiration Date': str,
                    'Calibration Serial Number': lambda x: "C%05d" % x
                    }
 
@@ -251,6 +251,8 @@ class InfoPanel(HtmlWindow):
                     v = self.field_types[k](v)
                 elif isinstance(v, int):
                     v = "0x%08X" % v
+                elif isinstance(v, dict) and len(v) == 0:
+                    v = "True"
             except TypeError:
                 pass
 
@@ -307,12 +309,6 @@ class SSXInfoPanel(InfoPanel):
 
     ICONS = ('resources/info.png', 'resources/warn.png', 'resources/error.png')
 
-    def getDeviceData(self):
-        man = self.root.device.manufacturer
-        if man:
-            self.data['Manufacturer'] = man
-        super(SSXInfoPanel, self).getDeviceData()
-
 
     def buildUI(self):
         self.life = None  # self.root.device.getEstLife() XXX: FIX
@@ -336,7 +332,7 @@ class SSXInfoPanel(InfoPanel):
                 self.lifeMsg = self.ICONS[self.lifeIcon], "This devices is %d days old; battery life may be limited." % self.root.device.getAge()
 
         if self.calExp is not None:
-            calExpDate = datetime.fromtimestamp(self.calExp).date()
+            calExpDate = self.calExp.date()
             if self.calExp < time.time():
                 self.calIcon = self.root.ICON_ERROR
                 self.calMsg = self.ICONS[self.calIcon], "This device's calibration expired on %s; it may require recalibration." % calExpDate
@@ -381,7 +377,7 @@ class SSXInfoPanel(InfoPanel):
 #===============================================================================
 
 class CalibrationPanel(InfoPanel):
-    """ Panel for displaying SSX calibration polynomials. Read-only.
+    """ Panel for displaying calibration polynomials. Read-only.
     """
     ID_CREATE_CAL = wx.NewIdRef()
 
@@ -488,11 +484,9 @@ class CalibrationPanel(InfoPanel):
         if self.calDate or self.calExpiry:
             self.html.append("<p>")
             if self.calDate:
-                d = datetime.fromtimestamp(self.calDate).date()
-                self.html.append("<b>Calibration Date:</b> %s" % d)
+                self.html.append("<b>Calibration Date:</b> %s" % self.calDate.date())
             if self.calExpiry:
-                d = datetime.fromtimestamp(self.calExpiry).date()
-                self.html.append(" <b>Expires:</b> %s" % d)
+                self.html.append(" <b>Expires:</b> %s" % self.calExpiry.date())
             self.html.append("</p>")
 
         if len(self.info) == 0:
@@ -694,9 +688,12 @@ class DeviceInfoTab(Tab):
         info['CalibrationExpirationDate'] = dev.getCalExpiration()
 
         self.sizer = wx.BoxSizer(wx.VERTICAL)
-        self.field = SSXInfoPanel(self, -1,
+        self.field = InfoPanel(self, -1,
                                   root=self.root,
                                   info=info)
+        # self.field = SSXInfoPanel(self, -1,
+        #                           root=self.root,
+        #                           info=info)
         self.sizer.Add(self.field, 1, wx.EXPAND)
         self.SetSizer(self.sizer)
 

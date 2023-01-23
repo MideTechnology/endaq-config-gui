@@ -20,12 +20,12 @@ Basic theory of operation:
     have checkboxes, the checkbox is left unchecked.
 
 :todo: Clean up (maybe replace) the old calibration and info tabs.
-:todo: Implement configuration import/export (refactor in `devices` module).
 :todo: There are some redundant calls to update enabled and checkbox states.
     They don't cause a problem, but they should be cleaned up.
 """
 
 import errno
+import logging
 import os
 from typing import Any, Dict, Optional, Union
 
@@ -34,22 +34,28 @@ import wx.lib.sized_controls as SC
 
 from ebmlite import loadSchema
 import endaq.device
+from endaq.device import configio
 
-from .base import __DEBUG__, logger
+from .base import logger
 from . import base
 from .common import isCompiled
 from .widgets import icons
-from . import import_export
 
 # Widgets. Even though these modules aren't used directly, they need to be
 # imported so that their contents can get into the `base.TAB_TYPES` dictionary.
 from . import special_tabs
 from . import wifi_tab
 
+# ===============================================================================
+#
+# ===============================================================================
+
+__DEBUG__ = False
 
 # ===============================================================================
 #
 # ===============================================================================
+
 
 class ConfigDialog(SC.SizedDialog):
     """ Root window for recorder configuration.
@@ -84,8 +90,14 @@ class ConfigDialog(SC.SizedDialog):
         self.saveOnOk = kwargs.pop('saveOnOk', True)
         self.useUtc = kwargs.pop('useUtc', True)
         self.showAdvanced = kwargs.pop('showAdvanced', False)
+        self.DEBUG = kwargs.pop('debug', __DEBUG__)
+        icon = kwargs.pop('icon', None)
 
         self.postConfigMessage = None
+
+        if self.DEBUG:
+            # May be redundant when running standalone, but just in case:
+            logger.setLevel(logging.DEBUG)
 
         try:
             devName = self.device.productName
@@ -95,15 +107,14 @@ class ConfigDialog(SC.SizedDialog):
             # Typically, this won't happen outside of testing.
             devName = "Recorder"
 
-        icon = kwargs.pop('icon', None)
-
         kwargs.setdefault("title", f"Configure {devName}")
         kwargs.setdefault("style", wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
         super(ConfigDialog, self).__init__(*args, **kwargs)
 
-        icon = icon or icons.icon.GetIcon()
-        self.SetIcon(icon)
+        icon = icons.icon.GetIcon() if icon is None else icon
+        if icon:
+            self.SetIcon(icon)
 
         pane = self.GetContentsPane()
         self.notebook = wx.Notebook(pane, -1)
@@ -123,7 +134,7 @@ class ConfigDialog(SC.SizedDialog):
 
         self.tabs = []
 
-        self.hasWifi = False
+        self.wifiTab = None
         self.hasCal = False
 
         self.hints = self.device.config.getConfigUI()
@@ -160,7 +171,7 @@ class ConfigDialog(SC.SizedDialog):
         exportTT = "Export device configuration data."
         importTT = "Import device configuration data."
 
-        x = self.hasWifi << 1 | self.hasCal
+        x = (0b10 if self.wifiTab is not None else 0) | self.hasCal
         if x:
             exportTT = f"{exportTT}\n{self.EXPORT_TOOLTIPS[x]}"
             importTT = f"{importTT}\n{self.EXPORT_TOOLTIPS[x]}"
@@ -211,7 +222,9 @@ class ConfigDialog(SC.SizedDialog):
                 tabType = base.TAB_TYPES[el.name]
                 tab = tabType(self.notebook, -1, element=el, root=self)
 
-                self.hasWifi = self.hasWifi or tabType == wifi_tab.WiFiSelectionTab
+                if tabType == wifi_tab.WiFiSelectionTab:
+                    self.wifiTab = tab
+
                 self.hasCal = self.hasCal or isinstance(tab, special_tabs.FactoryCalibrationTab)
 
                 if not tab.isAdvancedFeature or self.showAdvanced:
@@ -303,8 +316,8 @@ class ConfigDialog(SC.SizedDialog):
     def saveConfigData(self):
         """ Save edited config data to the recorder.
         """
-        version = self.device.config.configVersionRead
         maxVersion = max(self.device.config.supportedConfigVersions)
+        version = self.device.config.configVersionRead or maxVersion
         if version < maxVersion:
             if version in self.device.config.supportedConfigVersions:
                 # Prompt to save in old version.
@@ -312,7 +325,7 @@ class ConfigDialog(SC.SizedDialog):
                   f"The configuration data loaded from the device used an outdated format (v{version}).\n"
                   f"The recorder's firmware can use a later version (v{maxVersion}). Some newer configuration\n"
                   "options in the dialog may be lost if the older version is used.\n\n"
-                  "'Yes' will save using the newer version.\n"
+                  "'Yes' will save using the newer version (recommended).\n"
                   "'No' will save using the file's original version."
                                   "Apply Configuration",
                                   wx.YES_NO | wx.YES_DEFAULT | wx.ICON_QUESTION,
@@ -360,6 +373,9 @@ class ConfigDialog(SC.SizedDialog):
         if self.setClockCheck.IsEnabled() and self.setClockCheck.GetValue():
             logger.info("Setting clock...")
             try:
+                if self.wifiTab is not None:
+                    #  Stop the scan thread first to avoid conflicts
+                    self.wifiTab.shutdown()
                 self.device.setTime()
             except Exception as err:
                 logger.error(f"Error setting clock: {err!r}")
@@ -375,7 +391,8 @@ class ConfigDialog(SC.SizedDialog):
             if not isinstance(tab, wifi_tab.WiFiSelectionTab):
                 if tab.save() is False:
                     return
-            elif self.applyWifiChangesCheck is not None and self.applyWifiChangesCheck.GetValue():
+            elif (self.applyWifiChangesCheck is not None and
+                  self.applyWifiChangesCheck.GetValue()):
                 tab.save()
 
 
@@ -387,34 +404,41 @@ class ConfigDialog(SC.SizedDialog):
     def OnImportButton(self, _evt: Optional[wx.Event]):
         """ Handle the "Import..." button.
         """
-        import_export.importConfig(self)
+        wildcard = "Exported configuration data (*.xcg)|*.xcg"
+
+        with wx.FileDialog(self, message="Export Device Configuration",
+                           style=wx.FD_OPEN, wildcard=wildcard) as dlg:
+            if dlg.ShowModal() == wx.ID_OK:
+                configio.importConfig(self.device, dlg.GetPath())
+                self.loadConfigData()
 
 
     def OnExportButton(self, _evt: Optional[wx.Event]):
         """ Handle the "Export..." button.
         """
         wildcard = "Exported configuration data (*.xcg)|*.xcg"
+        if self.device.serial:
+            defaultFile = "{}_config.xcg".format(self.device.serial)
+        else:
+            defaultFile = "config.xcg"
 
-        dlg = wx.FileDialog(self, message="Export Device Configuration",
-                            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
-                            wildcard=wildcard)
-        if dlg.ShowModal() == wx.ID_OK:
-            try:
-                self.updateConfigData()
-                data = self.encodeConfigData()
+        with wx.FileDialog(self, message="Export Device Configuration",
+                           defaultFile=defaultFile, wildcard=wildcard,
+                           style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dlg:
+            if dlg.ShowModal() == wx.ID_OK:
+                try:
+                    self.updateConfigData()
+                    self.updateDeviceConfig()
+                    configio.exportConfig(self.device, dlg.GetPath())
 
-                import_export.exportConfig(self.device, dlg.GetPath(), data)
-
-            except Exception as err:
-                # TODO: More specific error message
-                logger.error('Could not export configuration ({}: {})'
-                             .format(type(err).__name__, err))
-                self.showError(
-                        "The configuration data could not be exported to the "
-                        "specified file.", "Config Export Failed",
-                        style=wx.OK | wx.ICON_EXCLAMATION)
-
-        dlg.Destroy()
+                except Exception as err:
+                    # TODO: More specific error message
+                    logger.error('Could not export configuration ({}: {})'
+                                 .format(type(err).__name__, err))
+                    self.showError(
+                            "The configuration data could not be exported to the "
+                            "specified file.", "Config Export Failed",
+                            style=wx.OK | wx.ICON_EXCLAMATION)
 
 
     # ===========================================================================
@@ -439,7 +463,7 @@ class ConfigDialog(SC.SizedDialog):
             self.saveConfigData()
 
         except (IOError, WindowsError) as err:
-            if __DEBUG__ and not isCompiled():
+            if self.DEBUG and not isCompiled():
                 raise
 
             msg = ("An error occurred when trying to update the recorder's "
@@ -460,7 +484,7 @@ class ConfigDialog(SC.SizedDialog):
             return
 
         except Exception as err:
-            if __DEBUG__ and not isCompiled():
+            if self.DEBUG and not isCompiled():
                 raise
 
             msg = ("An unexpected {} occurred when trying to update the "
@@ -541,9 +565,10 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
                       useUtc: bool = True,
                       parent: Optional[wx.Window] = None,
                       saveOnOk: bool = True,
-                      modal: bool = True,
                       showAdvanced: bool = False,
-                      icon: Optional[wx.Icon] = None) -> Union[tuple, None]:
+                      icon: Optional[wx.Icon] = None,
+                      exceptions: bool = True,
+                      debug: bool = __DEBUG__) -> Union[tuple, None]:
     """ Create the configuration dialog for a recording device.
 
         :param path: The path to the data recorder (e.g. a mount point under
@@ -555,13 +580,13 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
         :param parent: The parent window, or `None`.
         :param saveOnOk: If `False`, exiting the dialog with OK will not save
             to the recorder. Primarily for debugging.
-        :param modal: If `True`, the dialog will display modally. If `False`,
-            the dialog will be non-modal, and the function will return the
-            dialog itself. For debugging.
         :param showAdvanced: If `True`, show configuration options flagged
             as 'advanced.'
         :param icon: An icon to appear in the window's titlebar (not
             visible in all operating systems/window managers).
+        :param exceptions: If `True`, allow all exceptions to be raised. If
+            `False`, show descriptive message boxes when anticipated errors
+             occur, intended for standalong use.
         :return: `None` if configuration was cancelled, else a tuple
             containing:
                 * The data written to the recorder (a nested dictionary)
@@ -577,30 +602,47 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
         dev = endaq.device.getRecorder(path)
 
     if not dev:
-        raise ValueError("Path '{}' does not appear to be a recorder".format(path))
+        msg = "Path '{}' does not appear to be a recorder".format(path)
+        if exceptions:
+            raise ValueError(msg)
 
-    if not dev.config.configUi:
-        raise ValueError("The device appears to have corrupted configuration UI data.")
+        wx.MessageBox(msg, "Configuration Error",
+                      parent=parent,
+                      style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
+        return None
 
-    dlg = ConfigDialog(parent, device=dev, setTime=setTime,
-                       useUtc=useUtc, saveOnOk=saveOnOk,
-                       showAdvanced=showAdvanced,
-                       icon=icon)
+    if not dev.config.getConfigUI():
+        if exceptions:
+            raise endaq.device.DeviceError("The device appears to have corrupted configuration UI data.", dev)
 
-    if modal:
-        dlg.ShowModal()
-    else:
-        dlg.Show()
+        wx.MessageBox("Could not configure recorder\n\n"
+                      "Valid configuration UI data could not be retrieved for the device.",
+                      "Configuration Error",
+                      parent=parent,
+                      style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
+        return None
 
-    result = dlg.configData
-    setTime = dlg.setClockCheck.GetValue()
-    useUtc = dlg.useUtc
-    msg = dlg.postConfigMessage or getattr(dev, "POST_CONFIG_MSG", None)
+    try:
+        with ConfigDialog(parent, device=dev, setTime=setTime,
+                          useUtc=useUtc, saveOnOk=saveOnOk,
+                          showAdvanced=showAdvanced,
+                          icon=icon, debug=debug) as dlg:
+            dlg.ShowModal()
+            result = dlg.configData
+            setTime = dlg.setClockCheck.GetValue()
+            useUtc = dlg.useUtc
+            msg = dlg.postConfigMessage or getattr(dev, "POST_CONFIG_MSG", None)
 
-    if not modal:
-        return dlg
+    except PermissionError:
+        if exceptions:
+            raise
 
-    dlg.Destroy()
+        wx.MessageBox("Another process appears to have control of the device.\n\n"
+                      "Close other application that could be using the recorder and try again.",
+                      "Configuration Error",
+                      parent=parent,
+                      style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
+        return None
 
     if result is None:
         return None
