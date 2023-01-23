@@ -5,7 +5,7 @@ This is a Python script is a standalone version of the configuration dialog in e
 configuration of enDAQ (and legacy SlamStick X, C, and S) data recorders via a user-friendly GUI.
 
 > **Note**
-> As of 2022-11-30, Python **3.9** or **3.10** is required. Some required libraries (including wxPython) 
+> As of January 2023, Python **3.9** or **3.10** is required. Some required libraries (including wxPython) 
 > have issues with Python 3.11. Python versions 3.7 to 3.8 may work, but have not been thoroughly tested.
 
 Installing
@@ -25,4 +25,4 @@ Here are two ways, both from the command line:
 
 Or simply:
 
-    endaqconfig.exe
+    endaqconfig
