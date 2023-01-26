@@ -501,7 +501,7 @@ class ConfigDialog(SC.SizedDialog):
         self._saveTabs()
         self._setClock()
 
-        if self.configData.get(0x18ff7f) != wifiWasEnabled:
+        if self.device.hasWifi and self.configData.get(0x18ff7f) != wifiWasEnabled:
             q = wx.MessageBox("Reset recording device?\n\n"
                               "Enabling or disabling Wi-Fi requires the "
                               "recording device to reset in order to take effect.\n"
