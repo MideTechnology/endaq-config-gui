@@ -687,13 +687,14 @@ class DeviceInfoTab(Tab):
         info['CalibrationDate'] = dev.getCalDate()
         info['CalibrationExpirationDate'] = dev.getCalExpiration()
 
+        info['HwRev'] = dev.hardwareVersion
+        if info.pop('UniqueChipIDLong', None):
+            info['UniqueChipID'] = dev.chipId
+
         self.sizer = wx.BoxSizer(wx.VERTICAL)
         self.field = InfoPanel(self, -1,
                                   root=self.root,
                                   info=info)
-        # self.field = SSXInfoPanel(self, -1,
-        #                           root=self.root,
-        #                           info=info)
         self.sizer.Add(self.field, 1, wx.EXPAND)
         self.SetSizer(self.sizer)
 
