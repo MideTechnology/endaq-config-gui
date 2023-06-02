@@ -22,7 +22,7 @@ import wx.lib.wxpTag  # @UnusedImport - simply importing it does the work.
 
 from .widgets.calibration_editor import PolyEditDialog
 
-from .base import Tab, registerTab
+from .base import Tab, logger, registerTab
 
 
 #===============================================================================
@@ -143,10 +143,8 @@ class InfoPanel(HtmlWindow):
             k = html.escape(str(k)).replace(' ', '&nbsp;')
             v = html.escape(str(v))
 
-        self.html.append("<tr><td width='%d%%'>%s</td>" %
-                         (self.column_widths[0], k))
-        self.html.append("<td width='%d%%'><b>%s</b></td></tr>" %
-                         (self.column_widths[1], v))
+        self.html.append(f"<tr><td width='{self.column_widths[0]}%'>{k}</td>")
+        self.html.append(f"<td width='{self.column_widths[1]}%'><b>{v}</b></td></tr>")
 
 
     def closeTable(self):
@@ -167,8 +165,8 @@ class InfoPanel(HtmlWindow):
             self.html.append("</table>")
             self._inTable = False
         if warning:
-            v = "<font color='#FF0000'>%s</font>" % v
-        self.html.append("<p>%s</p>" % v)
+            v = f"<font color='#FF0000'>{v}</font>"
+        self.html.append(f"<p>{v}</p>")
 
 
     @staticmethod
@@ -250,10 +248,11 @@ class InfoPanel(HtmlWindow):
                 elif k in self.field_types:
                     v = self.field_types[k](v)
                 elif isinstance(v, int):
-                    v = "0x%08X" % v
+                    v = f"0x{v:08X}"
                 elif isinstance(v, dict) and len(v) == 0:
                     v = "True"
             except TypeError:
+                # Unlikely, but just in case. `v` remains the same.
                 pass
 
             self.addItem(k, v)
@@ -285,7 +284,7 @@ class InfoPanel(HtmlWindow):
             href = href.replace('viewer', '')
             base, t = href.split("@")
             chid, subchid = base.split('.')
-            print("Viewer link: %r %s %s" % (chid, subchid, t))
+            logger.debug(f"Viewer link: {chid!r} {subchid} {t}")
         elif href.startswith("http"):
             # Launch external web browser
             wx.LaunchDefaultBrowser(href)
@@ -329,16 +328,16 @@ class SSXInfoPanel(InfoPanel):
         if self.life is not None:
             if self.life < 0:
                 self.lifeIcon = self.root.ICON_WARN
-                self.lifeMsg = self.ICONS[self.lifeIcon], "This devices is %d days old; battery life may be limited." % self.root.device.getAge()
+                self.lifeMsg = self.ICONS[self.lifeIcon], f"This devices is {self.root.device.getAge()} days old; battery life may be limited."
 
         if self.calExp is not None:
             calExpDate = self.calExp.date()
             if self.calExp < time.time():
                 self.calIcon = self.root.ICON_ERROR
-                self.calMsg = self.ICONS[self.calIcon], "This device's calibration expired on %s; it may require recalibration." % calExpDate
+                self.calMsg = self.ICONS[self.calIcon], f"This device's calibration expired on {calExpDate}; it may require recalibration."
             elif self.calExp < time.time() - 8035200:
                 self.calIcon = self.root.ICON_WARN
-                self.calMsg = self.ICONS[self.calIcon], "This device's calibration will expire on %s." % calExpDate
+                self.calMsg = self.ICONS[self.calIcon], f"This device's calibration will expire on {calExpDate}."
 
         self.tabIcon = max(self.calIcon or -1, self.lifeIcon or -1, self.tabIcon or -1)
         # self.tabIcon = None if self.tabIcon == -1 else self.tabIcon
@@ -348,14 +347,10 @@ class SSXInfoPanel(InfoPanel):
     def addItem(self, k, v, escape=True):
         """ Custom adder that highlights problem items.
         """
-        if self.lifeIcon > 0 and k == 'Date of Manufacture':
-            k = "<font color='red'>%s</font>" % k
-            v = "<font color='red'>%s</font>" % v
-            escape = False
-        elif self.calIcon > 0 and k == 'Calibration Expiration Date':
-            k = "<font color='red'>%s</font>" % k
-            v = "<font color='red'>%s</font>" % v
-            escape = False
+        if ((k == 'Date of Manufacture' and self.lifeIcon > 0) or
+            (k == 'Calibration Expiration Date' and self.calIcon > 0)):
+            k = f"<font color='red'>{k}</font>"
+            v = f"<font color='red'>{v}</font>"
 
         super(SSXInfoPanel, self).addItem(k, v, escape=escape)
 
@@ -363,11 +358,11 @@ class SSXInfoPanel(InfoPanel):
     def buildFooter(self):
         warnings = list(filter(None, (self.lifeMsg, self.calMsg)))
         if len(warnings) > 0:
-            warnings = ["<tr valign=center><td><img src='%s'></td><td><font color='red'>%s</font></td></tr>" % w for w in warnings]
+            warnings = [f"<tr valign=center><td><img src='{w[0]}'></td><td><font color='red'>{w[1]}</font></td></tr>" for w in warnings]
             warnings.insert(0, "<hr><center><table>")
             warnings.append('</table>')
             if self.root.device.homepage is not None:
-                warnings.append("<p>Please visit the <a href='%s'>product's home page</a> for more information.</p>" % self.root.device.homepage)
+                warnings.append(f"<p>Please visit the <a href='{self.root.device.homepage}'>product's home page</a> for more information.</p>")
             warnings.append('</center>')
             self.html.extend(warnings)
 
@@ -445,12 +440,12 @@ class CalibrationPanel(InfoPanel):
         self.revertIds[wxrevid] = cal
         return ('<wxp module="wx" class="Button" width="60" height="20">'
                 '<param name="label" value="Edit">'
-                '<param name="id" value="%d">'
+                f'<param name="id" value="{int(wxid)}">'
                 '</wxp>'
                 '<wxp module="wx" class="Button" width="60" height="20">'
                 '<param name="label" value="Revert">'
-                '<param name="id" value="%d">'
-                '</wxp>' % (wxid, wxrevid))
+                f'<param name="id" value="{int(wxrevid)}">'
+                '</wxp>')
 
 
     def buildUI(self):
@@ -468,8 +463,8 @@ class CalibrationPanel(InfoPanel):
         def _chName(ch):
             # Helper function to pretty-print (Sub)Channel names
             if hasattr(ch, 'subchannels'):
-                return "Channel %d: <i>%s</i>" % (ch.id, ch.displayName)
-            return "Channel %d.%d: <i>%s</i>" % (ch.parent.id, ch.id, ch.displayName)
+                return f"Channel {ch.id}: <i>{ch.displayName}</i>"
+            return f"Channel {ch.parent.id}.{ch.id}: <i>{ch.displayName}</i>"
 
         # HACK: other panels assume they will only have their contents generated
         # once, but this one will redraw if its contents were edited.
@@ -480,13 +475,13 @@ class CalibrationPanel(InfoPanel):
         self.html = ["<html><body>"]
 
         if self.calSerial:
-            self.html.append("<p><b>Calibration Serial: C%03d</b></p>" % self.calSerial)
+            self.html.append(f"<p><b>Calibration Serial: C{self.calSerial:03d}</b></p>")
         if self.calDate or self.calExpiry:
             self.html.append("<p>")
             if self.calDate:
-                self.html.append("<b>Calibration Date:</b> %s" % self.calDate.date())
+                self.html.append(f"<b>Calibration Date:</b> {self.calDate.date()}")
             if self.calExpiry:
-                self.html.append(" <b>Expires:</b> %s" % self.calExpiry.date())
+                self.html.append(f" <b>Expires:</b> {self.calExpiry.date()}")
             self.html.append("</p>")
 
         if len(self.info) == 0:
@@ -494,8 +489,8 @@ class CalibrationPanel(InfoPanel):
             if self.editable:
                 self.html.append('<br><wxp module="wx" class="Button">'
                                  '<param name="label" value="Create User Calibration">'
-                                 '<param name="id" value="%d">'
-                                 '</wxp>' % self.ID_CREATE_CAL)
+                                 f'<param name="id" value="{int(self.ID_CREATE_CAL)}">'
+                                 '</wxp>')
 
         for cal in self.info:
             if cal.id is None:
@@ -516,7 +511,7 @@ class CalibrationPanel(InfoPanel):
                 else:
                     users = ["None"]
 
-            t = ("<p><b>Calibration ID %d (Used by %s)</b>" % (cal.id, '; '.join(users)))
+            t = (f"<p><b>Calibration ID {cal.id} (Used by {'; '.join(users)})</b>")
             if self.editable:
                 t += "<br>"+self.addEditButton(cal)
             self.html.append(t)
@@ -525,25 +520,27 @@ class CalibrationPanel(InfoPanel):
             if hasattr(cal, 'channelId'):
                 try:
                     if hasattr(cal, 'subchannelId'):
-                        calType = "%s; references %s" % (calType, _chName(self.channels[cal.channelId][cal.subchannelId]))
+                        ref = _chName(self.channels[cal.channelId][cal.subchannelId])
                     else:
-                        calType = "%s; references %s" % (calType, _chName(self.channels[cal.channelId]))
-                except (IndexError, AttributeError, KeyError):
-                    pass
+                        ref = _chName(self.channels[cal.channelId])
+                    calType = f"{calType}; references {ref}"
+                except (IndexError, AttributeError, KeyError) as err:
+                    logger.debug(f'Ignored error formatting polynomial reference: {err!r}')
+
             self.html.append('<ul>')
-            self.html.append('<li>%s</li>' % calType)
+            self.html.append(f'<li>{calType}</li>')
             if hasattr(cal, 'coefficients'):
                 coeffs = ', '.join(map(self.cleanFloat, cal.coefficients))
                 refs = ', '.join(map(self.cleanFloat, cal.references))
-                self.html.append('<li>Coefficients: <tt>%s</tt></li>' % coeffs)
-                self.html.append('<li>Reference(s): <tt>%s</tt></li>' % refs)
+                self.html.append(f'<li>Coefficients: <tt>{coeffs}</tt></li>')
+                self.html.append(f'<li>Reference(s): <tt>{refs}</tt></li>')
 
             reduced_polynomial_coeffs = get_reduced_polynomial_coefficients(cal.coefficients, cal.references).flatten()
 
             poly = cal.__class__(reduced_polynomial_coeffs, channelId=-1, subchannelId=-1).source.split()[-1]
-            self.html.append('<li>Polynomial: <tt>%s</tt></li>' % str(cal))
+            self.html.append(f'<li>Polynomial: <tt>{cal!s}</tt></li>')
             if str(cal) != poly:
-                self.html.append('<li>Polynomial, Reduced: <tt>%s</tt></li>' % poly)
+                self.html.append(f'<li>Polynomial, Reduced: <tt>{poly}</tt></li>')
             self.html.append('</ul></p>')
 
         self.html.append("</body></html>")
@@ -612,12 +609,13 @@ class EditableCalibrationPanel(wx.Panel):
         if self.info is None:
             return
         for calid, wxid in self.html.revertWxIds.items():
-            but = wx.FindWindowById(wxid)
+            but = self.FindWindowById(wxid)
             try:
                 but.Enable(not self.info[calid] == self.factoryCal[calid])
             except AttributeError:
                 pass
-            except Exception:
+            except Exception as err:
+                logger.debug(f'Ignored error in enableRevertButtons: {err!r}')
                 but.Enable(False)
 
 
@@ -647,7 +645,7 @@ class EditableCalibrationPanel(wx.Panel):
             self.info[cal.id] = self.factoryCal[cal.id]
             self.updateCalDisplay()
         else:
-#             print "Unknown button ID: %r" % evtId
+            logger.debug(f"Unknown button ID: {evtId}")
             evt.Skip()
 
 
