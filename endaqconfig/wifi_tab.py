@@ -18,7 +18,7 @@ from .base import logger, registerTab
 from .widgets import icons
 
 from endaq.device import DeviceError, DeviceTimeout
-from endaq.device.command_interfaces import CommandInterface
+from endaq.device.response_codes import DeviceStatusCode
 
 
 # ===============================================================================
@@ -142,7 +142,7 @@ class ContinousNetworkStatusChecker(threading.Thread):
                 logger.warning("Timed out when checking the network connection, retrying")
 
             except DeviceError as E:
-                if E.args and E.args[0] == CommandInterface.ERR_BUSY:
+                if E.args and E.args[0] == DeviceStatusCode.ERR_BUSY:
                     logger.info("Device repoted ERR_BUSY, retrying")
                 else:
                     logger.error(E)

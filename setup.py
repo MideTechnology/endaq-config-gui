@@ -4,13 +4,13 @@ with open('README.md', 'r') as fh:
     long_description = fh.read()
 
 INSTALL_REQUIRES = [
-    "endaq-device",
-    "wxPython>=4.1.1",
+    "endaq-device>=1.1.1",
+    "wxPython>=4.2.0",
 ]
 
 setuptools.setup(
         name='endaqconfig',
-        version='1.0.0',
+        version='1.0.1',
         author='Mide Technology',
         author_email='help@mide.com',
         description='Standalone GUI for configuring enDAQ data recorders',
