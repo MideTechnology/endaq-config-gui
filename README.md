@@ -14,7 +14,7 @@ Installing
 
 On the command line (bash, PowerShell, cmd, etc.):
 
-    python -m pip install "endaqconfig @ git+https://github.com/MideTechnology/endaq-config-gui"
+    python -m pip install "endaqconfig @ git+https://github.com/MideTechnology/endaq-config-gui@main"
 
 Note: using a virtual environment is recommended (but not required).
 
