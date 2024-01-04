@@ -5,7 +5,9 @@ This is a Python script is a standalone version of the configuration dialog in e
 configuration of enDAQ (and legacy SlamStick X, C, and S) data recorders via a user-friendly GUI. It can
 also be imported in another script for device selection and/or configuration.
 
-Python 3.9 or later required.
+Python 3.9 or later required. It is known to work in Windows 10 and up; it *may* work in Linux and
+MacOS, but it has not been significantly tested in an OS other than Windows.
+
 
 Installing
 ----------

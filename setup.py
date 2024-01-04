@@ -10,7 +10,7 @@ INSTALL_REQUIRES = [
 
 setuptools.setup(
         name='endaqconfig',
-        version='1.0.1',
+        version='1.1.0b1',
         author='Mide Technology',
         author_email='help@mide.com',
         description='Standalone GUI for configuring enDAQ data recorders',
@@ -21,10 +21,9 @@ setuptools.setup(
         classifiers=['Development Status :: 5 - Production/Stable',
                      'License :: OSI Approved :: MIT License',
                      'Natural Language :: English',
-                     'Programming Language :: Python :: 3.7',
-                     'Programming Language :: Python :: 3.8',
                      'Programming Language :: Python :: 3.9',
-                     'Programming Language :: Python :: 3.10'],
+                     'Programming Language :: Python :: 3.10',
+                     'Programming Language :: Python :: 3.11'],
         keywords='endaq slamstick config utility gui',
         packages=setuptools.find_packages(),
         package_dir={'': '.'},
