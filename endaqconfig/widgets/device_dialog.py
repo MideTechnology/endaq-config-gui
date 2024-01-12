@@ -175,11 +175,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                                          agwStyle=wx.LC_REPORT
                                                   # | wx.BORDER_SUNKEN
                                                   | wx.BORDER_NONE
-                                                  # | wx.LC_EDIT_LABELS
                                                   # | wx.LC_SORT_ASCENDING
-                                                  # | wx.LC_NO_HEADER
                                                   | wx.LC_VRULES
                                                   | wx.LC_HRULES
+                                                  | ULC.ULC_SHOW_TOOLTIPS
                                          )
 
         images = wx.ImageList(16, 16)
@@ -375,7 +374,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                                          self.list.GetItemRect(index)[2])
 
                 self.list.SetItemData(index, index)
-                self.itemDataMap[index] = [getattr(dev, c.propName, c.default)
+                self.itemDataMap[index] = [getattr(dev, c.propName, c.default) or ""
                                            for c in self.COLUMNS]
 
                 # if self.showWarnings:
