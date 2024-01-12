@@ -2,20 +2,21 @@ enDAQ&trade; Data Recorder Configuration GUI
 ============================================
 
 This is a Python script is a standalone version of the configuration dialog in enDAQ Lab, for performing 
-configuration of enDAQ (and legacy SlamStick X, C, and S) data recorders via a user-friendly GUI.
+configuration of enDAQ (and legacy SlamStick X, C, and S) data recorders via a user-friendly GUI. It can
+also be imported in another script for device selection and/or configuration.
 
-> **Note**
-> As of 2022-11-30, Python **3.9** or **3.10** is required. Some required libraries (including wxPython) 
-> have issues with Python 3.11. Python versions 3.7 to 3.8 may work, but have not been thoroughly tested.
+Python 3.9 or later required. It is known to work in Windows 10 and up; it *may* work in Linux and
+MacOS, but it has not been significantly tested in an OS other than Windows.
+
 
 Installing
 ----------
 
 On the command line (bash, PowerShell, cmd, etc.):
 
-    python -m pip install "endaqconfig @ git+https://github.com/MideTechnology/endaq-config-gui"
+    python -m pip install "endaqconfig @ git+https://github.com/MideTechnology/endaq-config-gui@main"
 
-Note: using a virtual environment is recommended.
+Note: using a virtual environment is recommended (but not required).
 
 Running
 -------
@@ -25,4 +26,4 @@ Here are two ways, both from the command line:
 
 Or simply:
 
-    endaqconfig.exe
+    endaqconfig

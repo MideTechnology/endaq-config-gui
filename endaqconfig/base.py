@@ -435,6 +435,11 @@ class ConfigBase(object):
 
         self.expressionVariables = self.root.expressionVariables.copy()
 
+        if self.root.DEBUG:
+            tt = f"{self.tooltip}\n" if self.tooltip else ""
+            cid = hex(self.configId) if self.configId else None
+            self.tooltip = f"{tt}({self.element.name}, ConfigId={cid})"
+
 
     def __repr__(self):
         """
@@ -588,9 +593,9 @@ class ConfigWidget(wx.Panel, ConfigBase):
         else:
             self.unitLabel = None
 
-        if self.root.DEBUG:
-            tt = f"{self.tooltip}\n" if self.tooltip else ""
-            self.tooltip = f"{tt}({self.element.name}, ConfigId={hex(self.configId)})"
+        # if self.root.DEBUG:
+        #     tt = f"{self.tooltip}\n" if self.tooltip else ""
+        #     self.tooltip = f"{tt}({self.element.name}, ConfigId={hex(self.configId)})"
 
         if self.tooltip:
             self.SetToolTip(self.tooltip)

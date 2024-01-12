@@ -98,25 +98,31 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def __init__(self, *args, **kwargs):
         """ Constructor. Takes standard dialog arguments, plus:
 
+            :keyword filter: An optional function to exclude devices from
+                the list. It should take a `Recorder` as an argument, and
+                return a boolean.
             :keyword autoUpdate: A number of milliseconds to delay between
                 checks for changes to attached recorders. 0 will never
-                automatically refresh.
-            :keyword showWarnings: If `True`, battery age and calibration
-                expiration warnings will be shown for selected devices.
-            :keyword showAdvanced: If `True`, show additional columns
-                of information (hardware/firmware version, etc.).
+                automatically refresh. Default is 500 ms.
+            :keyword showWarnings: If `False`, battery age and calibration
+                expiration warnings will not be shown for selected devices.
+                Default is `True`.
+            :keyword showAdvanced: If `True`, show additional columns of
+                information (hardware/firmware version, etc.). Default is
+                `False`.
             :keyword hideClock: If `True`, the "Set all clocks" button will
-                be hidden.
+                be hidden. Default is `False`.
             :keyword hideRecord: If `True`, the "Start Recording" button
-                will be hidden.
+                will be hidden. Default is `False`.
             :keyword okText: Alternate text to display on the OK/Configure
-                button.
+                button. Defaults to `"Configure"`.
             :keyword okHelp: Alternate tooltip for the OK/Configure button.
+                Defaults to `"Configure the selected device"`.
             :keyword cancelText: Alternate text to display on the
-                Cancel/Close button.
+                Cancel/Close button. Defaults to `"Close"`
             :keyword icon: A `wx.Icon` for the dialog (for platforms that
-                support title bar icons). `None` (or unsupplied) will use
-                the package default. `False` will show no icon.
+                support title bar icons). `None` (default) will use the
+                package default. `False` will show no icon.
         """
         # Clear cached devices
         RECORDERS.clear()
@@ -133,6 +139,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.hideRecord = kwargs.pop('hideRecord', False)
         self.showWarnings = kwargs.pop('showWarnings', True)
         self.showAdvanced = kwargs.pop('showAdvanced', False)
+        self.filter = kwargs.pop('filter', lambda x: True)
         okText = kwargs.pop('okText', "Configure")
         okHelp = kwargs.pop('okHelp', 'Configure the selected device')
         cancelText = kwargs.pop('cancelText', "Close")
@@ -353,11 +360,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # For some reason, this wouldn't find devices if one of their files
         # is open (and only if it were opened via the Open File dialog).
         # See https://github.com/MideTechnology/SlamStickLab/issues/182
-        # For now, don't restrict to the recorderPaths, find & fix real cause!
-#         for dev in getDevices(self.recorderPaths):
+        # For now, don't restrict getDevices() to the recorderPaths, find &
+        # fix real cause!
 
         index = None
-        for idx, dev in enumerate(getDevices()):
+        for idx, dev in enumerate(filter(self.filter, getDevices())):
             try:
                 index = self.list.InsertImageStringItem(idx, dev.path, [0])
                 self.recorders[index] = dev
@@ -547,25 +554,32 @@ def selectDevice(title="Select Recorder", parent=None, **kwargs):
         The dialog will (optionally) update automatically when devices are
         added or removed.
 
-        :param title: A title string for the dialog
+        :param title: A title string for the dialog.
         :param parent: The parent window, if any.
+        :keyword filter: An optional function to exclude devices from the
+            list. It should take a `Recorder` as an argument, and return a
+            boolean.
         :keyword autoUpdate: A number of milliseconds to delay between checks
-            for changes to attached recorders. 0 will never update.
-        :keyword showWarnings: If `True`, battery age and calibration
-            expiration warnings will be shown for selected devices.
-        :keyword showAdvanced: If `True`, show additional columns
-            of information (hardware/firmware version, etc.).
+            for changes to attached recorders. 0 will never automatically
+            refresh. Default is 500 ms.
+        :keyword showWarnings: If `False`, battery age and calibration
+            expiration warnings will not be shown for selected devices.
+            Default is `True`.
+        :keyword showAdvanced: If `True`, show additional columns of
+            information (hardware/firmware version, etc.). Default is `False`.
         :keyword hideClock: If `True`, the "Set all clocks" button will be
-            hidden.
+            hidden. Default is `False`.
         :keyword hideRecord: If `True`, the "Start Recording" button will be
-            hidden.
+            hidden. Default is `False`.
         :keyword okText: Alternate text to display on the OK/Configure button.
+            Defaults to `"Configure"`.
         :keyword okHelp: Alternate tooltip for the OK/Configure button.
+            Defaults to `"Configure the selected device"`.
         :keyword cancelText: Alternate text to display on the Cancel/Close
-            button.
-        :keyword icon: A `wx.Icon` for the dialog (for platforms that
-            support title bar icons). `None` (or unsupplied) will use
-            the package default. `False` will show no icon.
+            button. Defaults to `"Close"`
+        :keyword icon: A `wx.Icon` for the dialog (for platforms that support
+            title bar icons). `None` (default) will use the package default.
+            `False` will show no icon.
         :return: The path of the selected device.
     """
     result = None

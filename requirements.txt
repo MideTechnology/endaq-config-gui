@@ -1,4 +1,4 @@
-endaq-device @ git+https://github.com/MideTechnology/endaq-device.git@develop
+endaq-device>=1.1.1
 idelib>=3.1
 ebmlite
 numpy
