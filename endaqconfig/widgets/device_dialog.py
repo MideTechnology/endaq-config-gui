@@ -7,6 +7,7 @@ from collections import namedtuple
 from datetime import datetime, timedelta
 import logging
 import os.path
+from typing import Optional
 
 import wx
 import wx.lib.sized_controls as sc
@@ -565,7 +566,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 #
 # ===========================================================================
 
-def selectDevice(title="Select Recorder", parent=None, **kwargs):
+def selectDevice(title: str = "Select Recorder",
+                 parent: Optional[wx.Window] = None,
+                 **kwargs):
     """ Display a device-selection dialog and return the path to a recorder.
         The dialog will (optionally) update automatically when devices are
         added or removed.
