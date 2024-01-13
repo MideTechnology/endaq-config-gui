@@ -9,6 +9,8 @@ import logging
 import os.path
 from typing import Optional
 
+from random import randint
+
 import wx
 import wx.lib.sized_controls as sc
 import wx.lib.mixins.listctrl as listmix
@@ -19,6 +21,7 @@ from endaq.device import deviceChanged
 from endaq.device.base import os_specific
 
 from . import icons
+from . import battery_icons
 
 logger = logging.getLogger('endaqconfig')
 
@@ -179,16 +182,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                                                   # | wx.LC_SORT_ASCENDING
                                                   | wx.LC_VRULES
                                                   | wx.LC_HRULES
-                                                  | ULC.ULC_SHOW_TOOLTIPS
+                                                  # | ULC.ULC_SHOW_TOOLTIPS
                                          )
 
-        images = wx.ImageList(16, 16)
-        empty = wx.Bitmap(16, 16)
-        empty.SetMaskColour(wx.BLACK)
-        images.Add(empty)
-        for i in (wx.ART_INFORMATION, wx.ART_WARNING, wx.ART_ERROR):
-            images.Add(wx.ArtProvider.GetBitmap(i, wx.ART_CMN_DIALOG, (16, 16)))
-        self.list.AssignImageList(images, wx.IMAGE_LIST_SMALL)
+        self.loadIcons()
 
         self.list.SetSizerProps(expand=True, proportion=1)
 
@@ -260,6 +257,26 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.TimerHandler)
+
+
+    def loadIcons(self):
+        """
+
+        :return:
+        """
+        images = ULC.PyImageList(16, 16, style=ULC.IL_VARIABLE_SIZE) #.ImageList(16, 16)
+        empty = wx.Bitmap(16, 16)
+        empty.SetMaskColour(wx.BLACK)
+        images.Add(empty)
+        for i in (wx.ART_INFORMATION, wx.ART_WARNING, wx.ART_ERROR):
+            images.Add(wx.ArtProvider.GetBitmap(i, wx.ART_CMN_DIALOG, (16, 16)))
+
+        self.batteryIcons = {}
+        for i, (name, icon) in enumerate((item for item in battery_icons.__dict__.items() if item[0].startswith('battery')), 4):
+            self.batteryIcons[name] = i
+            images.Add(icon.GetBitmap())
+
+        self.list.AssignImageList(images, wx.IMAGE_LIST_SMALL)
 
 
     def TimerHandler(self, _evt=None):
@@ -343,7 +360,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         for i, c in enumerate(self.COLUMNS):
             self.list.InsertColumn(i, c[0])
 
-        self.list.InsertColumn(i+1, "Test")
+        self.list.InsertColumn(i+1, "Bat")
+        self.list.InsertColumn(i+2, "Test")
 
         # Set minimum column widths (i.e. enough to fit the heading).
         # First column (which has an icon) is wider than the label.
@@ -365,8 +383,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # For now, don't restrict getDevices() to the recorderPaths, find &
         # fix real cause!
 
-        self.list.SetToolTip('TOOL TIP TEST')
-
         index = None
         for idx, dev in enumerate(filter(self.filter, getDevices())):
             try:
@@ -377,8 +393,12 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                     self.list.SetColumnWidth(i, wx.LIST_AUTOSIZE)
                     self.listWidth = max(self.listWidth,
                                          self.list.GetItemRect(index)[2])
+
+                    # XXX: TEST
                     item = self.list.GetItem(index, i)
                     item.SetToolTip(str(dev))
+
+                self.list.SetStringItem(index, i+1, "", randint(5,17))
 
                 # XXX TEST
                 pan = wx.Panel(self.list, -1)
@@ -386,7 +406,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 pan.SetSizer(pansize)
                 b = wx.Button(pan, -1, "test", size=(-1, 16))
                 pansize.Add(b, 1, wx.EXPAND)
-                self.list.SetItemWindow(index, i+1, pan, expand=True)
+                self.list.SetItemWindow(index, i+2, pan, expand=True)
 
                 self.list.SetItemData(index, index)
                 self.itemDataMap[index] = [getattr(dev, c.propName, c.default) or ""
@@ -475,6 +495,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             This determines the list item under the mouse and shows the
             appropriate tool tip, if any
         """
+        # XXX: TEST
         evt.Skip()
         return
 
