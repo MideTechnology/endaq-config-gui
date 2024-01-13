@@ -342,6 +342,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         for i, c in enumerate(self.COLUMNS):
             self.list.InsertColumn(i, c[0])
 
+        self.list.InsertColumn(i+1, "Test")
+
         # Set minimum column widths (i.e. enough to fit the heading).
         # First column (which has an icon) is wider than the label.
         minWidths = [self.list.GetTextExtent(c[0])[0] + 16 for c in self.COLUMNS]
@@ -362,6 +364,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # For now, don't restrict getDevices() to the recorderPaths, find &
         # fix real cause!
 
+        self.list.SetToolTip('TOOL TIP TEST')
+
         index = None
         for idx, dev in enumerate(filter(self.filter, getDevices())):
             try:
@@ -372,6 +376,16 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                     self.list.SetColumnWidth(i, wx.LIST_AUTOSIZE)
                     self.listWidth = max(self.listWidth,
                                          self.list.GetItemRect(index)[2])
+                    item = self.list.GetItem(index, i)
+                    item.SetToolTip(str(dev))
+
+                # XXX TEST
+                pan = wx.Panel(self.list, -1)
+                pansize = wx.BoxSizer(wx.HORIZONTAL)
+                pan.SetSizer(pansize)
+                b = wx.Button(pan, -1, "test", size=(-1, 16))
+                pansize.Add(b, 1, wx.EXPAND)
+                self.list.SetItemWindow(index, i+1, pan, expand=True)
 
                 self.list.SetItemData(index, index)
                 self.itemDataMap[index] = [getattr(dev, c.propName, c.default) or ""
@@ -460,6 +474,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             This determines the list item under the mouse and shows the
             appropriate tool tip, if any
         """
+        evt.Skip()
+        return
+
         if not self.recorders:
             evt.Skip()
             return

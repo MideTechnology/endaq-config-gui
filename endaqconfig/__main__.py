@@ -34,7 +34,7 @@ def run(debug=__DEBUG__):
         _app = wx.App()
 
     try:
-        dev = device_dialog.selectDevice(showAdvanced=args.advanced,
+        dev = device_dialog.selectDevice(showAdvanced=True,  # args.advanced,
                                          debug=debug)
         wx.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
         if dev:
