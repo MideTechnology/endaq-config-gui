@@ -17,7 +17,7 @@ import wx.lib.mixins.listctrl as listmix
 from wx.lib.agw import ultimatelistctrl as ULC
 
 from endaq.device import getDevices, getDeviceList, RECORDERS
-from endaq.device import deviceChanged
+from endaq.device import deviceChanged, UnsupportedFeature
 from endaq.device.base import os_specific
 
 from . import icons
@@ -159,8 +159,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             icon = icon or icons.icon.GetIcon()
             self.SetIcon(icon)
 
+        # TODO: Better column collection (assemble piecemeal based on parameters)
         if self.showAdvanced:
-            self.COLUMNS = self.ADVANCED_COLUMNS
+            self.columns = self.ADVANCED_COLUMNS
+        else:
+            self.columns = self.COLUMNS
 
         self.recorders = {}
         self.recorderPaths = tuple(getDeviceList())
@@ -168,6 +171,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.selectedIdx = None
         self.firstDrawing = True
         self.listWidth = 420
+
+        self.batteryCol = None
+        self.buttonCol = None
 
         pane = self.GetContentsPane()
         pane.SetSizerProps(expand=True)
@@ -291,6 +297,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.recorderPaths = newPaths
             self.populateList()
             self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+        self.updateDeviceDisplay()
 
 
     def setItemIcon(self, index, dev):
@@ -357,16 +364,23 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """ Find recorders and add them to the list.
         """
         self.list.ClearAll()
-        for i, c in enumerate(self.COLUMNS):
+        for i, c in enumerate(self.columns):
             self.list.InsertColumn(i, c[0])
 
-        self.list.InsertColumn(i+1, "Bat")
-        self.list.InsertColumn(i+2, "Test")
+        # TODO: Change when column building is redone
+        self.batteryCol = i + 1
+        self.buttonCol = i + 2
+        self.list.InsertColumn(self.batteryCol, "Bat")
+        self.list.InsertColumn(self.buttonCol, "Test")
 
         # Set minimum column widths (i.e. enough to fit the heading).
         # First column (which has an icon) is wider than the label.
-        minWidths = [self.list.GetTextExtent(c[0])[0] + 16 for c in self.COLUMNS]
+        # TODO: Redo
+        minWidths = [self.list.GetTextExtent(c[0])[0] + 16 for c in self.columns] + [0, 0]
         minWidths[0] += 16
+
+        if self.batteryCol is not None:
+            minWidths[self.batteryCol] = 32
 
         self.recorders.clear()
         self.itemDataMap.clear()
@@ -387,8 +401,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         for idx, dev in enumerate(filter(self.filter, getDevices())):
             try:
                 index = self.list.InsertImageStringItem(idx, dev.path, [0])
+                self.list.SetItemPyData(index, dev)
                 self.recorders[index] = dev
-                for i, col in enumerate(self.COLUMNS[1:], 1):
+                for i, col in enumerate(self.columns[1:], 1):
                     self.list.SetStringItem(index, i, self._thing2string(dev, col), [])
                     self.list.SetColumnWidth(i, wx.LIST_AUTOSIZE)
                     self.listWidth = max(self.listWidth,
@@ -398,19 +413,30 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                     item = self.list.GetItem(index, i)
                     item.SetToolTip(str(dev))
 
-                self.list.SetStringItem(index, i+1, "", randint(5,17))
+                try:
+                    batName, batDesc = battery_icons.batStat2name(dev.command.getBatteryStatus())
+                    batIcon = self.batteryIcons.get(batName, 0)
+                except UnsupportedFeature:
+                    batIcon, batDesc = 0, ''
+
+                self.list.SetStringItem(index, self.batteryCol, '', batIcon)
 
                 # XXX TEST
-                pan = wx.Panel(self.list, -1)
-                pansize = wx.BoxSizer(wx.HORIZONTAL)
-                pan.SetSizer(pansize)
-                b = wx.Button(pan, -1, "test", size=(-1, 16))
-                pansize.Add(b, 1, wx.EXPAND)
-                self.list.SetItemWindow(index, i+2, pan, expand=True)
+                if self.buttonCol:
+                    pan = wx.Panel(self.list, -1)
+                    pansize = wx.BoxSizer(wx.HORIZONTAL)
+                    pan.SetSizer(pansize)
+                    b = wx.Button(pan, -1, "button1", size=(-1, 16))
+                    b2 = wx.Button(pan, -1, "button2", size=(-1, 16))
+                    pansize.Add(b, 1, wx.EXPAND)
+                    pansize.Add(b2, 1, wx.EXPAND)
+                    pansize.Fit(pan)
+                    self.list.SetItemWindow(index, i+2, pan, expand=True)
+                    minWidths[self.buttonCol] = pan.GetSize()[0]
 
                 self.list.SetItemData(index, index)
                 self.itemDataMap[index] = [getattr(dev, c.propName, c.default) or ""
-                                           for c in self.COLUMNS]
+                                           for c in self.columns]
 
                 # if self.showWarnings:
                 #     self.setItemIcon(index, dev)
@@ -428,6 +454,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if self.list.GetColumnWidth(i) < w:
                 self.list.SetColumnWidth(i, w)
 
+        if self.batteryCol is not None:
+            self.list.SetColumnWidth(self.batteryCol, minWidths[self.batteryCol])
+
         if self.firstDrawing:
             self.list.Fit()
             self.firstDrawing = False
@@ -444,6 +473,20 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         if self.selected is None:
             return None
         return self.recorders.get(self.selected, None)
+
+
+    def updateDeviceDisplay(self):
+        if not self.batteryCol:
+            return
+
+        for index, dev in self.recorders.items():
+            try:
+                batName, batDesc = battery_icons.batStat2name(dev.command.getBatteryStatus())
+                batIcon = self.batteryIcons.get(batName, 0)
+            except UnsupportedFeature:
+                batIcon, batDesc = 0, ''
+
+            self.list.SetStringItem(index, self.batteryCol, '', batIcon)
 
 
     def OnColClick(self, evt):
@@ -513,6 +556,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.lastToolTipItem = index
         evt.Skip()
 
+
+    def OnGetItemToolTip(self, item, col):
+        # XXX: TEST
+        print(f'OnGetItemToolTip({item=}, {col=})')
+        super().OnGetItemToolTip(item, col)
 
     def OnShow(self, evt):
         """ Handle dialog being shown/hidden.

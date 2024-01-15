@@ -1,4 +1,41 @@
+from math import ceil
+from typing import Any, Optional
+
 from wx.lib.embeddedimage import PyEmbeddedImage
+
+
+def batStat2name(status: dict[str, Any],
+                 theme: str = "dk") -> tuple[Optional[str], str]:
+    """ Turn the output of `getBatteryStatus()` into the name of an icon.
+
+        :param status: The dictionary produced by `getBatteryStatus()`, or `None`.
+        :param theme: The GUI theme (for future use; only "dk" is supported).
+        :returns: A tuple containing the name of the icon and a human-readable
+            description of the battery state.
+    """
+    # {'hasBattery': True, 'charging': True, 'percentage': False, 'level': 255}
+    if not status or not status.get('hasBattery'):
+        return None, ''
+    if status.get('externalPower', False):
+        return None, "Externally powered"
+
+    percentage = status.get('percentage')
+    charging = '_charging' if status.get('charging') else ''
+    level = int(status.get('level', 128) * 0.39216 + .5)
+
+    desc = ""
+    if level < 20:
+        lev = 0
+    elif not percentage:
+        lev = "unknown"
+        desc = "Partially charged"
+    else:
+        lev = max(0, min(100, int((level + 15) // 20) * 20))
+
+    return (f"battery_{lev}{charging}_{theme}",
+            f'{desc or f"{level}%"}{" (charging)" if charging else ""}')
+
+
 battery_0_charging_dk = PyEmbeddedImage(
     b'iVBORw0KGgoAAAANSUhEUgAAABoAAAAQCAYAAAAI0W+oAAAACXBIWXMAAAMYAAADGAG0VarP'
     b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAWNJREFUOI2l1L1LHFEU'
