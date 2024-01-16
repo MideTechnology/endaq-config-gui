@@ -51,6 +51,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     ID_START_RECORDING = wx.NewIdRef()
 
     # Indices of icons. Proportional to severity.
+    # Icons after these are battery level, etc.
     ICON_NONE, ICON_INFO, ICON_WARN, ICON_ERROR = range(4)
 
     # Named tuple to make handling columns slightly cleaner (names vs. indices).
@@ -182,16 +183,15 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         # self.list = self.DeviceListCtrl(pane, -1)
         self.list = ULC.UltimateListCtrl(pane, -1,
-                                         agwStyle=wx.LC_REPORT
-                                                  # | wx.BORDER_SUNKEN
-                                                  | wx.BORDER_NONE
-                                                  # | wx.LC_SORT_ASCENDING
-                                                  | wx.LC_VRULES
-                                                  | wx.LC_HRULES
-                                                  # | ULC.ULC_SHOW_TOOLTIPS
-                                         )
+                                         agwStyle=(wx.LC_REPORT
+                                                   # | wx.LC_NO_HEADER
+                                                   | wx.BORDER_NONE
+                                                   | wx.LC_HRULES
+                                                   # | wx.LC_VRULES
+                                                   # | ULC.ULC_SHOW_TOOLTIPS
+                                         ))
 
-        self.loadIcons()
+        self.list.AssignImageList(self.loadIcons(), wx.IMAGE_LIST_SMALL)
 
         self.list.SetSizerProps(expand=True, proportion=1)
 
@@ -258,19 +258,24 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         # For doing per-item tool tips in the list
         self.lastToolTipItem = -1
-        # XXX: Removed (temporarily) - has issue with UltimateListCtrl
-        self.list.Bind(wx.EVT_MOTION, self.OnListMouseMotion)
+        # XXX: Removed (temporarily) - tooltips not working with UltimateListCtrl?
+        # self.list.Bind(wx.EVT_MOTION, self.OnListMouseMotion)
 
+        self.timerCalls = 0
         self.timer = wx.Timer(self)
-        self.Bind(wx.EVT_TIMER, self.TimerHandler)
+        self.Bind(wx.EVT_TIMER, self.TimerHandler, self.timer)
 
 
-    def loadIcons(self):
+    def Foo(self, evt):
+        print('t2 tick')
+
+
+    def loadIcons(self) -> ULC.PyImageList:
+        """ Load the list icons (warning indicators and battery level icons)
+
+        :return: An `wx.ImageList` containing the icons.
         """
-
-        :return:
-        """
-        images = ULC.PyImageList(16, 16, style=ULC.IL_VARIABLE_SIZE) #.ImageList(16, 16)
+        images = ULC.PyImageList(16, 16, style=ULC.IL_VARIABLE_SIZE)
         empty = wx.Bitmap(16, 16)
         empty.SetMaskColour(wx.BLACK)
         images.Add(empty)
@@ -278,16 +283,19 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             images.Add(wx.ArtProvider.GetBitmap(i, wx.ART_CMN_DIALOG, (16, 16)))
 
         self.batteryIcons = {}
-        for i, (name, icon) in enumerate((item for item in battery_icons.__dict__.items() if item[0].startswith('battery')), 4):
+        for i, (name, icon) in enumerate((item for item in battery_icons.__dict__.items()
+                                          if item[0].startswith('battery')), 4):
             self.batteryIcons[name] = i
             images.Add(icon.GetBitmap())
 
-        self.list.AssignImageList(images, wx.IMAGE_LIST_SMALL)
+        return images
 
 
     def TimerHandler(self, _evt=None):
         """ Handle timer 'tick' by refreshing device list.
         """
+        self.timerCalls += 1
+
         if deviceChanged(recordersOnly=False):
             self.SetCursor(wx.Cursor(wx.CURSOR_ARROWWAIT))
             newPaths = tuple(getDeviceList())
@@ -297,7 +305,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.recorderPaths = newPaths
             self.populateList()
             self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-        self.updateDeviceDisplay()
+            return
+
+        # Update currently displayed devices less frequently
+        if self.timerCalls % 4 == 0:
+            self.updateDeviceDisplay()
 
 
     def setItemIcon(self, index, dev):
@@ -363,7 +375,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def populateList(self):
         """ Find recorders and add them to the list.
         """
+        font = self.list.GetFont().Bold()
         self.list.ClearAll()
+
         for i, c in enumerate(self.columns):
             self.list.InsertColumn(i, c[0])
 
@@ -376,11 +390,12 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # Set minimum column widths (i.e. enough to fit the heading).
         # First column (which has an icon) is wider than the label.
         # TODO: Redo
-        minWidths = [self.list.GetTextExtent(c[0])[0] + 16 for c in self.columns] + [0, 0]
-        minWidths[0] += 16
+        # minWidths = [self.list.GetTextExtent(c[0])[0] + 16 for c in self.columns] + [0, 0]
+        minWidths = [self.list.GetTextExtent(c[0])[0] for c in self.columns] + [0, 0]
+        # minWidths[0] += 16
 
         if self.batteryCol is not None:
-            minWidths[self.batteryCol] = 32
+            minWidths[self.batteryCol] = 40
 
         self.recorders.clear()
         self.itemDataMap.clear()
@@ -409,10 +424,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                     self.listWidth = max(self.listWidth,
                                          self.list.GetItemRect(index)[2])
 
-                    # XXX: TEST
-                    item = self.list.GetItem(index, i)
-                    item.SetToolTip(str(dev))
-
                 try:
                     batName, batDesc = battery_icons.batStat2name(dev.command.getBatteryStatus())
                     batIcon = self.batteryIcons.get(batName, 0)
@@ -436,7 +447,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
                 self.list.SetItemData(index, index)
                 self.itemDataMap[index] = [getattr(dev, c.propName, c.default) or ""
-                                           for c in self.columns]
+                                           for c in self.columns] + ['', '']  # XXX: redo when redoing column def
 
                 # if self.showWarnings:
                 #     self.setItemIcon(index, dev)
@@ -451,8 +462,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                     self.list.DeleteItem(index)
 
         for i, w in enumerate(minWidths):
-            if self.list.GetColumnWidth(i) < w:
-                self.list.SetColumnWidth(i, w)
+            if self.list.GetColumnWidth(i) < w + 8:
+                self.list.SetColumnWidth(i, w + 8)
 
         if self.batteryCol is not None:
             self.list.SetColumnWidth(self.batteryCol, minWidths[self.batteryCol])
@@ -486,6 +497,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             except UnsupportedFeature:
                 batIcon, batDesc = 0, ''
 
+            # batIcon = randint(4, self.list.GetImageList(wx.IMAGE_LIST_SMALL).GetImageCount()-1)
             self.list.SetStringItem(index, self.batteryCol, '', batIcon)
 
 
@@ -556,11 +568,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.lastToolTipItem = index
         evt.Skip()
 
-
-    def OnGetItemToolTip(self, item, col):
-        # XXX: TEST
-        print(f'OnGetItemToolTip({item=}, {col=})')
-        super().OnGetItemToolTip(item, col)
 
     def OnShow(self, evt):
         """ Handle dialog being shown/hidden.
