@@ -10,8 +10,6 @@ import logging
 import os.path
 from typing import Optional
 
-from random import randint
-
 import wx
 import wx.lib.sized_controls as sc
 import wx.lib.mixins.listctrl as listmix
@@ -378,6 +376,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         images.Add(empty)
         for i in (wx.ART_INFORMATION, wx.ART_WARNING, wx.ART_ERROR):
             images.Add(wx.ArtProvider.GetBitmap(i, wx.ART_CMN_DIALOG, (16, 16)))
+        # images.Add(icons.info.GetBitmap())
+        # images.Add(icons.warn.GetBitmap())
+        # images.Add(icons.error.GetBitmap())
 
         self.batteryIconIndices = {}
         batImages = [item for item in battery_icons.__dict__.items()
@@ -445,8 +446,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         # TODO: Refactor this!
         tips = []
-
-        connectionIcon = self.ICON_NONE
 
         if self.batteryCol is not None:
             bat = self.itemDataMap[index][self.batteryCol]
