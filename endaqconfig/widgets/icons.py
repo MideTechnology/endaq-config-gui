@@ -372,3 +372,30 @@ WIFI_ICONS = (
             b'm6bZe5p/dXotp6amDgYGBuhs7cTEROtf0HryiKJqkboAAAAASUVORK5CYII='),
 )
 
+
+connection_bt = PyEmbeddedImage(
+    b'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAnXAAAJ1wGxbhe3'
+    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAALRJREFUOI3F0q+KQlEQ'
+    b'x/GPesNi0Ocw+QLb3GY22barcIvVIBuM+wIGg09hs4kYNgh2k0FEMIkYvEnun4PB/cKEw/md'
+    b'38yZGf6bSsF9jAY2ryaY4opulqAcYDJJohNqUMMIH8l5hwFmqD+LoxSDi8e/FzjiE230cQqo'
+    b'GJQwxi0x+coShvQgl7QxRpijiT+sMMQZ65AKqtiihQOW6OFXShOLmOIHexljDDHIXaQiYny/'
+    b'+vg93AExzxyNYgpTgwAAAABJRU5ErkJggg==')
+
+#----------------------------------------------------------------------
+connection_usb = PyEmbeddedImage(
+    b'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAnXAAAJ1wGxbhe3'
+    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAQZJREFUOI210k0rRVEU'
+    b'BuDn+iiSgcvEZzER5UZ+hamZv8BAGZCBoV9gaE5JMmJGKQZuilJKojA28G10Dfa5um3nnHTL'
+    b'O9rttda71rvexT9jFDtoqKe4B/f4xHpWUmMOwSBe0Y0yWjGNSZxmFbVgHrNoRgkXSewQG3hH'
+    b'Z7WgKSJYxXBC1IXdKF5CAZXqR7ycPhzhBANRbBlFrOApS8IIrnGJoUhCPx4EZ34QS7jCNl5w'
+    b'i3F04ABj2MJdHgE8Yw69eEQ71rCHr6zRa1FIOi8mUt4EK1ORdmEVnAtH1IYzwffiX7rXYhMz'
+    b'yXsfU2lJaTuo4hgLghsTyVS/kHfKZXwI9i3hJnfeevEN+D8u1kgi0SMAAAAASUVORK5CYII=')
+
+#----------------------------------------------------------------------
+connection_wifi = PyEmbeddedImage(
+    b'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAnXAAAJ1wGxbhe3'
+    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAJlJREFUOI3t0bEKwXEU'
+    b'xfGPKGVTbB7AKjyCycBmJrzCf+J9lGJgMtpt3sAiu9ngKumH7L7Tr3POvZ3ujz+5hFZCFx3U'
+    b'Qjthhy2uz+H8y/AAGzRxwB5HFDFGFsuOqTYZzuh9aNyPTJYyF6jHu4p5VN5ihkp49ci+pY0L'
+    b'VhhihHVorU+DD5aYJPRpeD/RcD/oWwpfFpSlv/rPEze37hjRQSs+hQAAAABJRU5ErkJggg==')
+

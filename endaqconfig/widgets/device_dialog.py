@@ -122,7 +122,7 @@ def populateBatteryColumn(dev: Recorder,
 
     try:
         batName, batDesc = battery_icons.batStat2name(dev.command.getBatteryStatus())
-        batIcon = root.batteryIcons.get(batName, 0)
+        batIcon = root.batteryIconIndices.get(batName, 0)
     except UnsupportedFeature:
         batIcon, batDesc = 0, ''
 
@@ -150,8 +150,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                                            'formatter',  # To-string function
                                            ])
 
-
     # The displayed columns
+    # TODO: Assemble lists of columns piecemeal based on arguments
     COLUMNS = (ColumnInfo("Path", partial(_attribFormatter, "path", "")),
                ColumnInfo("Name", partial(_attribFormatter, "name", "")),
                ColumnInfo("Type", partial(_attribFormatter, "productName", "")),
@@ -367,10 +367,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.Bind(wx.EVT_TIMER, self.TimerHandler, self.timer)
 
 
-    def Foo(self, evt):
-        print('t2 tick')
-
-
     def loadIcons(self) -> ULC.PyImageList:
         """ Load the list icons (warning indicators and battery level icons)
 
@@ -383,11 +379,20 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         for i in (wx.ART_INFORMATION, wx.ART_WARNING, wx.ART_ERROR):
             images.Add(wx.ArtProvider.GetBitmap(i, wx.ART_CMN_DIALOG, (16, 16)))
 
-        self.batteryIcons = {}
-        for i, (name, icon) in enumerate((item for item in battery_icons.__dict__.items()
-                                          if item[0].startswith('battery')), 4):
-            self.batteryIcons[name] = i
+        self.batteryIconIndices = {}
+        batImages = [item for item in battery_icons.__dict__.items()
+                     if item[0].startswith('battery')]
+
+        for i, (name, icon) in enumerate(batImages, images.GetImageCount()):
+            self.batteryIconIndices[name] = i
             images.Add(icon.GetBitmap())
+
+        self.ICON_CONNECTION_BT = images.GetImageCount()
+        images.Add(icons.connection_bt.GetBitmap())
+        self.ICON_CONNECTION_USB = images.GetImageCount()
+        images.Add(icons.connection_usb.GetBitmap())
+        self.ICON_CONNECTION_WIFI = images.GetImageCount()
+        images.Add(icons.connection_wifi.GetBitmap())
 
         return images
 
@@ -414,12 +419,34 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.updateButtonDisplay()
 
 
+    def getConnectionIcon(self, dev):
+        """ Get the index of the appropriate connection type icon.
+        """
+        # XXX: REMOVE - Test of different icons
+        # if dev.productName.startswith('W'):
+        #     return self.ICON_CONNECTION_WIFI
+
+        # This is a primitive mechanism based on the `ConfigInterface`
+        # subclass name. Also, all but USB are currently hypothetical.
+        configname = dev.config.__class__.__name__.lower()
+        if 'file' in configname or 'serial' in configname:
+            return self.ICON_CONNECTION_USB
+        elif 'wifi' in configname:
+            return self.ICON_CONNECTION_WIFI
+        elif any(n in configname for n in ('bluetooth', 'bt', 'ble')):
+            return self.ICON_CONNECTION_BT
+        else:
+            return self.ICON_NONE
+
+
     def setItemIcon(self, index, dev):
         """ Set the warning icon, message and tool tips for recorders with
             problems.
         """
         # TODO: Refactor this!
         tips = []
+
+        connectionIcon = self.ICON_NONE
 
         if self.batteryCol is not None:
             bat = self.itemDataMap[index][self.batteryCol]
@@ -438,7 +465,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         calExp = dev.getCalExpiration()
 
         if os.path.exists(dev.path):
-            freeSpace = os_specific.getFreeSpace(dev.path) / 1024 / 1024
+            freeSpace = os_specific.getFreeSpace(dev.path) / 1048576
             if freeSpace < SPACE_WARN_MB:
                 tip = f"This device is nearly full ({freeSpace:.2f} MB available)."
                 icon = self.ICON_INFO
@@ -466,8 +493,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.listMsgs[index] = None
             return
 
-        if icon > self.ICON_NONE:
-            self.list.SetItemImage(index, icon)
+        self.list.SetItemImage(index, [icon, self.getConnectionIcon(dev)])
 
         self.listToolTips[index] = '\n'.join(tips)
         self.listMsgs[index] = '\n'.join([f'\u2022 {s}' for s in tips])
