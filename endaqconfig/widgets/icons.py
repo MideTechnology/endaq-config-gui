@@ -362,6 +362,16 @@ connection_bt = PyEmbeddedImage(
     b'+vg93AExzxyNYgpTgwAAAABJRU5ErkJggg==')
 
 #----------------------------------------------------------------------
+connection_msd = PyEmbeddedImage(
+    b'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAnXAAAJ1wGxbhe3'
+    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAN5JREFUOI3F0rFKQ0EQ'
+    b'heFPYuU7mFYFfQBDEBKw0MpeC4O1tU+Ryk4bU5hatBKtFXtBkWCVJ4iIKAgWzr0sN7nJ7XJg'
+    b'4TCz52d2GeathQm1dayV3H/B8zTAHk7xWALYxDGuJjUXMUCzJCx6g7g7pg7upoQz3eOwWKzh'
+    b'DVsVAI10imyUA3xiN84sfWAfvQzQxjfOKoShFZkc8IUbvMcEXQwLoTpWwl9jOX3CD0bhl3CJ'
+    b'fgFwkfhRZHLAr/+PhFds46QAeEp8LTL5Iu3gHA+qqYEj3KabuIHVioCxlZ6f/gDThycMg2u2'
+    b'iAAAAABJRU5ErkJggg==')
+
+#----------------------------------------------------------------------
 connection_usb = PyEmbeddedImage(
     b'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAnXAAAJ1wGxbhe3'
     b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAQZJREFUOI210k0rRVEU'

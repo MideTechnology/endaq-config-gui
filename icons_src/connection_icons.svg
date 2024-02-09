@@ -49,9 +49,9 @@
      inkscape:snap-center="true"
      showguides="true"
      inkscape:guide-bbox="true"
-     inkscape:zoom="15.6875"
-     inkscape:cx="39.775027"
-     inkscape:cy="19.777817"
+     inkscape:zoom="11.092738"
+     inkscape:cx="31.696573"
+     inkscape:cy="18.594803"
      inkscape:window-x="204"
      inkscape:window-y="16"
      inkscape:window-maximized="0"
@@ -214,5 +214,37 @@
        height="24"
        x="0"
        y="24" />
+  </g>
+  <g
+     id="g942"
+     inkscape:export-xdpi="64"
+     inkscape:export-ydpi="64">
+    <rect
+       style="fill:#ffffff;fill-opacity:0;stroke:none;stroke-width:113.386;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       id="rect870"
+       width="24"
+       height="24"
+       x="0"
+       y="0" />
+    <g
+       id="g928">
+      <rect
+         style="fill:none;stroke:#000000;stroke-width:1.1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+         id="rect883"
+         width="2.8364453"
+         height="8.3100567"
+         x="14.060946"
+         y="-15.868841"
+         transform="rotate(90)" />
+      <path
+         d="M 6.0303538,5.7311271 2.8860364,12 v 5.459106 a 1.8227927,1.8197019 0 0 0 1.8227927,1.819701 H 19.291171 a 1.8227927,1.8197019 0 0 0 1.822792,-1.819701 V 12 L 17.969646,5.7311271 a 1.8227927,1.8197019 0 0 0 -1.6314,-1.0099345 H 7.6617533 A 1.8227927,1.8197019 0 0 0 6.0303538,5.7311271 Z"
+         id="path4"
+         style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round;stroke-opacity:1" />
+      <path
+         d="m 3.1119807,13.471711 c 0,-1.004993 0.8160925,-1.819702 1.8227927,-1.819702 H 19.065226 c 1.006701,0 1.822793,0.814709 1.822793,1.819702"
+         id="path915"
+         style="fill:none;fill-opacity:1;stroke:#000000;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+         sodipodi:nodetypes="cssc" />
+    </g>
   </g>
 </svg>

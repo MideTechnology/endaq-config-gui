@@ -84,7 +84,7 @@ def populateButtonColumn(dev: Recorder,
 
     def handler2(evt):
         # should probably also select row
-        print(f'handler 1 for {dev}')
+        print(f'handler 2 for {dev}')
 
     pan = wx.Panel(root.list, -1)
     pansize = wx.BoxSizer(wx.HORIZONTAL)
@@ -107,7 +107,7 @@ def populateBatteryColumn(dev: Recorder,
                           index: int,
                           column: int,
                           root: "DeviceSelectionDialog") -> str:
-    """ Add a column containing the battery status icon.
+    """ Add/update a column containing the battery status icon.
 
         :param dev: The device beind displayed.
         :param index: The list index (row).
@@ -126,6 +126,103 @@ def populateBatteryColumn(dev: Recorder,
 
     root.list.SetStringItem(index, column, '', batIcon)
     return batDesc
+
+
+def populateStatusColumn(dev: Recorder,
+                         index: int,
+                         column: int,
+                         root: "DeviceSelectionDialog") -> str:
+    """ Add/update a column displaying the device status.
+
+        :param dev: The device beind displayed.
+        :param index: The list index (row).
+        :param column: The index of the column being populated.
+        :param root: The parent window/dialog.
+        :return: A string for use in column sorting.
+    """
+    if column is None:
+        return ''
+
+    status = ""
+    code = 0
+
+    try:
+        dev.command.ping()
+        code, msg = dev.command.status
+        if code is not None:
+            status = str(code)
+            if '.' in status:
+                status = status.rpartition('.')[-1].title().replace('Err', 'Error')
+            if msg:
+                status = f"{status}: {msg}"
+    except UnsupportedFeature:
+        status = ""
+
+    # TODO: Icons? Can't (easily) set text/BG color of individual cells.
+    root.list.SetStringItem(index, column, status)
+    return code
+
+
+# ===========================================================================
+#
+# ===========================================================================
+
+class DeviceToolTip(wx.Frame):
+    """ Tool tip display of device info. """
+
+    MOUSE_OFFSET = wx.Point(16, 16)
+
+    def __init__(self,
+                 view):
+        """ Hovering display window, showing spectrogram value at the mouse
+            cursor position.
+
+            :param view: The parent view.
+        """
+        self.view = view
+
+        super().__init__(view, -1, style=wx.STAY_ON_TOP | wx.FRAME_NO_TASKBAR)
+        view.SetFocusIgnoringChildren()
+
+        outsizer = wx.BoxSizer(wx.VERTICAL)
+
+        # XXX: TODO: Do UI creation here
+
+        self.SetSizer(outsizer)
+        self.Fit()
+
+        self.timer = wx.Timer(self)
+
+        self.Bind(wx.EVT_MOTION, self.OnMouseMove)
+        self.Bind(wx.EVT_TMER, self.OnShowTimerTick, self.timer)
+
+
+    def updateValues(self):
+        """ Update the hovering display.
+
+        """
+        # XXX: TODO: Do updating here
+
+        # At the end:
+        self.view.SetFocusIgnoringChildren()
+
+
+    def OnMouseMove(self, evt):
+        evt.Skip()
+
+
+    def OnShowTimerTick(self, evt):
+        """ Handle the mouse motion timer expiring.
+        """
+        # XXX: TODO: Do updating here
+
+        if not self.IsShown():
+            self.Show()
+
+        self.SetPosition(wx.GetMousePosition() + self.MOUSE_OFFSET)
+
+        # At the end:
+        self.view.SetFocusIgnoringChildren()
 
 
 # ===========================================================================
@@ -148,46 +245,34 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                                            'formatter',  # To-string function
                                            ])
 
-    # The displayed columns
+    # The displayed columns. Each key/value is turned into `ColumnInfo`.
     # TODO: Assemble lists of columns piecemeal based on arguments
-    COLUMNS = (ColumnInfo("Path", partial(_attribFormatter, "path", "")),
-               ColumnInfo("Name", partial(_attribFormatter, "name", "")),
-               ColumnInfo("Type", partial(_attribFormatter, "productName", "")),
-               ColumnInfo("Serial #", partial(_attribFormatter, "serial", "")),
-               ColumnInfo("Bat.", populateBatteryColumn),
-               ColumnInfo("Device Control", populateButtonColumn)
-               )
+    COLUMNS = {
+        "Path": partial(_attribFormatter, "path", ""),
+        "Name": partial(_attribFormatter, "name", ""),
+        "Type": partial(_attribFormatter, "productName", ""),
+        "Serial #": partial(_attribFormatter, "serial", ""),
+        "Bat.": populateBatteryColumn,
+        "Device Control": populateButtonColumn
+    }
 
-    ADVANCED_COLUMNS = (
-        ColumnInfo("Path", partial(_attribFormatter, "path", "")),
-        ColumnInfo("Name", partial(_attribFormatter, "name", "")),
-        ColumnInfo("Type", partial(_attribFormatter, "productName", "")),
-        ColumnInfo("Serial #", partial(_attribFormatter, "serial", "")),
-        ColumnInfo("HW Rev.", partial(_attribFormatter, "hardwareVersion", '')),
-        ColumnInfo("FW Rev.", partial(_attribFormatter, "firmware", '')),
-        ColumnInfo("Bat.", populateBatteryColumn),
-        ColumnInfo("Device Control", populateButtonColumn)
-    )
+    ADVANCED_COLUMNS = {
+        "Path": partial(_attribFormatter, "path", ""),
+        "Name": partial(_attribFormatter, "name", ""),
+        "Type": partial(_attribFormatter, "productName", ""),
+        "Serial #": partial(_attribFormatter, "serial", ""),
+        "Status": populateStatusColumn,
+        "HW Rev.": partial(_attribFormatter, "hardwareVersion", ''),
+        "FW Rev.": partial(_attribFormatter, "firmware", ''),
+        "Bat.": populateBatteryColumn,
+        "Device Control": populateButtonColumn
+    }
 
     # Tool tips for the 'record' button
     RECORD_UNSELECTED = "No recorder selected"
     RECORD_UNSUPPORTED = "Device does not support recording via software"
     RECORD_ENABLED = "Initiate recording on the selected device"
 
-    # ==============================================================================
-    #
-    # ==============================================================================
-
-    class DeviceListCtrl(wx.ListCtrl, listmix.ListCtrlAutoWidthMixin):
-        # Required to create a sortable list
-
-        DEFAULT_STYLE = (wx.LC_REPORT | wx.BORDER_SUNKEN | wx.LC_SORT_ASCENDING
-                         | wx.LC_VRULES | wx.LC_HRULES | wx.LC_SINGLE_SEL)
-
-        def __init__(self, parent, ID, pos=wx.DefaultPosition,
-                     size=wx.DefaultSize, style=DEFAULT_STYLE):
-            wx.ListCtrl.__init__(self, parent, ID, pos, size, style)
-            listmix.ListCtrlAutoWidthMixin.__init__(self)
 
     # ==============================================================================
     #
@@ -196,6 +281,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
     def GetListCtrl(self):
         # Required by ColumnSorterMixin
+        # Is this still required in wxPython >= 4?
         return self.list
 
 
@@ -211,6 +297,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             :keyword showWarnings: If `False`, battery age and calibration
                 expiration warnings will not be shown for selected devices.
                 Default is `True`.
+            :keyword showConnection: If `True`, the connection type icon
+                (USB, Wi-Fi, Bluetooth) will be shown on the left side of
+                each devices' row.
             :keyword showAdvanced: If `True`, show additional columns of
                 information (hardware/firmware version, etc.). Default is
                 `False`.
@@ -242,6 +331,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.hideClock = kwargs.pop('hideClock', False)
         self.hideRecord = kwargs.pop('hideRecord', False)
         self.showWarnings = kwargs.pop('showWarnings', True)
+        self.showConnection = kwargs.pop('showConnection', True)
         self.showAdvanced = kwargs.pop('showAdvanced', False) or True
         self.filter = kwargs.pop('filter', lambda x: True)
         okText = kwargs.pop('okText', "Configure")
@@ -261,9 +351,23 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         # TODO: Better column collection (assemble piecemeal based on parameters)
         if self.showAdvanced:
-            self.columns = self.ADVANCED_COLUMNS
+            self.columns = [self.ColumnInfo(name, formatter)
+                            for name, formatter in self.ADVANCED_COLUMNS.items()]
         else:
-            self.columns = self.COLUMNS
+            self.columns = [self.ColumnInfo(name, formatter)
+                            for name, formatter in self.COLUMNS.items()]
+
+        self.batteryCol = None
+        self.buttonCol = None
+        self.statusCol = None
+
+        for i, col in enumerate(self.columns):
+            if col.formatter == populateBatteryColumn:
+                self.batteryCol = i
+            elif col.formatter == populateButtonColumn:
+                self.buttonCol = i
+            elif col.formatter == populateStatusColumn:
+                self.statusCol = i
 
         self.recorders = {}
         self.recorderPaths = tuple(getDeviceList())
@@ -272,22 +376,17 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.firstDrawing = True
         self.listWidth = 320
 
-        self.batteryCol = None
-        self.buttonCol = None
-
         pane = self.GetContentsPane()
         pane.SetSizerProps(expand=True)
 
         self.itemDataMap = {}  # required by ColumnSorterMixin
 
-        # self.list = self.DeviceListCtrl(pane, -1)
         self.list = ULC.UltimateListCtrl(pane, -1,
                                          agwStyle=(wx.LC_REPORT
                                                    # | wx.LC_NO_HEADER
                                                    | wx.BORDER_NONE
                                                    | wx.LC_HRULES
                                                    # | wx.LC_VRULES
-                                                   # | ULC.ULC_SHOW_TOOLTIPS
                                          ))
 
         self.list.AssignImageList(self.loadIcons(), wx.IMAGE_LIST_SMALL)
@@ -357,8 +456,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         # For doing per-item tool tips in the list
         self.lastToolTipItem = -1
-        # XXX: Removed (temporarily) - tooltips not working with UltimateListCtrl?
         # self.list.Bind(wx.EVT_MOTION, self.OnListMouseMotion)
+        # self.Bind(wx.EVT_LEAVE_WINDOW, self.OnExitWindow)
 
         self.timerCalls = 0
         self.timer = wx.Timer(self)
@@ -390,6 +489,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.ICON_CONNECTION_BT = images.GetImageCount()
         images.Add(icons.connection_bt.GetBitmap())
+        self.ICON_CONNECTION_MSD = images.GetImageCount()
+        images.Add(icons.connection_msd.GetBitmap())
         self.ICON_CONNECTION_USB = images.GetImageCount()
         images.Add(icons.connection_usb.GetBitmap())
         self.ICON_CONNECTION_WIFI = images.GetImageCount()
@@ -416,8 +517,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         # Update currently displayed devices less frequently. Adjust later?
         if self.timerCalls % 4 == 0:
-            self.updateBatteryDisplay()
-            self.updateButtonDisplay()
+            if self.batteryCol is not None:
+                self.updateBatteryDisplay()
+            if self.buttonCol is not None:
+                self.updateButtonDisplay()
+            if self.statusCol is not None:
+                self.updateStatusDisplay()
+
 
 
     def getConnectionIcon(self, dev):
@@ -430,6 +536,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # This is a primitive mechanism based on the `ConfigInterface`
         # subclass name. Also, all but USB are currently hypothetical.
         configname = dev.config.__class__.__name__.lower()
+        if dev.available:
+            return self.ICON_CONNECTION_MSD
         if 'file' in configname or 'serial' in configname:
             return self.ICON_CONNECTION_USB
         elif 'wifi' in configname:
@@ -492,7 +600,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.listMsgs[index] = None
             return
 
-        self.list.SetItemImage(index, [icon, self.getConnectionIcon(dev)])
+        if self.showConnection:
+            self.list.SetItemImage(index, [icon, self.getConnectionIcon(dev)])
+        else:
+            self.list.SetItemImage(index, [icon])
 
         self.listToolTips[index] = '\n'.join(tips)
         self.listMsgs[index] = '\n'.join([f'\u2022 {s}' for s in tips])
@@ -527,11 +638,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 self.itemDataMap[index] = [dev.path]
                 self.recorders[index] = dev
                 for i, col in enumerate(self.columns[1:], 1):
-                    if col.formatter == populateBatteryColumn:
-                        self.batteryCol = i
-                    elif col.formatter == populateButtonColumn:
-                        self.buttonCol = i
-
                     val = col.formatter(dev, index, i, self)  # populates item and returns data map value
                     self.itemDataMap[index].append('' if val is None else val)
                     self.list.SetColumnWidth(i, wx.LIST_AUTOSIZE)
@@ -555,7 +661,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if self.list.GetColumnWidth(i) < w + 8:
                 self.list.SetColumnWidth(i, w + 8)
 
-        self.listWidth = self.list.GetItemRect(index).width
+        if index:
+            self.listWidth = self.list.GetItemRect(index).width
 
         # if self.batteryCol is not None:
         #     self.list.SetColumnWidth(self.batteryCol, self.minWidths[self.batteryCol])
@@ -586,11 +693,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     def updateButtonDisplay(self):
-        if self.buttonCol is None:
-            return
-
         # TODO: Update buttons (validate, etc.)
         pass
+
+
+    def updateStatusDisplay(self):
+        for index, dev in self.recorders.items():
+            populateStatusColumn(dev, index, self.statusCol, self)
 
 
     def OnColClick(self, evt):
@@ -664,6 +773,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             else:
                 self.list.UnsetToolTip()
             self.lastToolTipItem = index
+        evt.Skip()
+
+
+    def OnExitWindow(self, evt):
+        """ Handle the mouse leaving the window. """
+        # self.hoverPanel.timer.Stop()
+        # self.hoverPanel.Hide()
         evt.Skip()
 
 
