@@ -37,6 +37,7 @@ SPACE_WARN_MB = SPACE_MIN_MB * 2
 CAL_WARN_DAYS = timedelta(days=120)
 DEV_WARN_DAYS = timedelta(days=182)
 
+
 # ===========================================================================
 # Column 'formatters.' They actually add the column to the list and return
 # the value for the list sorting.
@@ -168,61 +169,70 @@ def populateStatusColumn(dev: Recorder,
 # ===========================================================================
 
 class DeviceToolTip(wx.Frame):
-    """ Tool tip display of device info. """
+    """ Tooltip display for device info.
+        If ULC tooltips get fixed, this may be redundant and can be removed if so.
+    """
 
-    MOUSE_OFFSET = wx.Point(16, 16)
+    TOOLTIP_TIME = 900
+    MOUSE_OFFSET = wx.Point(0, 18)
 
     def __init__(self,
-                 view):
-        """ Hovering display window, showing spectrogram value at the mouse
-            cursor position.
+                 view: wx.Window):
+        """ Tooltip display for device info.
 
             :param view: The parent view.
         """
         self.view = view
+        self.text = None
+
+        # Note: color not quite right.
+        fgcolor = wx.SystemSettings.GetColour(wx.SYS_COLOUR_GRAYTEXT)
+        bgcolor = wx.SystemSettings.GetColour(wx.SYS_COLOUR_WINDOW)
 
         super().__init__(view, -1, style=wx.STAY_ON_TOP | wx.FRAME_NO_TASKBAR)
-        view.SetFocusIgnoringChildren()
 
-        outsizer = wx.BoxSizer(wx.VERTICAL)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        self.textWidget = wx.StaticText(self, -1, "", size=(64,32))
+        sizer.Add(self.textWidget, 1, wx.EXPAND | wx.ALL, 4)
 
-        # XXX: TODO: Do UI creation here
+        self.textWidget.SetForegroundColour(fgcolor)
+        self.SetBackgroundColour(bgcolor)
 
-        self.SetSizer(outsizer)
+        self.SetSizer(sizer)
         self.Fit()
 
         self.timer = wx.Timer(self)
 
         self.Bind(wx.EVT_MOTION, self.OnMouseMove)
-        self.Bind(wx.EVT_TMER, self.OnShowTimerTick, self.timer)
+        self.Bind(wx.EVT_TIMER, self.OnShowTimerTick, self.timer)
 
 
-    def updateValues(self):
+    def setText(self, text: Optional[str]):
         """ Update the hovering display.
-
         """
-        # XXX: TODO: Do updating here
-
-        # At the end:
-        self.view.SetFocusIgnoringChildren()
+        if text and text != self.text:
+            self.text = text
+            w = h = 0
+            for line in text.split('\n'):
+                lw, lh = self.GetTextExtent(line)
+                w = max(w, lw)
+                h += lh
+            self.SetSize((w+10, h+10))
+            self.textWidget.SetLabel(text)
 
 
     def OnMouseMove(self, evt):
+        if self.IsShown():
+            self.Hide()
         evt.Skip()
 
 
     def OnShowTimerTick(self, evt):
         """ Handle the mouse motion timer expiring.
         """
-        # XXX: TODO: Do updating here
-
         if not self.IsShown():
+            self.SetPosition(wx.GetMousePosition() + self.MOUSE_OFFSET)
             self.Show()
-
-        self.SetPosition(wx.GetMousePosition() + self.MOUSE_OFFSET)
-
-        # At the end:
-        self.view.SetFocusIgnoringChildren()
 
 
 # ===========================================================================
@@ -456,12 +466,15 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         # For doing per-item tool tips in the list
         self.lastToolTipItem = -1
-        # self.list.Bind(wx.EVT_MOTION, self.OnListMouseMotion)
-        # self.Bind(wx.EVT_LEAVE_WINDOW, self.OnExitWindow)
+        self.list.Bind(wx.EVT_MOTION, self.OnListMouseMotion)
+        self.list.Bind(wx.EVT_LEAVE_WINDOW, self.OnExitWindow)
 
-        self.timerCalls = 0
-        self.timer = wx.Timer(self)
-        self.Bind(wx.EVT_TIMER, self.TimerHandler, self.timer)
+        # Manual tool tip generation (ULC tooltips seem broken)
+        self.tooltipFrame = DeviceToolTip(self)
+
+        self.updateTimerCalls = 0
+        self.updateTimer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.UpdateTimerHandler, self.updateTimer)
 
 
     def loadIcons(self) -> ULC.PyImageList:
@@ -499,10 +512,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         return images
 
 
-    def TimerHandler(self, _evt=None):
+    def UpdateTimerHandler(self, _evt=None):
         """ Handle timer 'tick' by refreshing device list.
         """
-        self.timerCalls += 1
+        self.updateTimerCalls += 1
 
         if deviceChanged(recordersOnly=False):
             self.SetCursor(wx.Cursor(wx.CURSOR_ARROWWAIT))
@@ -516,14 +529,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             return
 
         # Update currently displayed devices less frequently. Adjust later?
-        if self.timerCalls % 4 == 0:
+        if self.updateTimerCalls % 4 == 0:
             if self.batteryCol is not None:
                 self.updateBatteryDisplay()
             if self.buttonCol is not None:
                 self.updateButtonDisplay()
             if self.statusCol is not None:
                 self.updateStatusDisplay()
-
 
 
     def getConnectionIcon(self, dev):
@@ -757,29 +769,34 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             This determines the list item under the mouse and shows the
             appropriate tool tip, if any
         """
-        # XXX: TEST - Also, this probably isn't needed if tooltips aren't working.
-        evt.Skip()
-        return
+        # Part of workaround for broken ULC tooltips. It can probably be removed
+        # if/when ULC tooltips get fixed.
+        self.tooltipFrame.timer.Stop()
+        self.tooltipFrame.Hide()
 
         if not self.recorders:
             evt.Skip()
             return
 
         index, _ = self.list.HitTest(evt.GetPosition())
-        if index != -1 and index != self.lastToolTipItem:
-            item = self.list.GetItemData(index)
-            if self.listToolTips[item] is not None:
-                self.list.SetToolTip(self.listToolTips[item])
-            else:
-                self.list.UnsetToolTip()
-            self.lastToolTipItem = index
+        if index != -1:
+            if index != self.lastToolTipItem:
+                item = self.list.GetItemData(index)
+                text = self.listToolTips[item]
+
+                # Everything here on is part of ULC tooltip workaround.
+                self.tooltipFrame.setText(text)
+                self.lastToolTipItem = index
+            if not self.tooltipFrame.IsShown():
+                self.tooltipFrame.timer.StartOnce(self.tooltipFrame.TOOLTIP_TIME)
+
         evt.Skip()
 
 
     def OnExitWindow(self, evt):
         """ Handle the mouse leaving the window. """
-        # self.hoverPanel.timer.Stop()
-        # self.hoverPanel.Hide()
+        self.tooltipFrame.timer.Stop()
+        self.tooltipFrame.Hide()
         evt.Skip()
 
 
@@ -788,9 +805,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         if evt.IsShown():
             if self.autoUpdate:
-                self.timer.Start(self.autoUpdate)
+                self.updateTimer.Start(self.autoUpdate)
         else:
-            self.timer.Stop()
+            self.updateTimer.Stop()
         evt.Skip()
         
 
@@ -803,8 +820,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         for b in butts:
             b.Enable(False)
 
-        timerRunning = self.timer.IsRunning()
-        self.timer.Stop()
+        timerRunning = self.updateTimer.IsRunning()
+        self.updateTimer.Stop()
 
         for rec in self.recorders.values():
             try:
@@ -832,7 +849,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                           style=wx.OK | wx.ICON_ERROR)
 
         if timerRunning:
-            self.timer.Start(self.autoUpdate)
+            self.updateTimer.Start(self.autoUpdate)
 
         self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
 
@@ -840,8 +857,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def startRecording(self, _evt=None):
         """ Initiate a recording.
         """
-        timerRunning = self.timer.IsRunning()
-        self.timer.Stop()
+        timerRunning = self.updateTimer.IsRunning()
+        self.updateTimer.Stop()
 
         try:
             recorder = self.recorders.get(self.selected, None)
@@ -849,7 +866,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 recorder.startRecording()
         finally:
             if timerRunning:
-                self.timer.Start(self.autoUpdate)
+                self.updateTimer.Start(self.autoUpdate)
 
 
 # ===========================================================================
