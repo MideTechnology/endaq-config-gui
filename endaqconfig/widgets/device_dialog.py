@@ -87,19 +87,18 @@ def populateButtonColumn(dev: Recorder,
         # should probably also select row
         print(f'handler 2 for {dev}')
 
-    pan = wx.Panel(root.list, -1)
-    pansize = wx.BoxSizer(wx.HORIZONTAL)
-    pan.SetSizer(pansize)
-    b = wx.Button(pan, -1, "button1", size=(-1, 16))
-    b2 = wx.Button(pan, -1, "button2", size=(-1, 16))
-    pansize.Add(b, 1, wx.EXPAND)
-    pansize.Add(b2, 1, wx.EXPAND)
-    pansize.Fit(pan)
-    root.list.SetItemWindow(index, column, pan, expand=True)
-    root.minWidths[root.buttonCol] = pan.GetSize()[0]
 
-    b.Bind(wx.EVT_BUTTON, handler1)
-    b2.Bind(wx.EVT_BUTTON, handler2)
+    if dev.canRecord:
+        pan = wx.Panel(root.list, -1)
+        pansize = wx.BoxSizer(wx.HORIZONTAL)
+        pan.SetSizer(pansize)
+        b = wx.Button(pan, -1, "Start Recording", size=(-1, 22))
+        pansize.Add(b, 1, wx.EXPAND)
+        pansize.Fit(pan)
+        root.list.SetItemWindow(index, column, pan, expand=True)
+        root.minWidths[root.buttonCol] = pan.GetSize()[0]
+
+        b.Bind(wx.EVT_BUTTON, handler1)
 
     return ""
 
@@ -210,7 +209,11 @@ class DeviceToolTip(wx.Frame):
     def setText(self, text: Optional[str]):
         """ Update the hovering display.
         """
-        if text and text != self.text:
+        if not text:
+            self.timer.Stop()
+            return
+
+        if text != self.text:
             self.text = text
             w = h = 0
             for line in text.split('\n'):
@@ -326,6 +329,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             :keyword icon: A `wx.Icon` for the dialog (for platforms that
                 support title bar icons). `None` (default) will use the
                 package default. `False` will show no icon.
+            :keyword tooltips: If `True` (default), show list tooltips
+                containing all important device infomation.
+            :keyword checks: If `True`, show checkboxes for each device.
         """
         # Clear cached devices
         RECORDERS.clear()
@@ -344,10 +350,12 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.showConnection = kwargs.pop('showConnection', True)
         self.showAdvanced = kwargs.pop('showAdvanced', False) or True
         self.filter = kwargs.pop('filter', lambda x: True)
+        self.checks = kwargs.pop('checks', False)
         okText = kwargs.pop('okText', "Configure")
         okHelp = kwargs.pop('okHelp', 'Configure the selected device')
         cancelText = kwargs.pop('cancelText', "Close")
         icon = kwargs.pop('icon', None)
+        tooltips = kwargs.pop('tooltips', True)
         kwargs.setdefault('style', style)
 
         # Not currently used, but consistent with the main dialog.
@@ -396,6 +404,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                                                    # | wx.LC_NO_HEADER
                                                    | wx.BORDER_NONE
                                                    | wx.LC_HRULES
+                                                   | wx.LC_SINGLE_SEL
+                                                   | ULC.ULC_NO_ITEM_DRAG
                                                    # | wx.LC_VRULES
                                          ))
 
@@ -470,7 +480,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.list.Bind(wx.EVT_LEAVE_WINDOW, self.OnExitWindow)
 
         # Manual tool tip generation (ULC tooltips seem broken)
-        self.tooltipFrame = DeviceToolTip(self)
+        self.tooltipFrame = DeviceToolTip(self) if tooltips else None
 
         self.updateTimerCalls = 0
         self.updateTimer = wx.Timer(self)
@@ -639,14 +649,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.minWidths[self.batteryCol] = 40
 
         # This is to provide tool tips for individual list rows
-        # XXX: Tooltips not working, but maybe use for display when clicked?
         self.listMsgs = [None] * len(self.recorderPaths)
         self.listToolTips = [None] * len(self.recorderPaths)
 
         index = None
         for idx, dev in enumerate(filter(self.filter, getDevices())):
             try:
-                index = self.list.InsertImageStringItem(idx, dev.path, [0])
+                index = self.list.InsertImageStringItem(idx, dev.path, [0], int(self.checks))
                 self.itemDataMap[index] = [dev.path]
                 self.recorders[index] = dev
                 for i, col in enumerate(self.columns[1:], 1):
@@ -769,17 +778,17 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             This determines the list item under the mouse and shows the
             appropriate tool tip, if any
         """
+        if not self.recorders or not self.tooltipFrame:
+            evt.Skip()
+            return
+
         # Part of workaround for broken ULC tooltips. It can probably be removed
         # if/when ULC tooltips get fixed.
         self.tooltipFrame.timer.Stop()
         self.tooltipFrame.Hide()
 
-        if not self.recorders:
-            evt.Skip()
-            return
-
         index, _ = self.list.HitTest(evt.GetPosition())
-        if index != -1:
+        if index != wx.NOT_FOUND:
             if index != self.lastToolTipItem:
                 item = self.list.GetItemData(index)
                 text = self.listToolTips[item]
@@ -795,8 +804,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
     def OnExitWindow(self, evt):
         """ Handle the mouse leaving the window. """
-        self.tooltipFrame.timer.Stop()
-        self.tooltipFrame.Hide()
+        if self.tooltipFrame:
+            self.tooltipFrame.timer.Stop()
+            self.tooltipFrame.Hide()
         evt.Skip()
 
 
@@ -808,6 +818,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 self.updateTimer.Start(self.autoUpdate)
         else:
             self.updateTimer.Stop()
+            if self.tooltipFrame:
+                self.tooltipFrame.timer.Stop()
+                self.tooltipFrame.Hide()
         evt.Skip()
         
 
@@ -906,6 +919,8 @@ def selectDevice(title: str = "Select Recorder",
         :keyword icon: A `wx.Icon` for the dialog (for platforms that support
             title bar icons). `None` (default) will use the package default.
             `False` will show no icon.
+        :keyword tooltips: If `True` (default), show list tooltips containing
+            all important device infomation.
         :return: The path of the selected device.
     """
     result = None
