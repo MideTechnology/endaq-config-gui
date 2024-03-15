@@ -392,7 +392,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.selected = None
         self.selectedIdx = None
         self.firstDrawing = True
-        self.listWidth = 320
+        self.listWidth = 0
 
         pane = self.GetContentsPane()
         pane.SetSizerProps(expand=True)
@@ -445,6 +445,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # Call deviceChanged() to set the initial state. Result ignored.
         deviceChanged(recordersOnly=False, clear=True)
         self.populateList()
+        self.list.Fit()
+
         listmix.ColumnSorterMixin.__init__(self, len(self.columns))
 
         self.Fit()
@@ -679,18 +681,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                     self.list.DeleteItem(index)
 
         for i, w in enumerate(self.minWidths):
-            if self.list.GetColumnWidth(i) < w + 8:
-                self.list.SetColumnWidth(i, w + 8)
-
-        if index:
-            self.listWidth = self.list.GetItemRect(index).width
+            w = w + 8
+            if self.list.GetColumnWidth(i) < w:
+                self.list.SetColumnWidth(i, w)
+            self.listWidth += self.list.GetColumnWidth(i)
 
         # if self.batteryCol is not None:
         #     self.list.SetColumnWidth(self.batteryCol, self.minWidths[self.batteryCol])
-
-        if self.firstDrawing:
-            self.list.Fit()
-            self.firstDrawing = False
 
         if not self.recorders or not self.selected:
             self.OnItemDeselected(None)
