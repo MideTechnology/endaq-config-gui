@@ -152,7 +152,7 @@ class ConfigDialog(SC.SizedDialog):
         SC.SizedPanel(check_box_sizer, -1).SetSizerProps(proportion=1)  # Spacer
 
         if self.device.hasWifi:
-            self.applyWifiChangesCheck = wx.CheckBox(check_box_sizer, -1, "Apply WiFi changes on exit")
+            self.applyWifiChangesCheck = wx.CheckBox(check_box_sizer, -1, "Apply Wi-Fi changes on exit")
             self.applyWifiChangesCheck.SetSizerProps(halign='right', expand=True, border=(['top', 'bottom'], 8))
             # self.applyWifiChangesCheck.SetValue(True)
         else:
