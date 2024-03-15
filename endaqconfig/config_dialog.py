@@ -85,12 +85,12 @@ class ConfigDialog(SC.SizedDialog):
         """
         self.schema = loadSchema('mide_config_ui.xml')
 
-        self.setTime = kwargs.pop('setTime', True)
-        self.device = kwargs.pop('device', None)
-        self.saveOnOk = kwargs.pop('saveOnOk', True)
-        self.useUtc = kwargs.pop('useUtc', True)
-        self.showAdvanced = kwargs.pop('showAdvanced', False)
-        self.DEBUG = kwargs.pop('debug', __DEBUG__)
+        self.setTime: bool = kwargs.pop('setTime', True)
+        self.device: Optional[endaq.device.Recorder] = kwargs.pop('device', None)
+        self.saveOnOk: bool = kwargs.pop('saveOnOk', True)
+        self.useUtc: bool = kwargs.pop('useUtc', True)
+        self.showAdvanced: bool = kwargs.pop('showAdvanced', False)
+        self.DEBUG: bool = kwargs.pop('debug', __DEBUG__)
         icon = kwargs.pop('icon', None)
 
         self.postConfigMessage = None
@@ -146,17 +146,15 @@ class ConfigDialog(SC.SizedDialog):
         check_box_sizer.SetSizerType("horizontal")
         check_box_sizer.SetSizerProps(expand=True)
 
-        # Restore the following if/when import and export are fixed.
         self.setClockCheck = wx.CheckBox(check_box_sizer, -1, "Set device clock on exit")
         self.setClockCheck.SetSizerProps(expand=True, border=(['top', 'bottom'], 8))
 
         SC.SizedPanel(check_box_sizer, -1).SetSizerProps(proportion=1)  # Spacer
 
-        if self.device.__class__.__name__ == 'EndaqW':
+        if self.device.hasWifi:
             self.applyWifiChangesCheck = wx.CheckBox(check_box_sizer, -1, "Apply WiFi changes on exit")
             self.applyWifiChangesCheck.SetSizerProps(halign='right', expand=True, border=(['top', 'bottom'], 8))
-
-            self.applyWifiChangesCheck.SetValue(True)
+            # self.applyWifiChangesCheck.SetValue(True)
         else:
             self.applyWifiChangesCheck = None
 
@@ -164,7 +162,6 @@ class ConfigDialog(SC.SizedDialog):
         buttonpane.SetSizerType("horizontal")
         buttonpane.SetSizerProps(expand=True)  # , border=(['top'], 8))
 
-        # Restore the following if/when import and export are fixed.
         self.importBtn = wx.Button(buttonpane, -1, "Import...")
         self.exportBtn = wx.Button(buttonpane, -1, "Export...")
 
@@ -178,12 +175,6 @@ class ConfigDialog(SC.SizedDialog):
 
         self.exportBtn.SetToolTip(exportTT)
         self.importBtn.SetToolTip(importTT)
-
-        # Remove the following if/when import and export are fixed.
-        # This puts the 'set clock' checkbox in line with the OK/Cancel
-        # buttons, where Import/Export used to be.
-        #         self.setClockCheck = wx.CheckBox(buttonpane, -1, "Set device clock on exit")
-        #         self.setClockCheck.SetSizerProps(expand=True, border=(['top', 'bottom'], 8))
 
         SC.SizedPanel(buttonpane, -1).SetSizerProps(proportion=1)  # Spacer
         wx.Button(buttonpane, wx.ID_OK)
@@ -210,8 +201,6 @@ class ConfigDialog(SC.SizedDialog):
     def buildUI(self):
         """ Construct and populate the UI based on the ConfigUI element.
         """
-        rootEl = []
-
         try:
             rootEl = self.hints[0]
         except IndexError:
@@ -587,6 +576,7 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
         :param exceptions: If `True`, allow all exceptions to be raised. If
             `False`, show descriptive message boxes when anticipated errors
              occur, intended for standalong use.
+        :param debug: If `True`, show/log debugging messages.
         :return: `None` if configuration was cancelled, else a tuple
             containing:
                 * The data written to the recorder (a nested dictionary)
