@@ -138,7 +138,7 @@ class ContinousNetworkStatusChecker(threading.Thread):
                 if bool(self.parent):
                     wx.PostEvent(self.parent, evt)
 
-            except DeviceTimeout as E:
+            except DeviceTimeout:
                 logger.warning("Timed out when checking the network connection, retrying")
 
             except DeviceError as E:
@@ -291,15 +291,12 @@ class WiFiSelectionTab(Tab):
             integrated with the rest of the tabs.
         """
         self.info = []
-
+        self.parent = kwargs['root']
         self.device = kwargs['root'].device
 
         super(WiFiSelectionTab, self).__init__(*args, **kwargs)
 
-        self.parent = kwargs['root']
-
         self.networkStatusThread = ContinousNetworkStatusChecker(self)
-
         self.networkStatusThread.start()
 
 
@@ -324,7 +321,7 @@ class WiFiSelectionTab(Tab):
         self.list = self.WifiListCtrl(self, -1,
                                       style=(wx.LC_REPORT | wx.BORDER_SUNKEN | wx.LC_SORT_ASCENDING |
                                              wx.LC_VRULES | wx.LC_HRULES | wx.LC_SINGLE_SEL))
-
+        # self.list.EnableCheckBoxes()
         sizer.Add(self.list, 1, wx.EXPAND | wx.ALL, 8)
 
         self.list.setResizeColumn(0)
@@ -338,7 +335,6 @@ class WiFiSelectionTab(Tab):
         self.list.SetColumnWidth(0, wx.LIST_AUTOSIZE)
 
         self.list.InsertColumn(1, self.COLUMNS[1], width=wx.LIST_AUTOSIZE)
-
         self.list.InsertColumn(2, self.COLUMNS[2], width=wx.LIST_AUTOSIZE)
 
         self.listFont = self.list.GetFont()
@@ -368,7 +364,7 @@ class WiFiSelectionTab(Tab):
         self.pwField.Enable(False)
 
         pwstyle = wx.RESERVE_SPACE_EVEN_IF_HIDDEN
-        pwsizer.AddMany(((self.pwCheck, 0, pwstyle),
+        pwsizer.AddMany(((self.pwCheck, 0, pwstyle | wx.ALIGN_CENTER_VERTICAL),
                          (self.pwField, 1, pwstyle | wx.EXPAND)))
         sizer.Add(pwsizer, 0, wx.EXPAND | wx.ALL, 8)
 
@@ -588,7 +584,7 @@ class WiFiSelectionTab(Tab):
         enable = False
 
         # Check for changes of selected AP
-        if self.firstSelected == -1 or self.selected != self.firstSelected:
+        if self.selected != self.firstSelected:
             enable = True
         elif self.info[self.firstSelected]['SSID'] in self.passwords:
             enable = True
