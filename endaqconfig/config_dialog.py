@@ -34,7 +34,7 @@ import wx.lib.sized_controls as SC
 
 from ebmlite import loadSchema
 import endaq.device
-from endaq.device import configio
+from endaq.device import Recorder, configio
 
 from .base import logger
 from . import base
@@ -85,12 +85,12 @@ class ConfigDialog(SC.SizedDialog):
         """
         self.schema = loadSchema('mide_config_ui.xml')
 
-        self.setTime = kwargs.pop('setTime', True)
-        self.device = kwargs.pop('device', None)
-        self.saveOnOk = kwargs.pop('saveOnOk', True)
-        self.useUtc = kwargs.pop('useUtc', True)
-        self.showAdvanced = kwargs.pop('showAdvanced', False)
-        self.DEBUG = kwargs.pop('debug', __DEBUG__)
+        self.setTime: bool = kwargs.pop('setTime', True)
+        self.device: Optional[Recorder] = kwargs.pop('device', None)
+        self.saveOnOk: bool = kwargs.pop('saveOnOk', True)
+        self.useUtc: bool = kwargs.pop('useUtc', True)
+        self.showAdvanced: bool = kwargs.pop('showAdvanced', False)
+        self.DEBUG: bool = kwargs.pop('debug', __DEBUG__)
         icon = kwargs.pop('icon', None)
 
         self.postConfigMessage = None

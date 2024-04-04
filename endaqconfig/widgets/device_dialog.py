@@ -1,5 +1,5 @@
 """
-Dialog for selecting recording devices.
+Dialog for selecting and/or controlling recording devices.
 
 """
 
@@ -19,21 +19,28 @@ from endaq.device import Recorder, getDevices, getDeviceList, RECORDERS
 from endaq.device import deviceChanged, UnsupportedFeature
 from endaq.device.base import os_specific
 
+from .shared import DeviceToolTip
 from . import icons
 from . import battery_icons
+# from .controls import ControlButtons
 
 logger = logging.getLogger('endaqconfig')
+
+# XXX: For testing, remove
+from itertools import cycle
+GUI_DEMO = True
 
 # ===========================================================================
 # Threshold values for showing warning or error icons
 # ===========================================================================
 
 # Thresholds for showing device low free space messages, severe and moderate
-SPACE_MIN_MB = 4
-SPACE_WARN_MB = SPACE_MIN_MB * 2
+SPACE_MIN_MB = 16
+SPACE_WARN_MB = SPACE_MIN_MB * 4
 
-# Thresholds for showing warning when device and calibration getting old,
-# moderate. Severe is always less than 0 days.
+# Thresholds for showing moderate warnings when device and calibration are
+# approaching their expiration dates. If 0 or fewer days remain, a severe
+# warning is displayed.
 CAL_WARN_DAYS = timedelta(days=120)
 DEV_WARN_DAYS = timedelta(days=182)
 
@@ -79,26 +86,41 @@ def populateButtonColumn(dev: Recorder,
     """
     # XXX: TEST: Proof of concept! replace later!
 
-    def handler1(evt):
+    def handler1(_evt):
         # should probably also select row
         print(f'handler 1 for {dev}')
 
-    def handler2(evt):
+        # Test: add checks to all rows
+        for i in range(root.list.GetItemCount()):
+            root.list.SetItemKind(root.list.GetItem(i), 0, 1)
+
+    def handler2(_evt):
         # should probably also select row
         print(f'handler 2 for {dev}')
 
+        # Test: remove checks from all rows
+        for i in range(root.list.GetItemCount()):
+            root.list.SetItemKind(root.list.GetItem(i), 0, 0)
 
-    if dev.canRecord:
-        pan = wx.Panel(root.list, -1)
-        pansize = wx.BoxSizer(wx.HORIZONTAL)
-        pan.SetSizer(pansize)
-        b = wx.Button(pan, -1, "Start Recording", size=(-1, 22))
-        pansize.Add(b, 1, wx.EXPAND)
-        pansize.Fit(pan)
-        root.list.SetItemWindow(index, column, pan, expand=True)
-        root.minWidths[root.buttonCol] = pan.GetSize()[0]
+    # pan = ControlButtons(root.list, dev)
+    pan = wx.Panel(root.list, -1)
+    pansize = wx.BoxSizer(wx.HORIZONTAL)
+    pan.SetSizer(pansize)
 
-        b.Bind(wx.EVT_BUTTON, handler1)
+    pan.recBth = wx.Button(pan, -1, "Start Recording", size=(-1, 22))
+    pan.recBth.Bind(wx.EVT_BUTTON, handler1)
+    pansize.Add(pan.recBth, 1, wx.EXPAND)
+
+    pan.confBtn = wx.Button(pan, -1, "Configure", size=(-1, 22))
+    pansize.Add(pan.confBtn, 1, wx.EXPAND)
+    pan.confBtn.Bind(wx.EVT_BUTTON, handler2)
+
+    pansize.Fit(pan)
+    root.list.SetItemWindow(index, column, pan, expand=True)
+    root.minWidths[root.buttonCol] = pan.GetSize()[0]
+
+    pan.recBth.Enable(dev.canRecord)
+    pan.confBtn.Enable(dev.hasConfigInterface and dev.config.available)
 
     return ""
 
@@ -119,6 +141,7 @@ def populateBatteryColumn(dev: Recorder,
         return ''
 
     try:
+        # TODO: Don't call getBatteryState() here; call elsewhere and cache response
         batName, batDesc = battery_icons.batStat2name(dev.command.getBatteryStatus())
         batIcon = root.batteryIconIndices.get(batName, 0)
     except UnsupportedFeature:
@@ -147,6 +170,7 @@ def populateStatusColumn(dev: Recorder,
     code = 0
 
     try:
+        # TODO: Use status in cached getBatteryState() response
         dev.command.ping()
         code, msg = dev.command.status
         if code is not None:
@@ -158,84 +182,26 @@ def populateStatusColumn(dev: Recorder,
     except UnsupportedFeature:
         status = ""
 
-    # TODO: Icons? Can't (easily) set text/BG color of individual cells.
     root.list.SetStringItem(index, column, status)
+
+    # XXX: Test.
+    #  TODO: Move to whatever updates the display.
+    if code:
+        # Find specific color, or round to lowest multiple of 10
+        code = code if code in root.STATUS_COLORS else code // 10
+        color = root.STATUS_COLORS.get(code, None)
+        if not color and code < 0:
+            color = root.STATUS_COLORS.get(-10)
+
+        if color:
+            font = root.list.GetFont()
+            item = root.list.GetItem(index, column)
+            item.SetMask(ULC.ULC_MASK_FONTCOLOUR|ULC.ULC_MASK_FONT)
+            item.SetTextColour(wx.BLUE)
+            item.SetFont(font)
+            root.list.SetItem(item)
+
     return code
-
-
-# ===========================================================================
-#
-# ===========================================================================
-
-class DeviceToolTip(wx.Frame):
-    """ Tooltip display for device info.
-        If ULC tooltips get fixed, this may be redundant and can be removed if so.
-    """
-
-    TOOLTIP_TIME = 900
-    MOUSE_OFFSET = wx.Point(0, 18)
-
-    def __init__(self,
-                 view: wx.Window):
-        """ Tooltip display for device info.
-
-            :param view: The parent view.
-        """
-        self.view = view
-        self.text = None
-
-        # Note: color not quite right.
-        fgcolor = wx.SystemSettings.GetColour(wx.SYS_COLOUR_GRAYTEXT)
-        bgcolor = wx.SystemSettings.GetColour(wx.SYS_COLOUR_WINDOW)
-
-        super().__init__(view, -1, style=wx.STAY_ON_TOP | wx.FRAME_NO_TASKBAR)
-
-        sizer = wx.BoxSizer(wx.VERTICAL)
-        self.textWidget = wx.StaticText(self, -1, "", size=(64,32))
-        sizer.Add(self.textWidget, 1, wx.EXPAND | wx.ALL, 4)
-
-        self.textWidget.SetForegroundColour(fgcolor)
-        self.SetBackgroundColour(bgcolor)
-
-        self.SetSizer(sizer)
-        self.Fit()
-
-        self.timer = wx.Timer(self)
-
-        self.Bind(wx.EVT_MOTION, self.OnMouseMove)
-        self.Bind(wx.EVT_TIMER, self.OnShowTimerTick, self.timer)
-
-
-    def setText(self, text: Optional[str]):
-        """ Update the hovering display.
-        """
-        if not text:
-            self.timer.Stop()
-            return
-
-        if text != self.text:
-            self.text = text
-            w = h = 0
-            for line in text.split('\n'):
-                lw, lh = self.GetTextExtent(line)
-                w = max(w, lw)
-                h += lh
-            self.SetSize((w+10, h+10))
-            self.textWidget.SetLabel(text)
-
-
-    def OnMouseMove(self, evt):
-        if self.IsShown():
-            self.Hide()
-        evt.Skip()
-
-
-    def OnShowTimerTick(self, evt):
-        """ Handle the mouse motion timer expiring.
-        """
-        if not self.IsShown():
-            self.SetPosition(wx.GetMousePosition() + self.MOUSE_OFFSET)
-            self.Show()
 
 
 # ===========================================================================
@@ -275,16 +241,29 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         "Type": partial(_attribFormatter, "productName", ""),
         "Serial #": partial(_attribFormatter, "serial", ""),
         "Status": populateStatusColumn,
-        "HW Rev.": partial(_attribFormatter, "hardwareVersion", ''),
-        "FW Rev.": partial(_attribFormatter, "firmware", ''),
+        # "HW Rev.": partial(_attribFormatter, "hardwareVersion", ''),
+        # "FW Rev.": partial(_attribFormatter, "firmware", ''),
         "Bat.": populateBatteryColumn,
-        "Device Control": populateButtonColumn
+        "Device Control": populateButtonColumn,
+        # "Configuration": populateConfigColumn,
     }
 
     # Tool tips for the 'record' button
     RECORD_UNSELECTED = "No recorder selected"
     RECORD_UNSUPPORTED = "Device does not support recording via software"
     RECORD_ENABLED = "Initiate recording on the selected device"
+
+    # Text colors for the Status column
+    STATUS_COLORS = {
+        0: None,  # Idle
+        10: wx.BLUE,  # Recording
+        20: wx.YELLOW,  # Reset pending
+        30: wx.YELLOW,  # Start Pending
+        40: wx.YELLOW,  # Triggering
+        50: wx.Colour(200, 200, 200),  # Sleeping
+        -10: wx.RED  # Error
+    }
+
 
 
     # ==============================================================================
@@ -521,6 +500,15 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.ICON_CONNECTION_WIFI = images.GetImageCount()
         images.Add(icons.connection_wifi.GetBitmap())
 
+        # XXX: TEST - DELETE!
+        self.iconcycle = cycle((self.ICON_CONNECTION_MSD,
+                                self.ICON_CONNECTION_USB,
+                                self.ICON_CONNECTION_WIFI))
+        self.statuscycle = cycle((self.ICON_NONE,
+                                  self.ICON_INFO,
+                                  self.ICON_WARN,
+                                  self.ICON_ERROR))
+
         return images
 
 
@@ -556,6 +544,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # XXX: REMOVE - Test of different icons
         # if dev.productName.startswith('W'):
         #     return self.ICON_CONNECTION_WIFI
+
+        if GUI_DEMO:
+            return next(self.iconcycle)
 
         # This is a primitive mechanism based on the `ConfigInterface`
         # subclass name. Also, all but USB are currently hypothetical.
@@ -623,6 +614,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.listToolTips[index] = None
             self.listMsgs[index] = None
             return
+
+        # XXX: REMOVE
+        if GUI_DEMO:
+            icon = next(self.statuscycle)
 
         if self.showConnection:
             self.list.SetItemImage(index, [icon, self.getConnectionIcon(dev)])
