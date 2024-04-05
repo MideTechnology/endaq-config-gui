@@ -42,7 +42,7 @@ class ControlButtons(wx.Panel):
         sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.SetSizer(sizer)
 
-        self.addButtons(sizer)
+        self.addButtons(sizer, showConfig)
         self.recBtn.Bind(wx.EVT_BUTTON, self.OnRecordButton)
         self.configBtn.Bind(wx.EVT_BUTTON, self.OnConfigButton)
 
