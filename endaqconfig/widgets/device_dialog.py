@@ -16,19 +16,20 @@ import wx.lib.mixins.listctrl as listmix
 from wx.lib.agw import ultimatelistctrl as ULC
 
 from endaq.device import Recorder, getDevices, getDeviceList, RECORDERS
-from endaq.device import deviceChanged, UnsupportedFeature
+from endaq.device import deviceChanged, CommandError, UnsupportedFeature
 from endaq.device.base import os_specific
 
 from .shared import DeviceToolTip
 from . import icons
 from . import battery_icons
-# from .controls import ControlButtons
+from . import controls
+from .events import EVT_CONFIG_BUTTON, EVT_RECORD_BUTTON
 
 logger = logging.getLogger('endaqconfig')
 
 # XXX: For testing, remove
 from itertools import cycle
-GUI_DEMO = True
+GUI_DEMO = not True
 
 # ===========================================================================
 # Threshold values for showing warning or error icons
@@ -84,44 +85,12 @@ def populateButtonColumn(dev: Recorder,
         :param root: The parent window/dialog.
         :return: A string for use in column sorting ("" in this case).
     """
-    # XXX: TEST: Proof of concept! replace later!
+    # XXX: For testing two (and a half) different button approaches
+    pan = controls.ControlButtons(root, root.list, dev, index, column)
+    # pan = controls.ControlImageButtons(root, root.list, dev, index, column, plates=True)
 
-    def handler1(_evt):
-        # should probably also select row
-        print(f'handler 1 for {dev}')
-
-        # Test: add checks to all rows
-        for i in range(root.list.GetItemCount()):
-            root.list.SetItemKind(root.list.GetItem(i), 0, 1)
-
-    def handler2(_evt):
-        # should probably also select row
-        print(f'handler 2 for {dev}')
-
-        # Test: remove checks from all rows
-        for i in range(root.list.GetItemCount()):
-            root.list.SetItemKind(root.list.GetItem(i), 0, 0)
-
-    # pan = ControlButtons(root.list, dev)
-    pan = wx.Panel(root.list, -1)
-    pansize = wx.BoxSizer(wx.HORIZONTAL)
-    pan.SetSizer(pansize)
-
-    pan.recBth = wx.Button(pan, -1, "Start Recording", size=(-1, 22))
-    pan.recBth.Bind(wx.EVT_BUTTON, handler1)
-    pansize.Add(pan.recBth, 1, wx.EXPAND)
-
-    pan.confBtn = wx.Button(pan, -1, "Configure", size=(-1, 22))
-    pansize.Add(pan.confBtn, 1, wx.EXPAND)
-    pan.confBtn.Bind(wx.EVT_BUTTON, handler2)
-
-    pansize.Fit(pan)
     root.list.SetItemWindow(index, column, pan, expand=True)
     root.minWidths[root.buttonCol] = pan.GetSize()[0]
-
-    pan.recBth.Enable(dev.canRecord)
-    pan.confBtn.Enable(dev.hasConfigInterface and dev.config.available)
-
     return ""
 
 
@@ -144,7 +113,7 @@ def populateBatteryColumn(dev: Recorder,
         # TODO: Don't call getBatteryState() here; call elsewhere and cache response
         batName, batDesc = battery_icons.batStat2name(dev.command.getBatteryStatus())
         batIcon = root.batteryIconIndices.get(batName, 0)
-    except UnsupportedFeature:
+    except (CommandError, UnsupportedFeature):
         batIcon, batDesc = 0, ''
 
     root.list.SetStringItem(index, column, '', batIcon)
@@ -452,6 +421,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         else:
             self.Bind(wx.EVT_BUTTON, self.startRecording, id=self.ID_START_RECORDING)
 
+        self.Bind(EVT_RECORD_BUTTON, self.startRecording)
+
         if not self.showWarnings:
             self.infoText.Hide()
 
@@ -477,11 +448,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         empty = wx.Bitmap(16, 16)
         empty.SetMaskColour(wx.BLACK)
         images.Add(empty)
-        for i in (wx.ART_INFORMATION, wx.ART_WARNING, wx.ART_ERROR):
-            images.Add(wx.ArtProvider.GetBitmap(i, wx.ART_CMN_DIALOG, (16, 16)))
-        # images.Add(icons.info.GetBitmap())
-        # images.Add(icons.warn.GetBitmap())
-        # images.Add(icons.error.GetBitmap())
+
+        # for i in (wx.ART_INFORMATION, wx.ART_WARNING, wx.ART_ERROR):
+        #     images.Add(wx.ArtProvider.GetBitmap(i, wx.ART_CMN_DIALOG, (16, 16)))
+        for img in icons.STATUS_ICONS:
+            images.Add(img.GetBitmap())
 
         self.batteryIconIndices = {}
         batImages = [item for item in battery_icons.__dict__.items()
@@ -862,6 +833,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def startRecording(self, _evt=None):
         """ Initiate a recording.
         """
+        # XXX:
+        print('start recording')
+        return
+
         timerRunning = self.updateTimer.IsRunning()
         self.updateTimer.Stop()
 
