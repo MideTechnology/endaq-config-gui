@@ -4,9 +4,23 @@ Custom events used in the device-related dialogs.
 
 from wx.lib.newevent import NewEvent
 
+
+# ===========================================================================
+# Device selection/control dialog events
+# ===========================================================================
+
+# Configure a device. Carries `device` as attribute.
 EvtConfigButton, EVT_CONFIG_BUTTON = NewEvent()
+
+# Start (or stop) a recording. Carries `device` as attribute.
 EvtRecordButton, EVT_RECORD_BUTTON = NewEvent()
 
+# Called when the `getDevices()` thread completes
+EvtDeviceListUpdate, EVT_DEVICE_LIST_UPDATE = NewEvent()
+
+# ===========================================================================
+# Wi-Fi events
+# ===========================================================================
 
 # Response to the Wi-Fi list being read from the device. It might take a little
 # time, so it will be done asynchronously. Event attributes:

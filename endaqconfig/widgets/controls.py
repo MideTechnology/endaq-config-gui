@@ -27,7 +27,8 @@ class ControlButtons(wx.Panel):
     STOP_TT = "Stop the recording device"
     CONFIG_TT = "Configure the recording device"
 
-    def __init__(self, root, parent, device, index, column):
+    def __init__(self, root, parent, device, index, column,
+                 showConfig=True):
         super().__init__(parent, -1)
         self.root = root
         self.list = parent
@@ -51,7 +52,7 @@ class ControlButtons(wx.Panel):
         self.configBtn.Enable(device.hasConfigInterface and device.config.available)
 
 
-    def addButtons(self, sizer):
+    def addButtons(self, sizer, showConfig):
         """ Add the button widgets to the panel.
         """
         self.recBtn = wx.Button(self, -1, "Start Recording", size=(-1, 22))
@@ -59,6 +60,8 @@ class ControlButtons(wx.Panel):
 
         self.configBtn = wx.Button(self, -1, "Configure", size=(-1, 22))
         sizer.Add(self.configBtn, 1, wx.EXPAND)
+
+        self.configBtn.Show(showConfig)
 
 
     def updateButtons(self):
@@ -86,7 +89,7 @@ class ControlButtons(wx.Panel):
         """
         try:
             self.list.Select(self.index)
-            wx.PostEvent(self.root, EvtRecordButton())
+            wx.PostEvent(self.root, EvtRecordButton(device=self.device))
             evt.Skip()
         except RuntimeError:
             # Dialog probably closed during scan, which is okay.
@@ -98,7 +101,7 @@ class ControlButtons(wx.Panel):
         """
         try:
             self.list.Select(self.index)
-            wx.PostEvent(self.root, EvtConfigButton())
+            wx.PostEvent(self.root, EvtConfigButton(device=self.device))
             evt.Skip()
         except RuntimeError:
             # Dialog probably closed during scan, which is okay.
@@ -114,12 +117,12 @@ class ControlImageButtons(ControlButtons):
     ICON_RECORD = None
     ICON_STOP = None
 
-    def __init__(self, root, parent, device, index, column, plates=False):
+    def __init__(self, root, parent, device, index, column, showConfig=True, plates=False):
         self.USE_PLATES = plates
-        super().__init__(root, parent, device, index, column)
+        super().__init__(root, parent, device, index, column, showConfig)
 
 
-    def addButtons(self, sizer):
+    def addButtons(self, sizer, showConfig):
         """ Add the button widgets to the panel.
         """
         self.loadIcons()
@@ -130,6 +133,7 @@ class ControlImageButtons(ControlButtons):
             self.recBtn = wx.BitmapButton(self, -1, self.ICON_RECORD[0], size=(24, 24), style=wx.NO_BORDER)
             self.configBtn = wx.BitmapButton(self, -1, self.ICON_CONFIG[0], size=(24, 24), style=wx.NO_BORDER)
 
+        self.configBtn.Show(showConfig)
         sizer.Add(self.recBtn, 0, wx.EXPAND)
         sizer.Add(self.configBtn, 0, wx.EXPAND)
 

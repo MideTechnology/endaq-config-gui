@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from functools import partial
 import logging
 import os.path
-from typing import Optional
+from typing import Optional, Union
 
 import wx
 import wx.lib.sized_controls as sc
@@ -23,7 +23,7 @@ from .shared import DeviceToolTip
 from . import icons
 from . import battery_icons
 from . import controls
-from .events import EVT_CONFIG_BUTTON, EVT_RECORD_BUTTON
+from .events import EvtConfigButton, EVT_CONFIG_BUTTON, EvtRecordButton, EVT_RECORD_BUTTON
 
 logger = logging.getLogger('endaqconfig')
 
@@ -316,54 +316,19 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.SetIcon(icon)
 
         # TODO: Better column collection (assemble piecemeal based on parameters)
-        if self.showAdvanced:
-            self.columns = [self.ColumnInfo(name, formatter)
-                            for name, formatter in self.ADVANCED_COLUMNS.items()]
-        else:
-            self.columns = [self.ColumnInfo(name, formatter)
-                            for name, formatter in self.COLUMNS.items()]
-
-        self.batteryCol = None
-        self.buttonCol = None
-        self.statusCol = None
-
-        for i, col in enumerate(self.columns):
-            if col.formatter == populateBatteryColumn:
-                self.batteryCol = i
-            elif col.formatter == populateButtonColumn:
-                self.buttonCol = i
-            elif col.formatter == populateStatusColumn:
-                self.statusCol = i
-
-        self.recorders = {}
-        self.recorderPaths = tuple(getDeviceList())
-        self.selected = None
-        self.selectedIdx = None
-        self.firstDrawing = True
-        self.listWidth = 0
+        cols = self.ADVANCED_COLUMNS if self.showAdvanced else self.COLUMNS
+        self.columns = [self.ColumnInfo(name, formatter)
+                        for name, formatter in cols.items()]
 
         pane = self.GetContentsPane()
         pane.SetSizerProps(expand=True)
 
-        self.itemDataMap = {}  # required by ColumnSorterMixin
-
-        self.list = ULC.UltimateListCtrl(pane, -1,
-                                         agwStyle=(wx.LC_REPORT
-                                                   # | wx.LC_NO_HEADER
-                                                   | wx.BORDER_NONE
-                                                   | wx.LC_HRULES
-                                                   | wx.LC_SINGLE_SEL
-                                                   | ULC.ULC_NO_ITEM_DRAG
-                                                   # | wx.LC_VRULES
-                                         ))
-
-        self.list.AssignImageList(self.loadIcons(), wx.IMAGE_LIST_SMALL)
-
-        self.list.SetSizerProps(expand=True, proportion=1)
+        self.initList(pane, tooltips)
 
         # Selected device info
         self.infoText = wx.StaticText(pane, -1, "")
         self.infoText.SetSizerProps(expand=True)
+        self.infoText.Show(self.showWarnings)
 
         buttonpane = sc.SizedPanel(pane, -1)
         buttonpane.SetSizerType("horizontal")
@@ -374,12 +339,16 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.setClockButton.SetSizerProps(halign="left")
         self.setClockButton.SetToolTip("Set the time of every attached "
                                        "recorder with a real-time clock")
+        self.Bind(wx.EVT_BUTTON, self.setClocks, id=self.ID_SET_TIME)
+        self.setClockButton.Show(not self.hideClock)
 
         self.recordButton = wx.Button(buttonpane, self.ID_START_RECORDING,
                                       "Start Recording")
         self.recordButton.SetSizerProps(halign="left")
         self.recordButton.SetToolTip(self.RECORD_ENABLED)
+        self.Bind(wx.EVT_BUTTON, self.startRecording, id=self.ID_START_RECORDING)
         self.recordButton.Enable(False)
+        self.recordButton.Show(not self.hideRecord)
 
         sc.SizedPanel(buttonpane, -1).SetSizerProps(proportion=1)  # Spacer
 
@@ -394,9 +363,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         deviceChanged(recordersOnly=False, clear=True)
         self.populateList()
         self.list.Fit()
-
-        listmix.ColumnSorterMixin.__init__(self, len(self.columns))
-
         self.Fit()
         self.SetSize((self.listWidth + (self.GetDialogBorder()*4), 300))
         self.SetMinSize((400, 300))
@@ -405,26 +371,56 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.Layout()
         self.Centre()
 
+        self.Bind(wx.EVT_SHOW, self.OnShow)
+
+
+    def initList(self,
+                 parent: wx.Panel,
+                 tooltips: bool):
+        """ Build and set up the device list control.
+
+            :param parent: The parent Panel.
+            :param tooltips: Show tooltips if `True`.
+        """
+        self.batteryCol = None
+        self.buttonCol = None
+        self.statusCol = None
+
+        for i, col in enumerate(self.columns):
+            if col.formatter == populateBatteryColumn:
+                self.batteryCol = i
+            elif col.formatter == populateButtonColumn:
+                self.buttonCol = i
+            elif col.formatter == populateStatusColumn:
+                self.statusCol = i
+
+        self.recorders = {}
+        self.recorderIndices = {}
+        self.recorderPaths = tuple(getDeviceList())
+        self.selected = None
+        self.selectedIdx = None
+        self.firstDrawing = True
+        self.listWidth = 0
+
+        self.itemDataMap = {}  # required by ColumnSorterMixin
+
+        self.list = ULC.UltimateListCtrl(parent, -1,
+                                         agwStyle=(wx.LC_REPORT
+                                                   # | wx.LC_NO_HEADER
+                                                   | wx.BORDER_NONE
+                                                   | wx.LC_HRULES
+                                                   | wx.LC_SINGLE_SEL
+                                                   | ULC.ULC_NO_ITEM_DRAG
+                                                   # | wx.LC_VRULES
+                                                   ))
+
+        self.list.AssignImageList(self.loadIcons(), wx.IMAGE_LIST_SMALL)
+        self.list.SetSizerProps(expand=True, proportion=1)
+
         self.Bind(wx.EVT_LIST_ITEM_SELECTED, self.OnItemSelected, self.list)
         self.Bind(wx.EVT_LIST_ITEM_DESELECTED, self.OnItemDeselected, self.list)
         self.list.Bind(wx.EVT_LEFT_DCLICK, self.OnItemDoubleClick)
         self.Bind(wx.EVT_LIST_COL_CLICK, self.OnColClick, self.list)
-        self.Bind(wx.EVT_SHOW, self.OnShow)
-
-        if self.hideClock:
-            self.setClockButton.Hide()
-        else:
-            self.Bind(wx.EVT_BUTTON, self.setClocks, id=self.ID_SET_TIME)
-
-        if self.hideRecord:
-            self.recordButton.Hide()
-        else:
-            self.Bind(wx.EVT_BUTTON, self.startRecording, id=self.ID_START_RECORDING)
-
-        self.Bind(EVT_RECORD_BUTTON, self.startRecording)
-
-        if not self.showWarnings:
-            self.infoText.Hide()
 
         # For doing per-item tool tips in the list
         self.lastToolTipItem = -1
@@ -437,6 +433,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.updateTimerCalls = 0
         self.updateTimer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.UpdateTimerHandler, self.updateTimer)
+
+        listmix.ColumnSorterMixin.__init__(self, len(self.columns))
 
 
     def loadIcons(self) -> ULC.PyImageList:
@@ -606,6 +604,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.list.ClearAll()
         self.recorders.clear()
+        self.recorderIndices.clear()
         self.itemDataMap.clear()
 
         for i, c in enumerate(self.columns):
@@ -626,6 +625,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 index = self.list.InsertImageStringItem(idx, dev.path, [0], int(self.checks))
                 self.itemDataMap[index] = [dev.path]
                 self.recorders[index] = dev
+                self.recorderIndices[dev] = index
                 for i, col in enumerate(self.columns[1:], 1):
                     val = col.formatter(dev, index, i, self)  # populates item and returns data map value
                     self.itemDataMap[index].append('' if val is None else val)
@@ -830,18 +830,25 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
 
 
-    def startRecording(self, _evt=None):
+    def startRecording(self,
+                       evt: Union[wx.CommandEvent, EvtRecordButton, None] = None):
         """ Initiate a recording.
+
+            :param evt: The event generated by a dialog 'Record' button, or
+                an `EVT_RECORD_BUTTON` event from a row in the list.
         """
         # XXX:
         print('start recording')
-        return
+        # return
 
         timerRunning = self.updateTimer.IsRunning()
         self.updateTimer.Stop()
 
         try:
-            recorder = self.recorders.get(self.selected, None)
+            # If EVT_RECORD_BUTTON, get device from event, otherwise use selected
+            recorder = getattr(evt, 'device', None)
+            if not recorder:
+                recorder = self.recorders.get(self.selected, None)
             if recorder and recorder.canRecord:
                 recorder.startRecording()
         finally:
