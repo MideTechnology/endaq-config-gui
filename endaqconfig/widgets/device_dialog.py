@@ -67,7 +67,7 @@ class DeviceScanThread(threading.Thread):
 
             :param parent: The parent dialog.
             :param devFilter: A filter function to exclude devices.
-            :param interval: Time (in seconds) between each scan for changes
+            :param interval: Time (in milliseconds) between each scan for changes
                 to available devices.
 
             Additional keyword arguments are used when calling `getDevices()`.
@@ -76,32 +76,66 @@ class DeviceScanThread(threading.Thread):
         self.daemon = True
 
         self.parent = parent
-        self.interval = interval
+        self.interval = interval / 1000
         self.filter = devFilter
         self.getDevicesArgs = getDevicesArgs
 
-        self.cancel = threading.Event()
-        self.cancel.clear()
+        self._cancel = threading.Event()
+        self._cancel.clear()
+        self._pause = threading.Event()
+        self._pause.clear()
 
 
     def stop(self):
-        self.cancel.set()
+        logger.debug('Stopping scanning thread')
+        self._cancel.set()
+
+
+    def pause(self):
+        logger.debug('Pausing scanning thread')
+        self._pause.set()
+
+
+    def resume(self):
+        logger.debug('Resuming scanning thread')
+        self._pause.clear()
+
+
+    def paused(self):
+        return self._pause.is_set()
 
 
     def run(self):
         """ The main loop.
         """
-        while bool(self.parent) and not self.cancel.is_set():
+        logger.debug('Started scanning thread')
+        cancelSet = self._cancel.is_set
+        pauseSet = self._pause.is_set
+        while bool(self.parent) and not cancelSet():
+            if pauseSet() or self.parent.updating.is_set():
+                sleep(self.interval / 2)
+                continue
+
             try:
                 result = getDevices()
+                status = {}
                 if self.filter:
                     result = list(filter(self.filter, result))
 
-                # TODO: XXX: also call getBatteryStatus() here, store results and status, and catch any device exceptions
-                evt = EvtDeviceListUpdate(devices=result)
+                for dev in result:
+                    try:
+                        bat = dev.command.getBatteryStatus()
+                        stat = dev.command.status
+                        status[dev] = bat, stat
+                    except (UnsupportedFeature, AttributeError):
+                        pass
+
+                evt = EvtDeviceListUpdate(devices=result, status=status)
 
                 if bool(self.parent):
                     wx.PostEvent(self.parent, evt)
+                else:
+                    logger.debug('did not post update event!')
 
             except DeviceTimeout:
                 logger.warning("Timed out when scanning for devices, retrying")
@@ -115,13 +149,16 @@ class DeviceScanThread(threading.Thread):
 
             except IOError as E:
                 logger.warning(E)
-                return
-        sleep(self.interval)
+
+            sleep(self.interval)
+
+        logger.debug('Scanning thread stopped')
 
 
 # ===========================================================================
 # Column 'formatters.' They actually add the column to the list and return
-# the value for the list sorting.
+# the value for the list sorting. Standard arguments are the `Recorder`, the
+# index (row), the column number, and the root window/dialog.
 # ===========================================================================
 
 def _attribFormatter(attrib: str, 
@@ -179,12 +216,15 @@ def populateBatteryColumn(dev: Recorder,
     if column is None:
         return ''
 
+    batIcon, batDesc = 0, ''
+
     try:
-        # TODO: Don't call getBatteryState() here; call elsewhere and cache response
-        batName, batDesc = battery_icons.batStat2name(dev.command.getBatteryStatus())
+        batStat = root.recorderStatus[dev][0]
+        batName, batDesc = battery_icons.batStat2name(batStat)
         batIcon = root.batteryIconIndices.get(batName, 0)
-    except (CommandError, UnsupportedFeature):
-        batIcon, batDesc = 0, ''
+    except KeyError:
+        # Probably old, doesn't support getBatteryState()
+        pass
 
     root.list.SetStringItem(index, column, '', batIcon)
     return batDesc
@@ -209,8 +249,6 @@ def populateStatusColumn(dev: Recorder,
     code = 0
 
     try:
-        # TODO: Use status in cached getBatteryState() response
-        dev.command.ping()
         code, msg = dev.command.status
         if code is not None:
             status = str(code)
@@ -246,7 +284,7 @@ def populateStatusColumn(dev: Recorder,
 # ===========================================================================
 
 class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
-    """ The dialog for selecting data to export.
+    """ The dialog for selecting a device to configure.
     """
 
     ID_SET_TIME = wx.NewIdRef()
@@ -298,9 +336,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         30: wx.YELLOW,  # Start Pending
         40: wx.YELLOW,  # Triggering
         50: wx.Colour(200, 200, 200),  # Sleeping
-        -10: wx.RED  # Error
+        -10: wx.RED  # Error (default for all negative status codes)
     }
-
 
 
     # ==============================================================================
@@ -348,6 +385,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             :keyword tooltips: If `True` (default), show list tooltips
                 containing all important device infomation.
             :keyword checks: If `True`, show checkboxes for each device.
+            :keyword mustConfig: If `True`, the 'OK' button will only become
+                enabled if the device can be configured.
         """
         # Clear cached devices
         RECORDERS.clear()
@@ -359,7 +398,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                  wx.DIALOG_EX_CONTEXTHELP |
                  wx.SYSTEM_MENU)
 
-        self.autoUpdate = kwargs.pop('autoUpdate', 500)
+        self.autoUpdate = kwargs.pop('autoUpdate', 1000)
         self.hideClock = kwargs.pop('hideClock', False)
         self.hideRecord = kwargs.pop('hideRecord', False)
         self.showWarnings = kwargs.pop('showWarnings', True)
@@ -367,6 +406,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.showAdvanced = kwargs.pop('showAdvanced', False) or True
         self.filter = kwargs.pop('filter', lambda x: True)
         self.checks = kwargs.pop('checks', False)
+        self.mustConfigure = kwargs.pop('mustConfig', True)
         okText = kwargs.pop('okText', "Configure")
         okHelp = kwargs.pop('okHelp', 'Configure the selected device')
         cancelText = kwargs.pop('cancelText', "Close")
@@ -382,6 +422,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         if icon is not False:
             icon = icon or icons.icon.GetIcon()
             self.SetIcon(icon)
+
+        self.thread = None
+        self.updating = threading.Event()
 
         # TODO: Better column collection (assemble piecemeal based on parameters)
         cols = self.ADVANCED_COLUMNS if self.showAdvanced else self.COLUMNS
@@ -427,13 +470,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.cancelButton = wx.Button(buttonpane, wx.ID_CANCEL, cancelText)
         self.cancelButton.SetSizerProps(halign="right")
 
-        # Call deviceChanged() to set the initial state. Result ignored.
-        deviceChanged(recordersOnly=False, clear=True)
         self.populateList()
-        self.list.Fit()
         self.Fit()
-        self.SetSize((self.listWidth + (self.GetDialogBorder()*4), 300))
-        self.SetMinSize((400, 300))
+        self.SetMinSize((640, 300))
         self.SetMaxSize((1500, 600))
 
         self.Layout()
@@ -442,8 +481,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.Bind(wx.EVT_SHOW, self.OnShow)
         self.Bind(EVT_RECORD_BUTTON, self.OnStartRecording)
         self.Bind(EVT_DEVICE_LIST_UPDATE, self.OnDeviceListUpdate)
-
-        # XXX: Call createColumns() and start update thread here!
 
 
     def initList(self,
@@ -466,9 +503,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             elif col.formatter == populateStatusColumn:
                 self.statusCol = i
 
-        self.lastScan = None  # Results of previous `getDevices()`.
-        self.recorders = {}  # `Recorder` instances keyed by list index.
-        self.recorderIndices = {}  # List index keyed by `Recorder`
+        self.recorders = []  # Results of previous `getDevices()`.
+        self.recorderStatus = {}  # Recorder status and battery state, keyed by `Recorder`
+        self.recordersByIndex = {}  # `Recorder` instances keyed by list index.
+        self.indicesByRecorder = {}  # List index keyed by `Recorder`
         self.recorderPaths = tuple(getDeviceList())
         self.selected = None
         self.selectedIdx = None
@@ -504,8 +542,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.tooltipFrame = DeviceToolTip(self) if tooltips else None
 
         self.updateTimerCalls = 0
-        self.updateTimer = wx.Timer(self)
-        self.Bind(wx.EVT_TIMER, self.UpdateTimerHandler, self.updateTimer)
+        # self.updateTimer = wx.Timer(self)
+        # self.Bind(wx.EVT_TIMER, self.UpdateTimerHandler, self.updateTimer)
 
         listmix.ColumnSorterMixin.__init__(self, len(self.columns))
 
@@ -676,61 +714,67 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def populateList(self):
         """ Find recorders and add them to the list.
         """
-        # TODO: XXX: MAKE THIS CALLED ONLY IN RESPOONSE TO EVENT FROM THREAD
-        self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
+        if self.updating.is_set():
+            return
+        try:
+            logger.debug('populating list')
+            self.updating.set()
+            self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
 
-        self.list.ClearAll()
-        self.recorders.clear()
-        self.recorderIndices.clear()
-        self.itemDataMap.clear()
+            self.list.ClearAll()
+            self.recordersByIndex.clear()
+            self.indicesByRecorder.clear()
+            self.itemDataMap.clear()
+            self.listWidth = 0
 
-        self.createColumns()
+            self.createColumns()
 
-        # This is to provide tool tips for individual list rows
-        self.listMsgs = [None] * len(self.recorderPaths)
-        self.listToolTips = [None] * len(self.recorderPaths)
+            # This is to provide tool tips for individual list rows
+            self.listMsgs = [None] * len(self.recorders)
+            self.listToolTips = [None] * len(self.recorders)
 
-        index = None
-        # TODO: XXX: enumerate self.lastScan (once thread implemented and running)
-        for idx, dev in enumerate(filter(self.filter, getDevices())):
-            try:
-                index = self.list.InsertImageStringItem(idx, dev.path, [0], int(self.checks))
-                self.itemDataMap[index] = [dev.path]
-                self.recorders[index] = dev
-                self.recorderIndices[dev] = index
-                for i, col in enumerate(self.columns[1:], 1):
-                    val = col.formatter(dev, index, i, self)  # populates item and returns data map value
-                    self.itemDataMap[index].append('' if val is None else val)
-                    self.list.SetColumnWidth(i, wx.LIST_AUTOSIZE)
+            index = None
+            for idx, dev in enumerate(self.recorders):
+                try:
+                    index = self.list.InsertImageStringItem(idx, dev.path, [0], int(self.checks))
+                    self.itemDataMap[index] = [dev.path]
+                    self.recordersByIndex[index] = dev
+                    self.indicesByRecorder[dev] = index
+                    for i, col in enumerate(self.columns[1:], 1):
+                        val = col.formatter(dev, index, i, self)  # populates item and returns data map value
+                        self.itemDataMap[index].append('' if val is None else val)
+                        self.list.SetColumnWidth(i, wx.LIST_AUTOSIZE)
 
-                self.list.SetItemData(index, index)
+                    self.list.SetItemData(index, index)
 
-                if self.showWarnings:
-                    self.setItemIcon(index, dev)
+                    if self.showWarnings:
+                        self.setItemIcon(index, dev)
 
-            except IOError:
-                # TODO: XXX: REMOVE THIS IOError CATCH - will be done in thread
-                wx.MessageBox(
-                    f"An error occurred while trying to access a recorder ({dev.path})."
-                    "\n\nThe device's configuration data may be damaged. "
-                    "Try disconnecting and reconnecting the device.",
-                    "Device Error", parent=self)
-                if index is not None:
-                    self.list.DeleteItem(index)
+                except IOError:
+                    # TODO: XXX: REMOVE THIS IOError CATCH - will be done in thread
+                    wx.MessageBox(
+                        f"An error occurred while trying to access a recorder ({dev.path})."
+                        "\n\nThe device's configuration data may be damaged. "
+                        "Try disconnecting and reconnecting the device.",
+                        "Device Error", parent=self)
+                    if index is not None:
+                        self.list.DeleteItem(index)
 
-        for i, w in enumerate(self.minWidths):
-            w = w + 8
-            if self.list.GetColumnWidth(i) < w:
-                self.list.SetColumnWidth(i, w)
-            self.listWidth += self.list.GetColumnWidth(i)
+            for i, w in enumerate(self.minWidths):
+                w = w + 8
+                if self.list.GetColumnWidth(i) < w:
+                    self.list.SetColumnWidth(i, w)
+                self.listWidth += self.list.GetColumnWidth(i)
 
-        # if self.batteryCol is not None:
-        #     self.list.SetColumnWidth(self.batteryCol, self.minWidths[self.batteryCol])
+            # if self.batteryCol is not None:
+            #     self.list.SetColumnWidth(self.batteryCol, self.minWidths[self.batteryCol])
 
-        if not self.recorders or not self.selected:
-            self.OnItemDeselected(None)
+            if not self.recordersByIndex or not self.selected:
+                self.OnItemDeselected(None)
 
-        self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+        finally:
+            self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+            self.updating.clear()
 
 
     def updateList(self):
@@ -739,27 +783,38 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
             :see: OnDeviceListUpdate()
         """
-        for dev in self.lastScan:
-            if dev not in self.recorderIndices:
-                # New device, generally shouldn't happen.
-                self.populateList()
-                return
+        if self.updating.is_set():
+            return
 
-            index = self.recorderIndices[dev]
-            if self.showWarnings:
-                self.setItemIcon(index, dev)
+        try:
+            self.updating.set()
+            logger.debug('Updating display')
+            for dev in self.recorders:
+                if dev not in self.indicesByRecorder:
+                    # New device, generally shouldn't happen.
+                    self.updating.clear()
+                    self.populateList()
+                    return
 
-            for i, col in enumerate(self.columns[1:], 1):
-                if i == self.buttonCol:
-                    pan = self.list.GetItemWindow(index, i)
-                    if not pan:
-                        logger.error(f'Could not get button panel for index {index}')
+                index = self.indicesByRecorder[dev]
+                if self.showWarnings:
+                    self.setItemIcon(index, dev)
+
+                for i, col in enumerate(self.columns[1:], 1):
+                    if i == self.buttonCol:
+                        pan = self.list.GetItemWindow(index, i)
+                        if not pan:
+                            logger.error(f'Could not get button panel for index {index}')
+                        else:
+                            pan.updateButtons()
+                        val = ''
                     else:
-                        pan.updateButtons()
-                    val = ''
-                else:
-                    val = col.formatter(dev, index, i, self)
-                self.itemDataMap[index][i] = val or ''
+                        val = col.formatter(dev, index, i, self)
+                    self.itemDataMap[index][i] = val or ''
+
+        finally:
+            self.updating.clear()
+
 
 
     def getSelected(self):
@@ -767,7 +822,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         if self.selected is None:
             return None
-        return self.recorders.get(self.selected, None)
+        return self.recordersByIndex.get(self.selected, None)
 
 
     def OnColClick(self, evt):
@@ -781,15 +836,27 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.selected = self.list.GetItemData(evt.Index)
         if self.listMsgs[self.selected] is not None:
             self.infoText.SetLabel(self.listMsgs[self.selected])
-        self.okButton.Enable(True)
 
-        recorder = self.recorders.get(self.selected, None)
+        recorder = self.recordersByIndex.get(self.selected, None)
+        if not recorder:
+            logger.error('Could not get selected recorder!')
+            self.okButton.Enable(False)
         if recorder.canRecord:
             self.recordButton.SetToolTip(self.RECORD_ENABLED)
             self.recordButton.Enable(True)
         else:
             self.recordButton.SetToolTip(self.RECORD_UNSUPPORTED)
             self.recordButton.Enable(False)
+
+        try:
+            if not self.mustConfigure:
+                en = True
+            else:
+                en = recorder.hasConfigInterface and recorder.config.available
+            self.okButton.Enable(en)
+        except AttributeError as err:
+            logger.debug(f'Ignoring error checking device configurablity: {err!r}')
+            self.okButton.Enable(not self.mustConfigure)
 
         evt.Skip()
 
@@ -825,7 +892,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             This determines the list item under the mouse and shows the
             appropriate tool tip, if any
         """
-        if not self.recorders or not self.tooltipFrame:
+        if not self.recordersByIndex or not self.tooltipFrame:
             evt.Skip()
             return
 
@@ -862,9 +929,14 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         if evt.IsShown():
             if self.autoUpdate:
-                self.updateTimer.Start(self.autoUpdate)
+                # self.updateTimer.Start(self.autoUpdate)
+                if not self.thread or not self.thread.is_alive():
+                    self.thread = DeviceScanThread(self, self.filter, self.autoUpdate)
+                    self.thread.start()
         else:
-            self.updateTimer.Stop()
+            # self.updateTimer.Stop()
+            if self.thread and self.thread.is_alive():
+                self.thread.stop()
             if self.tooltipFrame:
                 self.tooltipFrame.timer.Stop()
                 self.tooltipFrame.Hide()
@@ -880,10 +952,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         for b in butts:
             b.Enable(False)
 
-        timerRunning = self.updateTimer.IsRunning()
-        self.updateTimer.Stop()
+        if self.thread and self.thread.is_alive():
+            self.thread.pause()
 
-        for rec in self.recorders.values():
+        for rec in self.recordersByIndex.values():
             try:
                 rec.setTime()
             except Exception as err:
@@ -908,8 +980,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             wx.MessageBox(msg, "Device Error", parent=self,
                           style=wx.OK | wx.ICON_ERROR)
 
-        if timerRunning:
-            self.updateTimer.Start(self.autoUpdate)
+        if self.thread and self.thread.is_alive():
+            self.thread.resume()
 
         self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
 
@@ -921,19 +993,19 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             :param evt: The event generated by a dialog 'Record' button, or
                 an `EVT_RECORD_BUTTON` event from a row in the list.
         """
-        timerRunning = self.updateTimer.IsRunning()
-        self.updateTimer.Stop()
+        if self.thread and self.thread.is_alive():
+            self.thread.pause()
 
         try:
             # If EVT_RECORD_BUTTON, get device from event, otherwise use selected
             recorder = getattr(evt, 'device', None)
             if not recorder:
-                recorder = self.recorders.get(self.selected, None)
+                recorder = self.recordersByIndex.get(self.selected, None)
             if recorder and recorder.canRecord:
                 recorder.startRecording()
         finally:
-            if timerRunning:
-                self.updateTimer.Start(self.autoUpdate)
+            if self.thread and self.thread.is_alive():
+                self.thread.resume()
 
 
     def OnDeviceListUpdate(self, evt):
@@ -941,12 +1013,21 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             changed devices.
         """
         new = evt.devices
-        if new != self.lastScan:
-            self.lastScan = new
+        stat = evt.status
+        if new != self.recorders:
+            self.recorders = new
             self.populateList()
-        else:
+        elif stat != self.recorderStatus:
+            self.recorderStatus = stat
             self.updateList()
 
+        if  self.updateTimerCalls == 0:
+            logger.debug('first update')
+            self.list.Fit()
+            self.SetSize((self.listWidth + (self.GetDialogBorder() * 4), -1))
+            # self.Centre()
+
+        self.updateTimerCalls += 1
 
 
 # ===========================================================================
