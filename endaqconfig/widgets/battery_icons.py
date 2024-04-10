@@ -27,13 +27,17 @@ def batStat2name(status: dict[str, Any],
     if level < 20:
         lev = 0
     elif not percentage:
-        lev = "unknown"
-        desc = "Partially charged"
+        if level > 80:
+            lev = 100
+            desc = "Full"
+        else:
+            lev = "unknown"
+            desc = "Partially charged"
     else:
         lev = max(0, min(100, int((level + 15) // 20) * 20))
 
     return (f"battery_{lev}{charging}_{theme}",
-            f'{desc or f"{level}%"}{" (charging)" if charging else ""}')
+            f'Battery: {desc or f"{level}%"}{" (charging)" if charging else ""}')
 
 
 battery_0_charging_dk = PyEmbeddedImage(

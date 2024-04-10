@@ -8,12 +8,10 @@ Two and a half versions:
 """
 
 import wx
-import wx.lib.platebtn as pb
 
 from endaq.device.response_codes import DeviceStatusCode
 from endaq.device import CommandError, UnsupportedFeature
 
-from .icons import button_config, button_record, button_stop
 from .events import EvtConfigButton, EvtRecordButton
 
 
@@ -26,6 +24,9 @@ class ControlButtons(wx.Panel):
     START_TT = "Start the recording device"
     STOP_TT = "Stop the recording device"
     CONFIG_TT = "Configure the recording device"
+
+    BG_NORMAL = None
+    BG_RECORING = wx.RED
 
     def __init__(self, root, parent, device, index, column,
                  showConfig=False):
@@ -48,6 +49,8 @@ class ControlButtons(wx.Panel):
         self.index = index
         self.column = column
 
+        self.recording = False
+
         bg = parent.GetBackgroundColour()
         self.SetBackgroundColour(bg)
 
@@ -60,8 +63,7 @@ class ControlButtons(wx.Panel):
 
         sizer.Fit(self)
 
-        self.recBtn.Enable(device.canRecord)
-        self.configBtn.Enable(device.hasConfigInterface and device.config.available)
+        self.updateButtons()
 
 
     def addButtons(self, sizer, showConfig):
@@ -74,14 +76,18 @@ class ControlButtons(wx.Panel):
         self.configBtn = wx.Button(self, -1, "Configure", size=(-1, 22))
         sizer.Add(self.configBtn, 1, wx.EXPAND)
 
+        if self.BG_NORMAL is None:
+            self.__class__.BG_NORMAL = self.recBtn.GetBackgroundColour()
+
         self.configBtn.Show(showConfig)
 
 
-    def updateButtons(self):
+    def updateButtons(self, enabled=True):
         """ Update the button labels, tooltips, and enabled/disabled state.
         """
-        self.recBtn.Enable(self.device.canRecord)
-        self.configBtn.Enable(self.device.hasConfigInterface
+        self.recBtn.Enable(enabled and self.device.canRecord)
+        self.configBtn.Enable(enabled
+                              and self.device.hasConfigInterface
                               and self.device.config.available)
 
         try:
@@ -89,12 +95,16 @@ class ControlButtons(wx.Panel):
         except (AttributeError, CommandError, UnsupportedFeature):
             status = None
 
-        if status == DeviceStatusCode.RECORDING:
+        self.recording = status == DeviceStatusCode.RECORDING
+
+        if self.recording:
             self.recBtn.SetLabel("Stop Recording")
             self.recBtn.SetToolTip(self.STOP_TT)
+            self.recBtn.SetBackgroundColour(self.BG_RECORING)
         else:
             self.recBtn.SetLabel("Start Recording")
             self.recBtn.SetToolTip(self.START_TT)
+            self.recBtn.SetBackgroundColour(self.BG_NORMAL)
 
 
     def OnRecordButton(self, evt):
@@ -102,7 +112,8 @@ class ControlButtons(wx.Panel):
         """
         try:
             self.list.Select(self.index)
-            wx.PostEvent(self.root, EvtRecordButton(device=self.device))
+            wx.PostEvent(self.root, EvtRecordButton(device=self.device,
+                                                    stop=self.recording))
             evt.Skip()
         except RuntimeError:
             # Dialog probably closed during scan, which is okay.
