@@ -3,13 +3,13 @@ Dialog for selecting and/or controlling recording devices.
 
 """
 
-from collections import namedtuple
+from collections import defaultdict, namedtuple
 from datetime import datetime, timedelta
 from functools import partial
 import logging
 import os.path
 import threading
-from time import sleep
+from time import sleep, time
 from typing import Callable, Optional, Union
 
 import wx
@@ -143,13 +143,16 @@ class DeviceScanThread(threading.Thread):
                 if self.filter:
                     result = list(filter(self.filter, result))
 
+                # TODO: Put status-getting for each device in its own thread
+                #  and report only current `status` in the `EvtDeviceListUpdate`.
+                #  Each thread would send a single event on completion.
                 for dev in result:
                     if not dev.hasCommandInterface:
                         status[dev] = None, (DeviceStatusCode.IDLE, None)
                         continue
 
                     try:
-                        bat = dev.command.getBatteryStatus()
+                        bat = dev.command.getBatteryStatus(callback=cancelSet)
                         stat = dev.command.status
                     except (NotImplementedError, UnsupportedFeature):
                         # Very old firmware and/or no serial command interface.
@@ -159,7 +162,7 @@ class DeviceScanThread(threading.Thread):
                         # Older FW that doesn't support GetBatteryStatus returns
                         # ERR_INVALID_COMMAND. Try to ping to get status.
                         try:
-                            dev.command.ping()
+                            dev.command.ping(callback=cancelSet)
                             bat = None
                             stat = dev.command.status
                         except (DeviceError, AttributeError, IOError):
@@ -197,6 +200,52 @@ class DeviceScanThread(threading.Thread):
             sleep(self.interval)
 
         logger.debug('Scanning thread stopped')
+
+
+class DeviceCommandThread(threading.Thread):
+    """
+    A slightly safer-than-normal thread for asynchronously calling simple
+    `Recorder` methods. Exceptions are caught and kept for later handing.
+
+    Note: Threads start immediately upon instantiation!
+    """
+
+    def __init__(self,
+                 device: Recorder,
+                 command: Callable,
+                 *args,
+                 **kwargs):
+        """ A slightly safer-than-normal thread for asynchronously calling
+            simple `Recorder` methods. Note that threads start immediately
+            upon instantiation!
+
+            :param device: The device running the command.
+            :param command: The function/method to call.
+
+            Other arguments/keyword arguments are used when calling `command`
+            (like `functools.partial`).
+        """
+        self.device = device
+        self.command = command
+        self.args = args
+        self.kwargs = kwargs
+        self.failed = threading.Event()  # Set if command raises an exception
+        self.completed = threading.Event()  # Set upon successful completion
+        self.failure = None  # Exception raised by the command (if any)
+
+        super().__init__(daemon=True)
+        self.start()
+
+
+    def run(self):
+        try:
+            self.command(*self.args, **self.kwargs)
+            self.completed.set()
+            logger.debug(f'{self.command} succeeded')
+        except Exception as err:
+            self.failed.set()
+            self.failure = err
+            logger.error(f'{self.command} failed: {err!r}')
 
 
 # ===========================================================================
@@ -502,7 +551,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.setClockButton.SetSizerProps(halign="left")
         self.setClockButton.SetToolTip("Set the time of every attached "
                                        "recorder with a real-time clock")
-        self.Bind(wx.EVT_BUTTON, self.setClocks, id=self.ID_SET_TIME)
+        self.Bind(wx.EVT_BUTTON, self.OnSetClocks, id=self.ID_SET_TIME)
         self.setClockButton.Show(not self.hideClock)
 
         self.recordButton = wx.Button(buttonpane, self.ID_START_RECORDING,
@@ -559,6 +608,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.recorderStatus = {}  # Recorder status and battery state, keyed by `Recorder`
         self.recordersByIndex = {}  # `Recorder` instances keyed by list index.
         self.indicesByRecorder = {}  # List index keyed by `Recorder`
+        self.recorderBusy = defaultdict(threading.Event)  # Events indicating a recorder is updating, keyed by `Recorder`
         self.recorderPaths = tuple(getDeviceList())
         self.selected = None
         self.selectedIdx = None
@@ -855,7 +905,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
             :see: OnDeviceListUpdate()
         """
-        foo = threading.RLock()
         if self.updating.is_set():
             return
 
@@ -869,13 +918,39 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.updating.clear()
 
 
-    def getSelected(self):
+    def getSelected(self) -> Optional[Recorder]:
         """ Get the device corresponding to the selected item in the list.
         """
         if self.selected is None:
             return None
         return self.recordersByIndex.get(self.selected, None)
 
+
+    def isDead(self) -> bool:
+        """ Callback function that indicates the dialog is still working.
+            Primarily for use as a callback in threads sending commands
+            to devices.
+        """
+        try:
+            if not self.thread or not self.thread.is_alive():
+                return True
+            return self.thread._cancel.is_set()
+        except (AttributeError, RuntimeError) as err:
+            logger.debug(f'Sign-of-life check failed: {err!r}')
+            return True
+
+
+    def enableButtons(self, enabled=True):
+        """ Disable/enable main dialog buttons while a command executes.
+        """
+        butts = self.okButton, self.cancelButton, self.setClockButton
+        for b in butts:
+            b.Enable(enabled)
+
+
+    # =======================================================================
+    # Event handling
+    # =======================================================================
 
     def OnColClick(self, evt):
         # Required by ColumnSorterMixin
@@ -993,47 +1068,56 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         evt.Skip()
         
 
-    def setClocks(self, _evt=None):
+    def OnSetClocks(self, _evt=None):
         """ Set all clocks. Used as an event handler.
         """
-        fails = []
-        butts = self.okButton, self.cancelButton, self.setClockButton
         self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
-        for b in butts:
-            b.Enable(False)
+        self.enableButtons(False)
 
-        if self.thread and self.thread.is_alive():
-            self.thread.pause()
+        try:
+            if self.thread and self.thread.is_alive():
+                self.thread.pause()
 
-        for rec in self.recordersByIndex.values():
-            try:
-                rec.setTime()
-            except Exception as err:
-                name = f"{rec.productName} SN:{rec.serial} ({rec.path})"
-                fails.append(name)
-                logger.error(f"{type(err)} setting clock on {name}: {err}")
+            deadline = time() + 5
+            threads = [DeviceCommandThread(rec, rec.setTime)
+                       for rec in self.recordersByIndex.values()]
 
-        for b in butts:
-            b.Enable(True)
+            while any(t.is_alive() for t in threads):
+                if time() > deadline:
+                    break
+                sleep(0.05)
 
-        if fails:
-            if len(fails) > 1:
-                names = "\u2022 " + ('\n\u2022 '.join(fails))
-                msg = ("Could not set recorder clocks.\n\n"
-                       "Errors prevented the clocks being set on these recorders:\n\n"
-                       f"{names}")
-            else:
-                msg = ("Could not set recorder clock.\n\n"
-                       "An error prevented the clock from being set on "
-                       f"recorder {fails[0]}.")
+            fails = []
+            for t in threads:
+                rec = t.device
+                name = f"{rec.productName} SN:{rec.serial}"
+                if t.failed.is_set():
+                    logger.error(f"Error setting clock on {rec}: {t.failure!r}")
+                    fails.append(name)
+                elif not t.completed.is_set():
+                    logger.error(f"Timed out setting clock on {rec}")
+                    fails.append(f"{name} (timed out)")
 
-            wx.MessageBox(msg, "Device Error", parent=self,
-                          style=wx.OK | wx.ICON_ERROR)
+            if fails:
+                if len(fails) > 1:
+                    names = "\u2022 " + ('\n\u2022 '.join(fails))
+                    msg = ("Could not set recorder clocks.\n\n"
+                           "Errors prevented the clocks being set on these recorders:\n\n"
+                           f"{names}")
+                else:
+                    msg = ("Could not set recorder clock.\n\n"
+                           "An error prevented the clock from being set on "
+                           f"recorder {fails[0]}.")
 
-        if self.thread and self.thread.is_alive():
-            self.thread.resume()
+                wx.MessageBox(msg, "Device Error", parent=self,
+                              style=wx.OK | wx.ICON_ERROR)
 
-        self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+        finally:
+            self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+            self.enableButtons(True)
+
+            if self.thread and self.thread.is_alive():
+                self.thread.resume()
 
 
     def OnStartRecording(self,
@@ -1056,12 +1140,12 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 self.updateRow(recorder, enabled=False)
                 if stop:
                     # recorder.command.stopRecording()
-                    t = threading.Thread(target=recorder.command.stopRecording)
-                    t.start()
+                    DeviceCommandThread(recorder, recorder.command.stopRecording,
+                                        callback=self.isDead)
                 else:
                     # recorder.command.startRecording()
-                    t = threading.Thread(target=recorder.command.startRecording)
-                    t.start()
+                    DeviceCommandThread(recorder, recorder.command.startRecording,
+                                        callback=self.isDead)
         finally:
             if self.thread and self.thread.is_alive():
                 self.thread.resume()
