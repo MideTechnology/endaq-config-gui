@@ -1,4 +1,7 @@
-from math import ceil
+"""
+Battery level/state icons, and the function that picks them.
+"""
+
 from typing import Any, Optional
 
 from wx.lib.embeddedimage import PyEmbeddedImage

@@ -17,7 +17,7 @@ import wx.lib.sized_controls as sc
 import wx.lib.mixins.listctrl as listmix
 from wx.lib.agw import ultimatelistctrl as ULC
 
-from endaq.device import (Recorder, getDevices, getDeviceList, RECORDERS,
+from endaq.device import (Recorder, getDevices, RECORDERS,
                           deviceChanged, UnsupportedFeature, DeviceError,
                           CommandError, DeviceTimeout)
 from endaq.device.base import os_specific
@@ -66,6 +66,7 @@ class DeviceScanThread(threading.Thread):
                  devFilter: Optional[Callable] = None,
                  interval: Union[int, float] = 4,
                  oneshot: bool = False,
+                 timeout: Optional[float] = 5,
                  **getDevicesArgs):
         """ A background thread for finding devices and their states. It can be
             stopped by calling `DeviceScanThread.stop()`.
@@ -92,6 +93,9 @@ class DeviceScanThread(threading.Thread):
         self._cancel.clear()
         self._pause = threading.Event()
         self._pause.clear()
+
+        self.timeout = timeout
+        self.timeouts = {}
 
 
     def stop(self):
@@ -122,10 +126,10 @@ class DeviceScanThread(threading.Thread):
         cancelSet = self._cancel.is_set
         pauseSet = self._pause.is_set
         updatingSet = self.parent.updating.is_set
+        timeout = self.timeout
 
         while bool(self.parent) and not cancelSet():
             updates += 1
-            # logger.debug(f'thread loop {updates} {cancelSet()=} {pauseSet()=} {updatingSet()=}')
 
             if pauseSet() or updatingSet():
                 sleep(self.interval / 4)
@@ -138,7 +142,10 @@ class DeviceScanThread(threading.Thread):
                 continue
 
             try:
-                result = getDevices()
+                devices = getDevices()
+                self.timeouts.update({dev: time() + timeout for dev in devices})
+                result = [dev for dev, t in self.timeouts.items() if t > time()]
+
                 status = {}
                 if self.filter:
                     result = list(filter(self.filter, result))
@@ -147,7 +154,14 @@ class DeviceScanThread(threading.Thread):
                 #  and report only current `status` in the `EvtDeviceListUpdate`.
                 #  Each thread would send a single event on completion.
                 for dev in result:
-                    if not dev.hasCommandInterface:
+                    # Not present, but not expired. Will show as disabled.
+                    # Prevents devices disappearing and reappearing when
+                    # starting/ending recordings.
+                    if dev not in devices:
+                        status[dev] = None, (None, None)
+                        continue
+
+                    elif not dev.hasCommandInterface:
                         status[dev] = None, (DeviceStatusCode.IDLE, None)
                         continue
 
@@ -347,24 +361,32 @@ def populateStatusColumn(dev: Recorder,
 
     code = code or DeviceStatusCode.IDLE
 
-    # Find specific color, or round to lowest multiple of 10
-    displayCode = code if code in root.STATUS_COLORS else code // 10
-    color = root.STATUS_COLORS.get(displayCode, None)
-    text = root.STATUS_TEXT.get(displayCode, "")
+    if code is None:
+        color = None
+        text = None
+        code = 1000
 
-    if code < 0:
-        color = color or root.STATUS_COLORS.get(-10)
-        text = text or root.STATUS_TEXT.get(-10)
+    else:
+        # Find specific color, or round to lowest multiple of 10
+        displayCode = code if code in root.STATUS_COLORS else code // 10
+        color = root.STATUS_COLORS.get(displayCode, None)
+        text = root.STATUS_TEXT.get(displayCode, "")
+
+        if code < 0:
+            color = color or root.STATUS_COLORS.get(-10)
+            text = text or root.STATUS_TEXT.get(-10)
 
     root.list.SetStringItem(index, column, text)
 
-    if color:
-        font = root.list.GetFont()
-        item = root.list.GetItem(index, column)
-        item.SetMask(ULC.ULC_MASK_FONTCOLOUR | ULC.ULC_MASK_FONT)
-        item.SetTextColour(color)
-        item.SetFont(font)
-        root.list.SetItem(item)
+    if not color:
+        color = root.list.GetTextColour()
+
+    font = root.list.GetFont()
+    item = root.list.GetItem(index, column)
+    item.SetMask(ULC.ULC_MASK_FONTCOLOUR | ULC.ULC_MASK_FONT)
+    item.SetTextColour(color)
+    item.SetFont(font)
+    root.list.SetItem(item)
 
     return code
 
@@ -396,6 +418,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         "Name": partial(_attribFormatter, "name", ""),
         "Type": partial(_attribFormatter, "productName", ""),
         "Serial #": partial(_attribFormatter, "serial", ""),
+        "Status": populateStatusColumn,
         "Bat.": populateBatteryColumn,
         "Device Control": populateButtonColumn
     }
@@ -406,11 +429,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         "Type": partial(_attribFormatter, "productName", ""),
         "Serial #": partial(_attribFormatter, "serial", ""),
         "Status": populateStatusColumn,
-        # "HW Rev.": partial(_attribFormatter, "hardwareVersion", ''),
-        # "FW Rev.": partial(_attribFormatter, "firmware", ''),
+        "HW Rev.": partial(_attribFormatter, "hardwareVersion", ''),
+        "FW Rev.": partial(_attribFormatter, "firmware", ''),
         "Bat.": populateBatteryColumn,
         "Device Control": populateButtonColumn,
-        # "Configuration": populateConfigColumn,
     }
 
     # Tool tips for the 'record' button
@@ -504,7 +526,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.hideRecord = kwargs.pop('hideRecord', False)
         self.showWarnings = kwargs.pop('showWarnings', True)
         self.showConnection = kwargs.pop('showConnection', True)
-        self.showAdvanced = kwargs.pop('showAdvanced', False) or True
+        self.showAdvanced = kwargs.pop('showAdvanced', False)
         self.filter = kwargs.pop('filter', lambda x: True)
         self.checks = kwargs.pop('checks', False)
         self.mustConfigure = kwargs.pop('mustConfig', True)
@@ -608,8 +630,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.recorderStatus = {}  # Recorder status and battery state, keyed by `Recorder`
         self.recordersByIndex = {}  # `Recorder` instances keyed by list index.
         self.indicesByRecorder = {}  # List index keyed by `Recorder`
-        self.recorderBusy = defaultdict(threading.Event)  # Events indicating a recorder is updating, keyed by `Recorder`
-        self.recorderPaths = tuple(getDeviceList())
+        # self.recorderBusy = defaultdict(threading.Event)  # Events indicating a recorder is updating, keyed by `Recorder`
         self.selected = None
         self.selectedIdx = None
         self.firstDrawing = True
@@ -738,6 +759,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         calExp = dev.getCalExpiration()
 
+        pathtext = dev.path
         if dev.path and os.path.exists(dev.path):
             freeSpace = os_specific.getFreeSpace(dev.path) / 1048576
             if freeSpace < SPACE_WARN_MB:
@@ -747,6 +769,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                     tip += " This may prevent configuration."
                     icon = self.ICON_ERROR
                 tips.append(tip)
+        elif dev.path != 'mqtt':
+            # Note: the MQTT API is still in progress. "mqtt" as path may change.
+            pathtext = ''
+
+        self.list.SetItemText(index, pathtext or '')
 
         if lifeleft is not None and lifeleft < DEV_WARN_DAYS:
             icon = max(icon, self.ICON_INFO)
@@ -870,6 +897,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             :param dev: The device being updated.
             :param enabled:
         """
+
         if dev not in self.indicesByRecorder:
             # New device, generally shouldn't happen.
             return
@@ -877,6 +905,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         index = self.indicesByRecorder[dev]
         if self.showWarnings:
             self.setItemIcon(index, dev)
+
+        # Status code `None` means device is (temporarily) unavailable
+        # (i.e., not present but not yet expired)
+        status = self.recorderStatus.get(dev, (None, (DeviceStatusCode.IDLE, '')))[1][0]
+        enabled = enabled and status is not None
 
         # enable or disable the row
         # excludes button panel - do that explicitly
@@ -905,6 +938,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
             :see: OnDeviceListUpdate()
         """
+        # Bail if an update is already being handled
         if self.updating.is_set():
             return
 
@@ -936,6 +970,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 return True
             return self.thread._cancel.is_set()
         except (AttributeError, RuntimeError) as err:
+            # Window probably deleted, and/or app exiting.
             logger.debug(f'Sign-of-life check failed: {err!r}')
             return True
 
