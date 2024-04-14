@@ -64,9 +64,9 @@ class DeviceScanThread(threading.Thread):
     def __init__(self,
                  parent: "DeviceSelectionDialog",
                  devFilter: Optional[Callable] = None,
-                 interval: Union[int, float] = 4,
+                 interval: Union[int, float] = 3,
                  oneshot: bool = False,
-                 timeout: Optional[float] = 5,
+                 timeout: Optional[float] = 4,
                  **getDevicesArgs):
         """ A background thread for finding devices and their states. It can be
             stopped by calling `DeviceScanThread.stop()`.
@@ -77,6 +77,10 @@ class DeviceScanThread(threading.Thread):
                 changes to available devices.
             :param oneshot: If True, the thread will terminate after one
                 scan. For doing manual updates.
+            :param timeout: Seconds to retain devices that have disconnected
+                and no longer appears in `getDevices()`. Prevents devices
+                that momentarily disconnect when starting/stopping recording
+                or resetting from disappearing and reappearing in the list.
 
             Additional keyword arguments are used when calling `getDevices()`.
         """
