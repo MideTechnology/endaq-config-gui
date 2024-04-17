@@ -73,8 +73,10 @@ class DeviceScanThread(threading.Thread):
 
             :param parent: The parent dialog.
             :param devFilter: A filter function to exclude devices.
-            :param interval: Time (in milliseconds) between each scan for
-                changes to available devices.
+            :param interval: Time (in milliseconds) between each full scan
+                for changes to available devices (MSD, serial, etc.). Checks
+                for drive changes are cheaper, and are run at half this
+                interval.
             :param oneshot: If True, the thread will terminate after one
                 scan. For doing manual updates.
             :param timeout: Seconds to retain devices that have disconnected

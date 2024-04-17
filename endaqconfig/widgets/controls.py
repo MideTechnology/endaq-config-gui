@@ -25,8 +25,10 @@ class ControlButtons(wx.Panel):
     STOP_TT = "Stop the recording device"
     CONFIG_TT = "Configure the recording device"
 
-    BG_NORMAL = None
-    BG_RECORING = wx.RED
+    BG_NORMAL = None  # Taken from widget's defaults
+    FG_NORMAL = None
+    BG_RECORDING = wx.RED
+    FG_RECORDING = wx.WHITE
 
     def __init__(self, root, parent, device, index, column,
                  showConfig=False):
@@ -78,6 +80,7 @@ class ControlButtons(wx.Panel):
 
         if self.BG_NORMAL is None:
             self.__class__.BG_NORMAL = self.recBtn.GetBackgroundColour()
+            self.__class__.FG_NORMAL = self.recBtn.GetForegroundColour()
 
         self.configBtn.Show(showConfig)
 
@@ -100,11 +103,13 @@ class ControlButtons(wx.Panel):
         if self.recording:
             self.recBtn.SetLabel("Stop Recording")
             self.recBtn.SetToolTip(self.STOP_TT)
-            self.recBtn.SetBackgroundColour(self.BG_RECORING)
+            self.recBtn.SetBackgroundColour(self.BG_RECORDING)
+            self.recBtn.SetForegroundColour(self.FG_RECORDING)
         else:
             self.recBtn.SetLabel("Start Recording")
             self.recBtn.SetToolTip(self.START_TT)
             self.recBtn.SetBackgroundColour(self.BG_NORMAL)
+            self.recBtn.SetForegroundColour(self.FG_NORMAL)
 
 
     def OnRecordButton(self, evt):
