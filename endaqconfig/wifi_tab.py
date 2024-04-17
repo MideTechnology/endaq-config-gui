@@ -9,13 +9,13 @@ import threading
 from time import time, sleep
 
 import wx
-from wx.lib.newevent import NewEvent
 import wx.lib.sized_controls as SC
 import wx.lib.mixins.listctrl as listmix
 
 from .base import Tab
 from .base import logger, registerTab
 from .widgets import icons
+from .widgets.events import *
 
 from endaq.device import DeviceError, DeviceTimeout
 from endaq.device.response_codes import DeviceStatusCode
@@ -37,19 +37,6 @@ CONNECTION_STATUS_TO_STR = {
 # ===============================================================================
 #
 # ===============================================================================
-
-# Response to the Wi-Fi list being read from the device. It might take a little
-# time, so it will be done asynchronously. Event attributes:
-# * data: List of AP info dictionaries.
-# * error: None if no error occurred, or the instance of the Exception if one did
-EvtConfigWiFiScan, EVT_CONFIG_WIFI_SCAN = NewEvent()
-
-# An event to be used when the Wi-Fi connection has been just been checked
-# * result: The result of the Wi-Fi connection check (in the form exported by the setWifi method)
-EvtConfigWiFiConnectionCheck, EVT_CONFIG_WIFI_CONNECTION_CHECK = NewEvent()
-
-# A custom event to be called when the Wi-Fi tab is closed
-EvtClosingTemp, EVT_CLOSING_TEMP = NewEvent()
 
 
 class WiFiScanThread(threading.Thread):

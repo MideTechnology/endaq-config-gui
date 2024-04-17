@@ -130,3 +130,7 @@ dmypy.json
 
 # IDE projects (PyCharm, etc.)
 .idea/
+
+# Icon source files. Keep only original SVG.
+icons_src/*.png
+icons_src/*.py

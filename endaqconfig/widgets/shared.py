@@ -3,12 +3,15 @@ Created on Sep 10, 2015
 
 :author: dstokes
 """
+
 from datetime import datetime
+from typing import Optional
 
 import wx
 import wx.adv
 import wx.lib.masked as wx_mc
 
+# import wx.lib.platebtn as platebtn
 # import images as images
 
 #===============================================================================
@@ -115,3 +118,81 @@ class TimeValidator(wx.Validator):
 #         if not wx.Validator_IsSilent():
 #             wx.Bell()
         return
+
+
+# ===========================================================================
+#
+# ===========================================================================
+
+class DeviceToolTip(wx.Frame):
+    """ Tooltip display for device info. Must be explicitly shown (e.g.,
+        after a mouse movement timer expires).
+
+        If ULC tooltips get fixed, this may be redundant and can be removed if so.
+    """
+
+    TOOLTIP_TIME = 900
+    MOUSE_OFFSET = wx.Point(0, 18)
+
+
+    def __init__(self,
+                 view: wx.Window):
+        """ Tooltip display for device info.
+
+            :param view: The parent view.
+        """
+        self.view = view
+        self.text = None
+
+        # Note: color not quite right.
+        fgcolor = wx.SystemSettings.GetColour(wx.SYS_COLOUR_GRAYTEXT)
+        bgcolor = wx.SystemSettings.GetColour(wx.SYS_COLOUR_WINDOW)
+
+        super().__init__(view, -1, style=wx.STAY_ON_TOP | wx.FRAME_NO_TASKBAR)
+
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        self.textWidget = wx.StaticText(self, -1, "", size=(64, 32))
+        sizer.Add(self.textWidget, 1, wx.EXPAND | wx.ALL, 4)
+
+        self.textWidget.SetForegroundColour(fgcolor)
+        self.SetBackgroundColour(bgcolor)
+
+        self.SetSizer(sizer)
+        self.Fit()
+
+        self.timer = wx.Timer(self)
+
+        self.Bind(wx.EVT_MOTION, self.OnMouseMove)
+        self.Bind(wx.EVT_TIMER, self.OnShowTimerTick, self.timer)
+
+
+    def setText(self, text: Optional[str]):
+        """ Update the hovering display.
+        """
+        if not text:
+            self.timer.Stop()
+            return
+
+        if text != self.text:
+            self.text = text
+            w = h = 0
+            for line in text.split('\n'):
+                lw, lh = self.GetTextExtent(line)
+                w = max(w, lw)
+                h += lh
+            self.SetSize((w + 10, h + 10))
+            self.textWidget.SetLabel(text)
+
+
+    def OnMouseMove(self, evt):
+        if self.IsShown():
+            self.Hide()
+        evt.Skip()
+
+
+    def OnShowTimerTick(self, _evt):
+        """ Handle the mouse motion timer expiring.
+        """
+        if not self.IsShown():
+            self.SetPosition(wx.GetMousePosition() + self.MOUSE_OFFSET)
+            self.Show()
