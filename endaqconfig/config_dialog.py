@@ -501,7 +501,7 @@ class ConfigDialog(SC.SizedDialog):
             if q == wx.YES:
                 # FUTURE: This may need a callback to prevent the GUI from
                 # getting flagged 'not responding.'
-                self.device.command.reset()
+                self.device.command.reset(wait=False)
 
         evt.Skip()
 
