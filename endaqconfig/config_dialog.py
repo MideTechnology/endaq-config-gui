@@ -34,7 +34,7 @@ import wx.lib.sized_controls as SC
 
 from ebmlite import loadSchema
 import endaq.device
-from endaq.device import Recorder, configio
+from endaq.device import Recorder, configio, ConfigError
 
 from .base import logger
 from . import base
@@ -420,13 +420,17 @@ class ConfigDialog(SC.SizedDialog):
                     self.updateDeviceConfig()
                     configio.exportConfig(self.device, dlg.GetPath())
 
+                except ConfigError as err:
+                    self.showError(str(err), "Configuration Export Failed",
+                                   style=wx.OK | wx.ICON_EXCLAMATION)
+
                 except Exception as err:
                     # TODO: More specific error message
                     logger.error('Could not export configuration ({}: {})'
                                  .format(type(err).__name__, err))
                     self.showError(
                             "The configuration data could not be exported to the "
-                            "specified file.", "Config Export Failed",
+                            "specified file.", "Configuration Export Failed",
                             style=wx.OK | wx.ICON_EXCLAMATION)
 
 
