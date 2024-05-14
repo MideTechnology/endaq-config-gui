@@ -52,6 +52,7 @@ class ControlButtons(wx.Panel):
         self.column = column
 
         self.recording = False
+        self.uploading = False
 
         bg = parent.GetBackgroundColour()
         self.SetBackgroundColour(bg)
@@ -88,17 +89,25 @@ class ControlButtons(wx.Panel):
     def updateButtons(self, enabled=True):
         """ Update the button labels, tooltips, and enabled/disabled state.
         """
-        self.recBtn.Enable(enabled and self.device.canRecord)
-        self.configBtn.Enable(enabled
-                              and self.device.hasConfigInterface
-                              and self.device.config.available)
-
         try:
             status = self.device.command.status[0]
         except (AttributeError, CommandError, UnsupportedFeature):
             status = None
 
         self.recording = status == DeviceStatusCode.RECORDING
+        self.uploading = status == DeviceStatusCode.UPLOADING
+
+
+        self.recBtn.Show(self.device.canRecord)
+        self.recBtn.Enable(enabled
+                           and self.device.canRecord
+                           and not self.uploading)
+
+        self.configBtn.Enable(enabled
+                              and self.device.hasConfigInterface
+                              and self.device.config.available
+                              and not self.uploading
+                              and not self.recording)
 
         if self.recording:
             self.recBtn.SetLabel("Stop Recording")

@@ -3,7 +3,7 @@ Dialog for selecting and/or controlling recording devices.
 
 """
 
-from collections import defaultdict, namedtuple
+from collections import namedtuple
 from datetime import datetime, timedelta
 from functools import partial
 import logging
@@ -733,11 +733,12 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         # TODO: Refactor this!
         tips = []
+        bat = ''
 
         if self.batteryCol is not None:
             bat = self.itemDataMap[index][self.batteryCol]
             if bat:
-                tips.append(bat)
+                bat += '\n'
 
         icon = self.ICON_NONE
         now = datetime.now()
@@ -786,12 +787,15 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.list.SetItemImage(index, [icon])
 
         if len(tips) == 0:
-            self.listToolTips[index] = None
-            self.listMsgs[index] = None
+            self.listToolTips[index] = bat or None
+            self.listMsgs[index] = bat or None
             return
         else:
-            self.listToolTips[index] = '\n'.join(tips)
-            self.listMsgs[index] = '\n'.join([f'\u2022 {s}' for s in tips])
+            # Popup tool tips show battery status and each message on its own
+            # line. In-dialog help message under list shows battery on one,
+            # all other messages on the other.
+            self.listToolTips[index] = bat + '\n'.join(tips)
+            self.listMsgs[index] = bat + ' '.join(tips)
 
 
     def createColumns(self):
