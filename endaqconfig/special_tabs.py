@@ -97,6 +97,10 @@ class InfoPanel(HtmlWindow):
                    'FwRev': 'Firmware Revision',
                    'McuType': 'MCU Type',
                    'FwRevStr': 'Firmware Version',
+                   'SerialCommandInterface': 'Has Serial Command Interface',
+                   'FileCommandInterface': 'Has File Command Interface',
+                   'HasEsp32': 'Has ESP32 Wi-Fi',
+                   'NcpAppFwVer': 'Network Interface FW Version',
                    }
 
     # Formatters for specific fields. The keys should be the string as
@@ -108,8 +112,14 @@ class InfoPanel(HtmlWindow):
                    'Recorder Serial': str,
                    'Calibration Date': str,
                    'Calibration Expiration Date': str,
-                   'Calibration Serial Number': lambda x: "C%05d" % x
+                   'Calibration Serial Number': lambda x: "C%05d" % x,
+                   'Has File Command Interface': lambda x: bool(x),
+                   'Has Serial Command Interface': lambda x: 'True',
+                   'Has ESP32 Wi-Fi': lambda x: 'True',
+                   'Network Interface FW Version': str,
                    }
+
+    excluded_fields = ('RecorderTypeUID', 'WispiApiLevel',)
 
     column_widths = (50, 50)
 
@@ -201,7 +211,7 @@ class InfoPanel(HtmlWindow):
 
         items = []
         for k, v in self.info.items():
-            if str(k).startswith('Unknown'):
+            if k in self.excluded_fields or str(k).startswith('Unknown'):
                 continue
 
             items.append((self.field_names.get(k, self._fromCamelCase(k)), v))

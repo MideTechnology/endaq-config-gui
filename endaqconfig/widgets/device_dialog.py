@@ -449,7 +449,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         20: wx.YELLOW,  # Reset pending
         30: wx.YELLOW,  # Start Pending
         40: wx.YELLOW,  # Triggering
-        50: wx.Colour(200, 200, 200),  # Sleeping
+        50: wx.BLUE,  # Uploading
+        100: wx.Colour(200, 200, 200),  # Sleeping
         -10: wx.RED  # Error (default for all negative status codes)
     }
 
@@ -461,7 +462,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         20: "Resetting",
         30: "Starting Recording",
         40: "Awaiting Trigger",
-        50: "Sleeping",
+        50: "Uploading",
+        100: "Sleeping",
         -10: "Error"
     }
 
@@ -714,17 +716,20 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         if dev.available:
             return self.ICON_CONNECTION_MSD
 
-        # This is a primitive mechanism based on the `ConfigInterface`
-        # subclass name. Also, all but USB are currently hypothetical.
-        configname = dev.command.__class__.__name__.lower()
-        if 'serial' in configname:
-            return self.ICON_CONNECTION_USB
-        elif 'mqtt' in configname:
-            return self.ICON_CONNECTION_WIFI
-        elif any(n in configname for n in ('bluetooth', 'bt', 'ble')):
-            return self.ICON_CONNECTION_BT
-        else:
-            return self.ICON_NONE
+        try:
+            # This is a primitive mechanism based on the `ConfigInterface`
+            # subclass name. Also, all but USB are currently hypothetical.
+            configname = dev.command.__class__.__name__.lower()
+            if 'serial' in configname:
+                return self.ICON_CONNECTION_USB
+            elif 'mqtt' in configname:
+                return self.ICON_CONNECTION_WIFI
+            elif any(n in configname for n in ('bluetooth', 'bt', 'ble')):
+                return self.ICON_CONNECTION_BT
+        except (AttributeError, NotImplementedError, UnsupportedFeature):
+            pass
+
+        return self.ICON_NONE
 
 
     def setItemIcon(self, index, dev):
