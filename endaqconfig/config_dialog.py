@@ -514,7 +514,8 @@ class ConfigDialog(SC.SizedDialog):
         """ Handle dialog cancel, prompting the user to save any changes.
         """
         if self.configChanged():
-            q = self.showError("Save configuration changes before exiting?",
+            q = self.showError("Save configuration changes before exiting?\n\n"
+                               '"No" will discard changes.',
                                "Configure Device",
                                style=(wx.YES_NO | wx.CANCEL | wx.CANCEL_DEFAULT
                                       | wx.ICON_QUESTION))
