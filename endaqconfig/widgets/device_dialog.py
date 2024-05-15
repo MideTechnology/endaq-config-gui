@@ -3,7 +3,7 @@ Dialog for selecting and/or controlling recording devices.
 
 """
 
-from collections import defaultdict, namedtuple
+from collections import namedtuple
 from datetime import datetime, timedelta
 from functools import partial
 import logging
@@ -440,7 +440,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     # Tool tips for the 'record' button
     RECORD_UNSELECTED = "No recorder selected"
     RECORD_UNSUPPORTED = "Device does not support recording via software"
-    RECORD_ENABLED = "Initiate recording on the selected device"
+    RECORD_ENABLED = "Initiate recording on all capable devices"
 
     # Text colors for the Status column
     STATUS_COLORS = {
@@ -527,7 +527,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.autoUpdate = kwargs.pop('autoUpdate', 500)
         self.hideClock = kwargs.pop('hideClock', False)
-        self.hideRecord = kwargs.pop('hideRecord', False)
+        self.hideRecord = kwargs.pop('hideRecord', True)
         self.showWarnings = kwargs.pop('showWarnings', True)
         self.showConnection = kwargs.pop('showConnection', True)
         self.showAdvanced = kwargs.pop('showAdvanced', False)
@@ -581,10 +581,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.setClockButton.Show(not self.hideClock)
 
         self.recordButton = wx.Button(buttonpane, self.ID_START_RECORDING,
-                                      "Start Recording")
+                                      "Start All Recorders")
         self.recordButton.SetSizerProps(halign="left")
         self.recordButton.SetToolTip(self.RECORD_ENABLED)
-        self.Bind(wx.EVT_BUTTON, self.OnStartRecording, id=self.ID_START_RECORDING)
+        self.Bind(wx.EVT_BUTTON, self.OnStartAllRecorders, id=self.ID_START_RECORDING)
         self.recordButton.Enable(False)
         self.recordButton.Show(not self.hideRecord)
 
@@ -738,11 +738,12 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         # TODO: Refactor this!
         tips = []
+        bat = ''
 
         if self.batteryCol is not None:
             bat = self.itemDataMap[index][self.batteryCol]
             if bat:
-                tips.append(bat)
+                bat += '\n'
 
         icon = self.ICON_NONE
         now = datetime.now()
@@ -791,12 +792,15 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.list.SetItemImage(index, [icon])
 
         if len(tips) == 0:
-            self.listToolTips[index] = None
-            self.listMsgs[index] = None
+            self.listToolTips[index] = bat or None
+            self.listMsgs[index] = bat or None
             return
         else:
-            self.listToolTips[index] = '\n'.join(tips)
-            self.listMsgs[index] = '\n'.join([f'\u2022 {s}' for s in tips])
+            # Popup tool tips show battery status and each message on its own
+            # line. In-dialog help message under list shows battery on one,
+            # all other messages on the other.
+            self.listToolTips[index] = bat + '\n'.join(tips)
+            self.listMsgs[index] = bat + ' '.join(tips)
 
 
     def createColumns(self):
@@ -1177,6 +1181,18 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         finally:
             if self.thread and self.thread.is_alive():
                 self.thread.resume()
+
+
+    def OnStartAllRecorders(self,
+                            evt: Union[wx.CommandEvent, EvtRecordButton, None] = None):
+        """ Send the 'start recording' command to all devices.
+
+            This is placeholder for future functionality. It may or may not
+            ever be implemented.
+        """
+        # If/when this is implemented, it will be like `OnSetClocks()`
+        logger.warning("OnStartAllRecorders() is not implemented (yet)!")
+        evt.Skip()
 
 
     def OnDeviceListUpdate(self, evt):
