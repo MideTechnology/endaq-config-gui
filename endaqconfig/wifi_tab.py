@@ -9,13 +9,13 @@ import threading
 from time import time, sleep
 
 import wx
-from wx.lib.newevent import NewEvent
 import wx.lib.sized_controls as SC
 import wx.lib.mixins.listctrl as listmix
 
 from .base import Tab
 from .base import logger, registerTab
 from .widgets import icons
+from .widgets.events import *
 
 from endaq.device import DeviceError, DeviceTimeout
 from endaq.device.response_codes import DeviceStatusCode
@@ -37,19 +37,6 @@ CONNECTION_STATUS_TO_STR = {
 # ===============================================================================
 #
 # ===============================================================================
-
-# Response to the Wi-Fi list being read from the device. It might take a little
-# time, so it will be done asynchronously. Event attributes:
-# * data: List of AP info dictionaries.
-# * error: None if no error occurred, or the instance of the Exception if one did
-EvtConfigWiFiScan, EVT_CONFIG_WIFI_SCAN = NewEvent()
-
-# An event to be used when the Wi-Fi connection has been just been checked
-# * result: The result of the Wi-Fi connection check (in the form exported by the setWifi method)
-EvtConfigWiFiConnectionCheck, EVT_CONFIG_WIFI_CONNECTION_CHECK = NewEvent()
-
-# A custom event to be called when the Wi-Fi tab is closed
-EvtClosingTemp, EVT_CLOSING_TEMP = NewEvent()
 
 
 class WiFiScanThread(threading.Thread):
@@ -138,7 +125,7 @@ class ContinousNetworkStatusChecker(threading.Thread):
                 if bool(self.parent):
                     wx.PostEvent(self.parent, evt)
 
-            except DeviceTimeout as E:
+            except DeviceTimeout:
                 logger.warning("Timed out when checking the network connection, retrying")
 
             except DeviceError as E:
@@ -291,15 +278,12 @@ class WiFiSelectionTab(Tab):
             integrated with the rest of the tabs.
         """
         self.info = []
-
+        self.parent = kwargs['root']
         self.device = kwargs['root'].device
 
         super(WiFiSelectionTab, self).__init__(*args, **kwargs)
 
-        self.parent = kwargs['root']
-
         self.networkStatusThread = ContinousNetworkStatusChecker(self)
-
         self.networkStatusThread.start()
 
 
@@ -324,7 +308,7 @@ class WiFiSelectionTab(Tab):
         self.list = self.WifiListCtrl(self, -1,
                                       style=(wx.LC_REPORT | wx.BORDER_SUNKEN | wx.LC_SORT_ASCENDING |
                                              wx.LC_VRULES | wx.LC_HRULES | wx.LC_SINGLE_SEL))
-
+        # self.list.EnableCheckBoxes()
         sizer.Add(self.list, 1, wx.EXPAND | wx.ALL, 8)
 
         self.list.setResizeColumn(0)
@@ -338,7 +322,6 @@ class WiFiSelectionTab(Tab):
         self.list.SetColumnWidth(0, wx.LIST_AUTOSIZE)
 
         self.list.InsertColumn(1, self.COLUMNS[1], width=wx.LIST_AUTOSIZE)
-
         self.list.InsertColumn(2, self.COLUMNS[2], width=wx.LIST_AUTOSIZE)
 
         self.listFont = self.list.GetFont()
@@ -368,7 +351,7 @@ class WiFiSelectionTab(Tab):
         self.pwField.Enable(False)
 
         pwstyle = wx.RESERVE_SPACE_EVEN_IF_HIDDEN
-        pwsizer.AddMany(((self.pwCheck, 0, pwstyle),
+        pwsizer.AddMany(((self.pwCheck, 0, pwstyle | wx.ALIGN_CENTER_VERTICAL),
                          (self.pwField, 1, pwstyle | wx.EXPAND)))
         sizer.Add(pwsizer, 0, wx.EXPAND | wx.ALL, 8)
 
@@ -588,7 +571,7 @@ class WiFiSelectionTab(Tab):
         enable = False
 
         # Check for changes of selected AP
-        if self.firstSelected == -1 or self.selected != self.firstSelected:
+        if self.selected != self.firstSelected:
             enable = True
         elif self.info[self.firstSelected]['SSID'] in self.passwords:
             enable = True

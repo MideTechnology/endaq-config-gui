@@ -7,6 +7,8 @@ running from the command line.
 import logging
 import wx
 
+from endaq.device import getRecorder
+
 from .config_dialog import __DEBUG__, configureRecorder, logger
 from .widgets import device_dialog
 
@@ -21,6 +23,9 @@ def run(debug=__DEBUG__):
                         help="Show advanced configuration options")
     parser.add_argument("-D", '--debug', action="store_true",
                         help="Run in 'debug' mode, showing extra messages, etc.")
+    parser.add_argument("path", nargs='?',
+                        help=("The path of the device to configure (optional). "
+                              "Foregoes displaying the device list."))
     args = parser.parse_args()
 
     debug = debug or args.debug
@@ -34,8 +39,16 @@ def run(debug=__DEBUG__):
         _app = wx.App()
 
     try:
-        dev = device_dialog.selectDevice(showAdvanced=args.advanced,
-                                         debug=debug)
+        if not args.path:
+            dev = device_dialog.selectDevice(showAdvanced=args.advanced,
+                                             debug=debug)
+        else:
+            dev = getRecorder(args.path)
+            if not dev:
+                wx.MessageBox(f'Could not find a valid enDAQ device on path "{args.path}"',
+                              'enDAQ Configuration Error',  style=wx.OK | wx.ICON_ERROR | wx.CENTRE)
+                return
+
         wx.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
         if dev:
             configureRecorder(dev,
