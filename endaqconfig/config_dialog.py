@@ -107,6 +107,16 @@ class ConfigDialog(SC.SizedDialog):
             # Typically, this won't happen outside of testing.
             devName = "Recorder"
 
+        try:
+            # HACK: Force the config interface to load data. This really
+            # shouldn't be necessary, but this is a bit of a special case.
+            # This will probably get fixed in `endaq.device`.
+            self.device.config.configUi = None
+            _ = self.device.config.items
+        except AttributeError as err:
+            # Typically, this won't happen outside of testing, either.
+            logger.debug(f'AttributeError forcing config to load: {err}')
+
         kwargs.setdefault("title", f"Configure {devName}")
         kwargs.setdefault("style", wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
