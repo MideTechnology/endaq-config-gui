@@ -1888,3 +1888,13 @@ class Tab(SP.ScrolledPanel, Group):
             the special-case subclasses.
         """
         pass
+
+
+# ===============================================================================
+# Future specialized fields. For now, they use existing field types.
+# ===============================================================================
+
+FIELD_TYPES["IPAddressField"] = ASCIIField
+FIELD_TYPES["CheckIPAddressField"] = CheckASCIIField
+FIELD_TYPES["ServiceNameField"] = TextField
+FIELD_TYPES["CheckServiceNameField"] = CheckTextField
