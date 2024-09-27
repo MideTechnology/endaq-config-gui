@@ -242,7 +242,7 @@ class ConfigDialog(SC.SizedDialog):
         self.hints = self.device.config.getConfigUI()
 
 
-    def applyConfigData(self, data: Dict[int, Any], reset: bool = False):
+    def applyConfigData(self, data: Dict[int, Any], reset: bool = True):
         """ Apply a dictionary of configuration data to the UI.
 
             :param data: The dictionary of config values, keyed by ConfigID.
@@ -408,7 +408,10 @@ class ConfigDialog(SC.SizedDialog):
         with wx.FileDialog(self, message="Export Device Configuration",
                            style=wx.FD_OPEN, wildcard=wildcard) as dlg:
             if dlg.ShowModal() == wx.ID_OK:
-                configio.importConfig(self.device, dlg.GetPath())
+                configio.importConfig(self.device, dlg.GetPath(),
+                                      exclude=(0x8ff7f, 0x9ff7f,  # name, notes
+                                               0x18ff7f, 0x19ff7f, 0x1aff7f,  # wi-fi stuff
+                                               0x28ff7f, 0x29ff7f, 0x2aff7f))
                 self.loadConfigData()
 
 
@@ -428,7 +431,7 @@ class ConfigDialog(SC.SizedDialog):
                 try:
                     self.updateConfigData()
                     self.updateDeviceConfig()
-                    configio.exportConfig(self.device, dlg.GetPath())
+                    configio.exportConfig(self.device, dlg.GetPath(), unknown=True)
 
                 except ConfigError as err:
                     self.showError(str(err), "Configuration Export Failed",
