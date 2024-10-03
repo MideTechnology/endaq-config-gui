@@ -1,18 +1,19 @@
 """
-Device control buttons.
-
-Two and a half versions:
-    1. Normal buttons
-    2. Standard wxPython BitmapButtons
-    2½. wxPython PlateButtons
+Device control buttons and column population/content formatting.
 """
 
 import wx
+from wx.lib.agw import ultimatelistctrl as ULC
 
 from endaq.device.response_codes import DeviceStatusCode
-from endaq.device import CommandError, UnsupportedFeature
+from endaq.device import CommandError, UnsupportedFeature, Recorder
 
+from . import battery_icons
 from .events import EvtConfigButton, EvtRecordButton
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .device_dialog import DeviceSelectionDialog
 
 
 class ControlButtons(wx.Panel):
@@ -144,3 +145,132 @@ class ControlButtons(wx.Panel):
         except RuntimeError:
             # Dialog probably closed during scan, which is okay.
             pass
+
+# ===========================================================================
+# Column 'formatters.' They actually set the column display and return the
+# value for the list sorting (usually the same as the display text, if any).
+# Standard arguments are the `Recorder`, the index (row), the column number,
+# and the root window/dialog.
+# ===========================================================================
+
+def _attribFormatter(attrib: str,
+                     default: str,
+                     dev: Recorder,
+                     index: int,
+                     column: int,
+                     root: "DeviceSelectionDialog") -> str:
+    """ Adds a column populated with a Recorder's attribute. Meant to be used
+        with `partial()` to supply the first 2 arguments.
+
+        :param attrib: The device's attribute name.
+        :param default: The default value to display if the attribute is `None`.
+        :param dev: The device beind displayed.
+        :param index: The list index (row).
+        :param column: The index of the column being populated.
+        :param root: The parent window/dialog.
+        :return: A string for use in column sorting (same as what's shown).
+    """
+    val = str(getattr(dev, attrib, default) or '')
+    root.list.SetStringItem(index, column, f" {val} ", [])
+
+    return val
+
+
+def populateButtonColumn(dev: Recorder,
+                         index: int,
+                         column: int,
+                         root: "DeviceSelectionDialog") -> str:
+    """ Add a column containing buttons.
+
+        :param dev: The device beind displayed.
+        :param index: The list index (row).
+        :param column: The index of the column being populated.
+        :param root: The parent window/dialog.
+        :return: A string for use in column sorting ("" in this case).
+    """
+    pan = ControlButtons(root, root.list, dev, index, column)
+    root.list.SetItemWindow(index, column, pan, expand=True)
+    root.minWidths[root.buttonCol] = pan.GetSize()[0]
+    return ""
+
+
+def populateBatteryColumn(dev: Recorder,
+                          index: int,
+                          column: int,
+                          root: "DeviceSelectionDialog") -> str:
+    """ Add/update a column containing the battery status icon.
+
+        :param dev: The device beind displayed.
+        :param index: The list index (row).
+        :param column: The index of the column being populated.
+        :param root: The parent window/dialog.
+        :return: A string for use in column sorting.
+    """
+    if column is None:
+        return ''
+
+    batIcon, batDesc = 0, ''
+
+    try:
+        batStat = root.recorderStatus[dev][0]
+        batName, batDesc = battery_icons.batStat2name(batStat)
+        batIcon = root.batteryIconIndices.get(batName, 0)
+    except KeyError:
+        # Probably old, doesn't support getBatteryState()
+        pass
+
+    root.list.SetStringItem(index, column, '', batIcon)
+    return batDesc
+
+
+def populateStatusColumn(dev: Recorder,
+                         index: int,
+                         column: int,
+                         root: "DeviceSelectionDialog") -> str:
+    """ Add/update a column displaying the device status.
+
+        :param dev: The device beind displayed.
+        :param index: The list index (row).
+        :param column: The index of the column being populated.
+        :param root: The parent window/dialog.
+        :return: A string for use in column sorting.
+    """
+    if column is None:
+        return ''
+
+    try:
+        code, msg = dev.command.status
+    except (AttributeError, UnsupportedFeature):
+        code, msg = None, ''
+
+    code = code or DeviceStatusCode.IDLE
+
+    if code is None:
+        color = None
+        text = None
+        code = 1000
+
+    else:
+        # Find specific color, or round to lowest multiple of 10
+        displayCode = code if code in root.STATUS_COLORS else code // 10
+        color = root.STATUS_COLORS.get(displayCode, None)
+        text = root.STATUS_TEXT.get(displayCode, "")
+
+        if code < 0:
+            color = color or root.STATUS_COLORS.get(-10)
+            text = text or root.STATUS_TEXT.get(-10)
+
+    root.list.SetStringItem(index, column, text)
+
+    if not color:
+        color = root.list.GetTextColour()
+
+    font = root.list.GetFont()
+    item = root.list.GetItem(index, column)
+    item.SetMask(ULC.ULC_MASK_FONTCOLOUR | ULC.ULC_MASK_FONT)
+    item.SetTextColour(color)
+    item.SetFont(font)
+    root.list.SetItem(item)
+
+    return code
+

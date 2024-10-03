@@ -34,3 +34,10 @@ EvtConfigWiFiConnectionCheck, EVT_CONFIG_WIFI_CONNECTION_CHECK = NewEvent()
 
 # A custom event to be called when the Wi-Fi tab is closed
 EvtClosingTemp, EVT_CLOSING_TEMP = NewEvent()
+
+
+# ===========================================================================
+# Remote/MQTT-related events
+# ===========================================================================
+
+EvtBrokerUpdate, EVT_BROKER_UPDATE = NewEvent()

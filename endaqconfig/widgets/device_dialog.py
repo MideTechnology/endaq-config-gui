@@ -10,27 +10,28 @@ import logging
 import os.path
 import threading
 from time import sleep, time
-from typing import Callable, Optional, Union
+from typing import Optional, Union
 
 import wx
 import wx.lib.sized_controls as sc
 import wx.lib.mixins.listctrl as listmix
 from wx.lib.agw import ultimatelistctrl as ULC
 
-from endaq.device import (Recorder, getDevices, RECORDERS,
-                          deviceChanged, UnsupportedFeature, DeviceError,
-                          CommandError, DeviceTimeout)
+from endaq.device import (Recorder, RECORDERS,
+                          UnsupportedFeature, DeviceError)
 from endaq.device.base import os_specific
 from endaq.device.response_codes import DeviceStatusCode
 
-from .shared import DeviceToolTip
-from . import icons
 from . import battery_icons
-from . import controls
-from .events import (EvtDeviceListUpdate, EVT_DEVICE_LIST_UPDATE,
+from . import icons
+from .controls import (_attribFormatter, populateStatusColumn,
+                       populateButtonColumn, populateBatteryColumn)
+from .events import (EVT_DEVICE_LIST_UPDATE,
                      EvtRecordButton, EVT_RECORD_BUTTON)
+from .threads import DeviceScanThread, DeviceCommandThread
+from .shared import DeviceToolTip
 
-logger = logging.getLogger('endaqconfig')
+logger = logging.getLogger(__name__)
 
 # ===========================================================================
 # Threshold values for showing warning or error icons
@@ -46,351 +47,6 @@ SPACE_WARN_MB = SPACE_MIN_MB * 4
 CAL_WARN_DAYS = timedelta(days=120)
 DEV_WARN_DAYS = timedelta(days=182)
 
-
-# ===========================================================================
-#
-# ===========================================================================
-
-class DeviceScanThread(threading.Thread):
-    """
-    A background thread for finding devices and their states. It can be
-    stopped by calling `DeviceScanThread.stop()`.
-    """
-
-    def __init__(self,
-                 parent: "DeviceSelectionDialog",
-                 devFilter: Optional[Callable] = None,
-                 interval: Union[int, float] = 3,
-                 oneshot: bool = False,
-                 timeout: Optional[float] = 4,
-                 **getDevicesArgs):
-        """ A background thread for finding devices and their states. It can be
-            stopped by calling `DeviceScanThread.stop()`.
-
-            :param parent: The parent dialog.
-            :param devFilter: A filter function to exclude devices.
-            :param interval: Time (in milliseconds) between each full scan
-                for changes to available devices (MSD, serial, etc.). Checks
-                for drive changes are cheaper, and are run at half this
-                interval.
-            :param oneshot: If True, the thread will terminate after one
-                scan. For doing manual updates.
-            :param timeout: Seconds to retain devices that have disconnected
-                and no longer appears in `getDevices()`. Prevents devices
-                that momentarily disconnect when starting/stopping recording
-                or resetting from disappearing and reappearing in the list.
-
-            Additional keyword arguments are used when calling `getDevices()`.
-        """
-        super().__init__(name=type(self).__name__)
-        self.daemon = True
-
-        self.parent = parent
-        self.interval = interval / 1000
-        self.filter = devFilter
-        self.oneshot = oneshot
-        self.getDevicesArgs = getDevicesArgs
-
-        self._cancel = threading.Event()
-        self._cancel.clear()
-        self._pause = threading.Event()
-        self._pause.clear()
-
-        self.timeout = timeout
-        self.timeouts = {}
-
-
-    def stop(self):
-        logger.debug('Stopping scanning thread')
-        self._cancel.set()
-
-
-    def pause(self):
-        logger.debug('Pausing scanning thread')
-        self._pause.set()
-
-
-    def resume(self):
-        logger.debug('Resuming scanning thread')
-        self._pause.clear()
-
-
-    def paused(self):
-        return self._pause.is_set()
-
-
-    def run(self):
-        """ The main loop.
-        """
-        logger.debug('Started scanning thread')
-
-        updates = -1
-        cancelSet = self._cancel.is_set
-        pauseSet = self._pause.is_set
-        updatingSet = self.parent.updating.is_set
-        timeout = self.timeout
-
-        while bool(self.parent) and not cancelSet():
-            updates += 1
-
-            if pauseSet() or updatingSet():
-                sleep(self.interval / 4)
-                continue
-
-            # Only do `getDevices()` every other time, or if the drives have
-            # changed (`deviceChanged()` is cheap, `getDevices()` less so)
-            if not self.oneshot and updates % 2 != 0 and not deviceChanged(recordersOnly=False):
-                sleep(self.interval / 2)
-                continue
-
-            try:
-                devices = getDevices()
-                self.timeouts.update({dev: time() + timeout for dev in devices})
-                result = [dev for dev, t in self.timeouts.items() if t > time()]
-
-                status = {}
-                if self.filter:
-                    result = list(filter(self.filter, result))
-
-                # TODO: Put status-getting for each device in its own thread
-                #  and report only current `status` in the `EvtDeviceListUpdate`.
-                #  Each thread would send a single event on completion.
-                for dev in result:
-                    # Not present, but not expired. Will show as disabled.
-                    # Prevents devices disappearing and reappearing when
-                    # starting/ending recordings.
-                    if dev not in devices:
-                        status[dev] = None, (None, None)
-                        continue
-
-                    elif not dev.hasCommandInterface:
-                        status[dev] = None, (DeviceStatusCode.IDLE, None)
-                        continue
-
-                    try:
-                        bat = dev.command.getBatteryStatus(callback=cancelSet)
-                        stat = dev.command.status
-                    except (NotImplementedError, UnsupportedFeature):
-                        # Very old firmware and/or no serial command interface.
-                        bat = None
-                        stat = DeviceStatusCode.IDLE, None
-                    except CommandError:
-                        # Older FW that doesn't support GetBatteryStatus returns
-                        # ERR_INVALID_COMMAND. Try to ping to get status.
-                        try:
-                            dev.command.ping(callback=cancelSet)
-                            bat = None
-                            stat = dev.command.status
-                        except (DeviceError, AttributeError, IOError):
-                            bat = None
-                            stat = DeviceStatusCode.IDLE, None
-
-                    # logger.debug(f'{dev} {bat=} {stat=}')
-                    status[dev] = bat, stat, dev.path
-
-                evt = EvtDeviceListUpdate(devices=result, status=status)
-
-                # Check parent again to avoid a race condition during shutdown
-                if bool(self.parent):
-                    wx.PostEvent(self.parent, evt)
-                else:
-                    logger.debug('Parent gone, did not post update event!')
-
-            except DeviceTimeout:
-                logger.warning("Timed out when scanning for devices, retrying")
-
-            except DeviceError as E:
-                if E.args and E.args[0] == DeviceStatusCode.ERR_BUSY:
-                    logger.info("Device repoted ERR_BUSY, retrying")
-                else:
-                    logger.error(E)
-                    raise
-
-            except IOError as E:
-                # TODO: Catch serial error(s), too?
-                logger.warning(E)
-
-            if self.oneshot:
-                break
-
-            sleep(self.interval)
-
-        logger.debug('Scanning thread stopped')
-
-
-class DeviceCommandThread(threading.Thread):
-    """
-    A slightly safer-than-normal thread for asynchronously calling simple
-    `Recorder` methods. Exceptions are caught and kept for later handing.
-
-    Note: Threads start immediately upon instantiation!
-    """
-
-    def __init__(self,
-                 device: Recorder,
-                 command: Callable,
-                 *args,
-                 **kwargs):
-        """ A slightly safer-than-normal thread for asynchronously calling
-            simple `Recorder` methods. Note that threads start immediately
-            upon instantiation!
-
-            :param device: The device running the command.
-            :param command: The function/method to call.
-
-            Other arguments/keyword arguments are used when calling `command`
-            (like `functools.partial`).
-        """
-        self.device = device
-        self.command = command
-        self.args = args
-        self.kwargs = kwargs
-        self.failed = threading.Event()  # Set if command raises an exception
-        self.completed = threading.Event()  # Set upon successful completion
-        self.failure = None  # Exception raised by the command (if any)
-
-        super().__init__(daemon=True)
-        self.start()
-
-
-    def run(self):
-        try:
-            self.command(*self.args, **self.kwargs)
-            self.completed.set()
-            logger.debug(f'{self.command} succeeded')
-        except Exception as err:
-            self.failed.set()
-            self.failure = err
-            logger.error(f'{self.command} failed: {err!r}')
-
-
-# ===========================================================================
-# Column 'formatters.' They actually set the column display and return the
-# value for the list sorting (usually the same as the display text, if any).
-# Standard arguments are the `Recorder`, the index (row), the column number,
-# and the root window/dialog.
-# ===========================================================================
-
-def _attribFormatter(attrib: str, 
-                     default: str, 
-                     dev: Recorder, 
-                     index: int, 
-                     column: int, 
-                     root: "DeviceSelectionDialog") -> str:
-    """ Adds a column populated with a Recorder's attribute. Meant to be used
-        with `partial()` to supply the first 2 arguments.
-
-        :param attrib: The device's attribute name.
-        :param default: The default value to display if the attribute is `None`.
-        :param dev: The device beind displayed.
-        :param index: The list index (row).
-        :param column: The index of the column being populated.
-        :param root: The parent window/dialog.
-        :return: A string for use in column sorting (same as what's shown).
-    """
-    val = str(getattr(dev, attrib, default) or '')
-    root.list.SetStringItem(index, column, f" {val} ", [])
-
-    return val
-
-
-def populateButtonColumn(dev: Recorder,
-                         index: int,
-                         column: int,
-                         root: "DeviceSelectionDialog") -> str:
-    """ Add a column containing buttons.
-
-        :param dev: The device beind displayed.
-        :param index: The list index (row).
-        :param column: The index of the column being populated.
-        :param root: The parent window/dialog.
-        :return: A string for use in column sorting ("" in this case).
-    """
-    pan = controls.ControlButtons(root, root.list, dev, index, column)
-    root.list.SetItemWindow(index, column, pan, expand=True)
-    root.minWidths[root.buttonCol] = pan.GetSize()[0]
-    return ""
-
-
-def populateBatteryColumn(dev: Recorder,
-                          index: int,
-                          column: int,
-                          root: "DeviceSelectionDialog") -> str:
-    """ Add/update a column containing the battery status icon.
-
-        :param dev: The device beind displayed.
-        :param index: The list index (row).
-        :param column: The index of the column being populated.
-        :param root: The parent window/dialog.
-        :return: A string for use in column sorting.
-    """
-    if column is None:
-        return ''
-
-    batIcon, batDesc = 0, ''
-
-    try:
-        batStat = root.recorderStatus[dev][0]
-        batName, batDesc = battery_icons.batStat2name(batStat)
-        batIcon = root.batteryIconIndices.get(batName, 0)
-    except KeyError:
-        # Probably old, doesn't support getBatteryState()
-        pass
-
-    root.list.SetStringItem(index, column, '', batIcon)
-    return batDesc
-
-
-def populateStatusColumn(dev: Recorder,
-                         index: int,
-                         column: int,
-                         root: "DeviceSelectionDialog") -> str:
-    """ Add/update a column displaying the device status.
-
-        :param dev: The device beind displayed.
-        :param index: The list index (row).
-        :param column: The index of the column being populated.
-        :param root: The parent window/dialog.
-        :return: A string for use in column sorting.
-    """
-    if column is None:
-        return ''
-
-    try:
-        code, msg = dev.command.status
-    except (AttributeError, UnsupportedFeature):
-        code, msg = None, ''
-
-    code = code or DeviceStatusCode.IDLE
-
-    if code is None:
-        color = None
-        text = None
-        code = 1000
-
-    else:
-        # Find specific color, or round to lowest multiple of 10
-        displayCode = code if code in root.STATUS_COLORS else code // 10
-        color = root.STATUS_COLORS.get(displayCode, None)
-        text = root.STATUS_TEXT.get(displayCode, "")
-
-        if code < 0:
-            color = color or root.STATUS_COLORS.get(-10)
-            text = text or root.STATUS_TEXT.get(-10)
-
-    root.list.SetStringItem(index, column, text)
-
-    if not color:
-        color = root.list.GetTextColour()
-
-    font = root.list.GetFont()
-    item = root.list.GetItem(index, column)
-    item.SetMask(ULC.ULC_MASK_FONTCOLOUR | ULC.ULC_MASK_FONT)
-    item.SetTextColour(color)
-    item.SetFont(font)
-    root.list.SetItem(item)
-
-    return code
 
 
 # ===========================================================================
@@ -534,6 +190,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.filter = kwargs.pop('filter', lambda x: True)
         self.checks = kwargs.pop('checks', False)
         self.mustConfigure = kwargs.pop('mustConfig', True)
+        self.remote = kwargs.pop('remote', True)
         okText = kwargs.pop('okText', "Configure")
         okHelp = kwargs.pop('okHelp', 'Configure the selected device')
         cancelText = kwargs.pop('cancelText', "Close")
@@ -568,6 +225,49 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.infoText.SetSizerProps(expand=True)
         self.infoText.Show(self.showWarnings)
 
+        if self.remote is not None:
+            self._addBrokerSelect(pane)
+
+        self._addButtons(pane, okText, okHelp, cancelText)
+
+        self.populateList()
+        self.Fit()
+        self.SetMinSize((640, 300))
+        self.SetMaxSize((1500, 600))
+
+        self.Layout()
+        self.Centre()
+
+        self.Bind(wx.EVT_SHOW, self.OnShow)
+        self.Bind(EVT_RECORD_BUTTON, self.OnStartRecording)
+        self.Bind(EVT_DEVICE_LIST_UPDATE, self.OnDeviceListUpdate)
+
+
+    def _addBrokerSelect(self, pane):
+        """ Add MQTT Broker selection widgets.
+        """
+        selpane = sc.SizedPanel(pane, -1)
+        selpane.SetSizerType("horizontal")
+        selpane.SetSizerProps(expand=True)
+        self.remoteCheck = wx.CheckBox(selpane, -1, "Show Remote Devices")
+        self.remoteCheck.SetSizerProps(valign='centre')
+        self.brokerText = wx.StaticText(selpane, -1, "Broker:", size=(-1, self.remoteCheck.GetSize()[1]))
+        self.brokerText.SetSizerProps(proportion=0, valign='centre', halign="right")
+        self.brokerList = wx.ComboBox(selpane, -1, style=wx.CB_DROPDOWN)
+        self.brokerList.SetSizerProps(proportion=2)
+        self.brokerScanBtn = wx.Button(selpane, -1, "Rescan")
+
+        self.remoteCheck.Bind(wx.EVT_CHECKBOX, self.OnRemoteCheckChanged)
+        self.brokerList.Bind(wx.EVT_COMBOBOX, self.OnBrokerSelected)
+        self.brokerScanBtn.Bind(wx.EVT_BUTTON, self.OnBrokerRescan)
+
+        self.remoteCheck.SetValue(self.remote)
+        self.OnRemoteCheckChanged(None)
+
+
+    def _addButtons(self, pane, okText, okHelp, cancelText):
+        """ Add device selection dialog bottom buttons.
+        """
         buttonpane = sc.SizedPanel(pane, -1)
         buttonpane.SetSizerType("horizontal")
         buttonpane.SetSizerProps(expand=True)
@@ -596,18 +296,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.okButton.Enable(False)
         self.cancelButton = wx.Button(buttonpane, wx.ID_CANCEL, cancelText)
         self.cancelButton.SetSizerProps(halign="right")
-
-        self.populateList()
-        self.Fit()
-        self.SetMinSize((640, 300))
-        self.SetMaxSize((1500, 600))
-
-        self.Layout()
-        self.Centre()
-
-        self.Bind(wx.EVT_SHOW, self.OnShow)
-        self.Bind(EVT_RECORD_BUTTON, self.OnStartRecording)
-        self.Bind(EVT_DEVICE_LIST_UPDATE, self.OnDeviceListUpdate)
 
 
     def initList(self,
@@ -1225,6 +913,34 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.updateTimerCalls += 1
 
+
+    def OnRemoteCheckChanged(self, _evt):
+        """ Handle the 'remote' checkbox changing. Also used to update
+            things on startup.
+        """
+        checked = self.remoteCheck.GetValue()
+        self.brokerText.Show(checked)
+        self.brokerList.Show(checked)
+        self.brokerScanBtn.Show(checked)
+
+
+    def OnBrokerSelected(self, evt):
+        """ Handle an MQTT broker selection.
+        """
+        ...
+
+
+    def OnBrokerRescan(self, evt):
+        """ Handle 'scan' button press, starting a broker list update.
+        """
+        ...
+
+
+    def OnBrokerListUpdate(self, evt):
+        """ Handle an event generated by the completion of a mDNS scan for
+            MQTT brokers
+        """
+        ...
 
 # ===========================================================================
 #
