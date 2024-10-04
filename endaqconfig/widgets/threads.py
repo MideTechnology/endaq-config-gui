@@ -1,3 +1,8 @@
+"""
+Threads used by the Device Dialog, for display updating and sending
+simple commands to devices in the background.
+"""
+
 import threading
 from time import sleep, time
 from typing import Callable, Optional, Union
@@ -115,6 +120,7 @@ class DeviceScanThread(threading.Thread):
                 continue
 
             try:
+                # TODO: Get MQTT devices!
                 devices = getDevices()
                 self.timeouts.update({dev: time() + timeout for dev in devices})
                 result = [dev for dev, t in self.timeouts.items() if t > time()]
@@ -233,4 +239,3 @@ class DeviceCommandThread(threading.Thread):
             self.failed.set()
             self.failure = err
             logger.error(f'{self.command} failed: {err!r}')
-
