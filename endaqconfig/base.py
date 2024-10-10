@@ -688,7 +688,7 @@ class ConfigWidget(wx.Panel, ConfigBase):
     def setToDefault(self, check=False):
         """ Reset the Field to its default value.
         """
-        super(ConfigWidget, self).setToDefault()
+        super(ConfigWidget, self).setToDefault(check=check)
         self.setCheck(check)
 
 
