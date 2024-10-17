@@ -399,7 +399,6 @@ class ConfigDialog(SC.SizedDialog):
     #
     # ===========================================================================
 
-
     def OnImportButton(self, _evt: Optional[wx.Event]):
         """ Handle the "Import..." button.
         """
@@ -455,6 +454,12 @@ class ConfigDialog(SC.SizedDialog):
     def OnOK(self, evt: wx.Event):
         """ Handle dialog OK, saving changes.
         """
+        # Try to ensure Wi-Fi threads have stopped. Redundant in most cases, but
+        # needed in some error conditions.
+        for t in self.tabs:
+            if hasattr(t, 'shutdown'):
+                t.shutdown()
+
         if 0x18ff7f in self.device.config.items:
             wifiWasEnabled = bool(self.device.config.items[0x18ff7f].value)
         else:
@@ -476,8 +481,10 @@ class ConfigDialog(SC.SizedDialog):
                    "configuration data.\n\n")
             if err.errno == errno.ENOENT:
                 msg += "The recorder appears to have been removed"
-            else:
+            elif err.errno:
                 msg += os.strerror(err.errno)
+            else:
+                msg += str(err)
 
             if self.showAdvanced:
                 if err.errno in errno.errorcode:
