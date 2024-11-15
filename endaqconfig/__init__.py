@@ -3,7 +3,7 @@ A GUI for configuring enDAQ data recoders. This can be run standalone, or
 imported into another script.
 """
 
-__version__ = "2.0.2b1"
+__version__ = "2.0.2"
 
 import logging
 
