@@ -205,7 +205,7 @@ class ConfigDialog(SC.SizedDialog):
         self.Fit()
         self.SetMinSize((500, 480))
         self.SetSize((620, 700))
-        wx.SetCursor(wx.Cursor(wx.CURSOR_ARROW))
+        wx.SetCursor(wx.NullCursor)
 
 
     def buildUI(self):
@@ -465,13 +465,33 @@ class ConfigDialog(SC.SizedDialog):
         else:
             wifiWasEnabled = False
 
-        if not self.saveOnOk:
-            self.updateConfigData()
-            evt.Skip()
-            return
-
         try:
+            wx.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
+
+            if not self.saveOnOk:
+                self.updateConfigData()
+                evt.Skip()
+                return
+
             self.saveConfigData()
+
+            # Handle other exceptions here if need be.
+
+            self._saveTabs()
+            self._setClock()
+
+            if self.device.hasWifi and self.configData.get(0x18ff7f) != wifiWasEnabled:
+                q = wx.MessageBox("Reset recording device?\n\n"
+                                  "Enabling or disabling Wi-Fi requires the "
+                                  "recording device to reset in order to take effect.\n"
+                                  "Reset recorder now?",
+                                  "Configure Device",
+                                  style=(wx.YES_NO | wx.YES_DEFAULT
+                                         | wx.ICON_QUESTION))
+                if q == wx.YES:
+                    # FUTURE: This may need a callback to prevent the GUI from
+                    # getting flagged 'not responding.'
+                    self.device.command.reset(wait=False)
 
         except (IOError, WindowsError) as err:
             if self.DEBUG and not isCompiled():
@@ -509,23 +529,8 @@ class ConfigDialog(SC.SizedDialog):
             evt.Skip()
             return
 
-        # Handle other exceptions here if need be.
-
-        self._saveTabs()
-        self._setClock()
-
-        if self.device.hasWifi and self.configData.get(0x18ff7f) != wifiWasEnabled:
-            q = wx.MessageBox("Reset recording device?\n\n"
-                              "Enabling or disabling Wi-Fi requires the "
-                              "recording device to reset in order to take effect.\n"
-                              "Reset recorder now?",
-                              "Configure Device",
-                              style=(wx.YES_NO | wx.YES_DEFAULT
-                                      | wx.ICON_QUESTION))
-            if q == wx.YES:
-                # FUTURE: This may need a callback to prevent the GUI from
-                # getting flagged 'not responding.'
-                self.device.command.reset(wait=False)
+        finally:
+            wx.SetCursor(wx.NullCursor)
 
         evt.Skip()
 
