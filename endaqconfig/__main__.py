@@ -56,7 +56,7 @@ def run(debug=__DEBUG__):
                               exceptions=False,
                               debug=debug)
     finally:
-        wx.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+        wx.SetCursor(wx.NullCursor)
 
 
 if __name__ == "__main__":
