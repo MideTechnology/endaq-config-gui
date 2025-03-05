@@ -1040,7 +1040,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnItemDoubleClick(self, evt):
         """ Hande lsit item (row) double-click.
         """
-        if self.list.GetSelectedItemCount() > 0:
+        if self.list.GetSelectedItemCount() > 0 and self.okButton.IsEnabled():
             # Close the dialog
             self.EndModal(wx.ID_OK)
         evt.Skip()
