@@ -20,7 +20,7 @@ def get_version(rel_path):
 
 
 INSTALL_REQUIRES = [
-    "endaq-device>=1.1.1",
+    "endaq-device>=1.4.0",
     "wxPython>=4.2.0",
 ]
 

@@ -1,4 +1,4 @@
-endaq-device>=1.2.0
+endaq-device>=1.4.0
 idelib>=3.2.9
 ebmlite
 numpy
