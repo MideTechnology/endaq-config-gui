@@ -4,7 +4,7 @@ Dialog for selecting and/or controlling recording devices.
 """
 
 from collections import namedtuple
-from datetime import datetime, timedelta
+import datetime
 from functools import partial
 import logging
 import os.path
@@ -43,8 +43,8 @@ SPACE_WARN_MB = SPACE_MIN_MB * 4
 # Thresholds for showing moderate warnings when device and calibration are
 # approaching their expiration dates. If 0 or fewer days remain, a severe
 # warning is displayed.
-CAL_WARN_DAYS = timedelta(days=120)
-DEV_WARN_DAYS = timedelta(days=182)
+CAL_WARN_DAYS = datetime.timedelta(days=120)
+DEV_WARN_DAYS = datetime.timedelta(days=182)
 
 
 # ===========================================================================
@@ -169,7 +169,7 @@ class DeviceScanThread(threading.Thread):
 
                     try:
                         bat = dev.command.getBatteryStatus(callback=cancelSet)
-                        stat = dev.command.status
+                        stat = dev.command.status[1:]
                     except (NotImplementedError, UnsupportedFeature):
                         # Very old firmware and/or no serial command interface.
                         bat = None
@@ -180,7 +180,7 @@ class DeviceScanThread(threading.Thread):
                         try:
                             dev.command.ping(callback=cancelSet)
                             bat = None
-                            stat = dev.command.status
+                            stat = dev.command.status[1:]
                         except (DeviceError, AttributeError, IOError):
                             bat = None
                             stat = DeviceStatusCode.IDLE, None
@@ -357,7 +357,7 @@ def populateStatusColumn(dev: Recorder,
         return ''
 
     try:
-        code, msg = dev.command.status
+        code, msg = dev.command.status[1:]
     except (AttributeError, UnsupportedFeature):
         code, msg = None, ''
 
@@ -546,7 +546,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         sc.SizedDialog.__init__(self, *args, **kwargs)
 
-        if icon is not False:
+        if icon or icon is None:
             icon = icon or icons.icon.GetIcon()
             self.SetIcon(icon)
 
@@ -691,7 +691,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             images.Add(img.GetBitmap())
 
         self.batteryIconIndices = {}
-        batImages = [item for item in battery_icons.__dict__.items()
+        batImages = [item for item in vars(battery_icons).items()
                      if item[0].startswith('battery')]
 
         for i, (name, icon) in enumerate(batImages, images.GetImageCount()):
@@ -746,7 +746,12 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 bat += '\n'
 
         icon = self.ICON_NONE
-        now = datetime.now()
+        try:
+            now = datetime.datetime.now(datetime.UTC)
+        except AttributeError:
+            # TODO: Remove after Python 3.9 is dropped;
+            #  it doesn't have datetime.UTC!
+            now = datetime.datetime.utcnow()
 
         if dev.birthday:
             age = now - dev.birthday
@@ -1216,7 +1221,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.lastUpdate = now
             self.updateList()
 
-        if  self.updateTimerCalls == 0:
+        if self.updateTimerCalls == 0:
             # First update; resize to fit list contents
             logger.debug('first update')
             self.SetSize((self.listWidth + (self.GetDialogBorder() * 4), -1))
