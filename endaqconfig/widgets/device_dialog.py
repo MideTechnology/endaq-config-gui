@@ -746,20 +746,20 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 bat += '\n'
 
         icon = self.ICON_NONE
-        try:
-            now = datetime.datetime.now(datetime.UTC)
-        except AttributeError:
-            # TODO: Remove after Python 3.9 is dropped;
-            #  it doesn't have datetime.UTC!
-            now = datetime.datetime.utcnow()
+
+        now = datetime.datetime.now(datetime.timezone.utc)
 
         if dev.birthday:
-            age = now - dev.birthday
+            # HACK: datetime values differed at least 3 times between Python
+            #  versions 3.9 and 3.12+; make explicitly sure we're using UTC.
+            age = now - dev.birthday.replace(tzinfo=datetime.timezone.utc)
             lifeleft = dev.LIFESPAN - age
         else:
             age = lifeleft = None
 
         calExp = dev.getCalExpiration()
+        if calExp:
+            calExp = calExp.replace(tzinfo=datetime.timezone.utc)
 
         pathtext = dev.path
         if dev.path and os.path.exists(dev.path):
