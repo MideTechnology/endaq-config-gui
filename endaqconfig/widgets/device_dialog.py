@@ -783,7 +783,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if lifeleft.days < 0:
                 icon = max(icon, self.ICON_WARN)
 
-        print(f'{now=!r} {calExp=!r}')
         if calExp:
             if calExp < now:
                 tips.append(f"This device's calibration has expired on {calExp.date()}.")
