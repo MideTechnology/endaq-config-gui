@@ -312,7 +312,7 @@ class ConfigBase(object):
         elif not isinstance(exp, str):
             # Probably won't occur, but just in case...
             logger.debug("Bad value for %s: %r (%s)" % (name, exp, type(exp)))
-            return
+            return None
 
         # Create a nicely formatted, informative string for the compiled
         # expression's "filename" and for display if the expression is bad.
@@ -475,7 +475,7 @@ class ConfigBase(object):
         """ Get the widget's value, as written to the config file.
         """
         if self.configId is None:
-            return
+            return None
         try:
             val = self.getDisplayValue()
             if val is None:
@@ -968,6 +968,15 @@ class FloatField(IntField):
         self.field.SetDigits(self.floatDigits)
         self.sizer.Add(self.field, 4)
         return self.field
+
+
+    def getConfigValue(self):
+        """ Get the widget's value, as written to the config file.
+        """
+        val = ConfigWidget.getConfigValue(self)
+        if val is None:
+            return None
+        return float(val)
 
 
 # ===============================================================================

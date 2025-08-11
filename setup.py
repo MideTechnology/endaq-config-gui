@@ -2,6 +2,7 @@ import codecs
 import os.path
 import setuptools
 
+
 def read(rel_path):
     here = os.path.abspath(os.path.dirname(__file__))
     with codecs.open(os.path.join(here, rel_path), 'r') as fp:
@@ -19,7 +20,7 @@ def get_version(rel_path):
 
 
 INSTALL_REQUIRES = [
-    "endaq-device>=1.1.1",
+    "endaq-device>=1.4.0",
     "wxPython>=4.2.0",
 ]
 
@@ -38,7 +39,9 @@ setuptools.setup(
                      'Natural Language :: English',
                      'Programming Language :: Python :: 3.9',
                      'Programming Language :: Python :: 3.10',
-                     'Programming Language :: Python :: 3.11'],
+                     'Programming Language :: Python :: 3.11',
+                     'Programming Language :: Python :: 3.12',
+                     'Programming Language :: Python :: 3.13'],
         keywords='endaq slamstick config utility gui',
         packages=setuptools.find_packages(),
         package_dir={'': '.'},

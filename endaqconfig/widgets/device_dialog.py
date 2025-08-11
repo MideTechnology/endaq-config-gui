@@ -4,7 +4,7 @@ Dialog for selecting and/or controlling recording devices.
 """
 
 from collections import namedtuple
-from datetime import datetime, timedelta
+import datetime
 from functools import partial
 import logging
 import os.path
@@ -21,7 +21,7 @@ from endaq.device import (Recorder, RECORDERS,
                           UnsupportedFeature, DeviceError)
 from endaq.device.base import os_specific
 from endaq.device.response_codes import DeviceStatusCode
-from endaq.device.mqtt.mqtt_discovery import findBrokers
+from endaq.device.mqtt.discovery import findBrokers
 
 from . import battery_icons
 from . import icons
@@ -45,9 +45,8 @@ SPACE_WARN_MB = SPACE_MIN_MB * 4
 # Thresholds for showing moderate warnings when device and calibration are
 # approaching their expiration dates. If 0 or fewer days remain, a severe
 # warning is displayed.
-CAL_WARN_DAYS = timedelta(days=120)
-DEV_WARN_DAYS = timedelta(days=182)
-
+CAL_WARN_DAYS = datetime.timedelta(days=120)
+DEV_WARN_DAYS = datetime.timedelta(days=182)
 
 
 # ===========================================================================
@@ -100,28 +99,38 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     RECORD_ENABLED = "Initiate recording on all capable devices"
 
     # Text colors for the Status column
+    # If status >= 200, use status % 100.
     STATUS_COLORS = {
         0: None,  # Idle
         10: wx.BLUE,  # Recording
         20: wx.YELLOW,  # Reset pending
         30: wx.YELLOW,  # Start Pending
+        31: wx.BLUE,  # Stopping recording
         40: wx.YELLOW,  # Triggering
         50: wx.BLUE,  # Uploading
         100: wx.Colour(200, 200, 200),  # Sleeping
+        101: wx.Colour(200, 200, 200),  # Waking
+        110: wx.Colour(200, 200, 200),  # Going offline
         -10: wx.RED  # Error (default for all negative status codes)
     }
 
     # Status text
     # DeviceStatusCode seems to get cast to int, so enum names not available
+    # If status >= 200, use status % 100.
     STATUS_TEXT = {
+        -10: "Error",
         0: "Ready",
+        1: "Ready",
         10: "Recording",
         20: "Resetting",
         30: "Starting Recording",
+        31: "Stopping Recording",
         40: "Awaiting Trigger",
         50: "Uploading",
+        60: "Streaming",
         100: "Sleeping",
-        -10: "Error"
+        101: "Waking",
+        110: "Offline",
     }
 
     # ==============================================================================
@@ -204,7 +213,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         sc.SizedDialog.__init__(self, *args, **kwargs)
 
-        if icon is not False:
+        if icon or icon is None:
             icon = icon or icons.icon.GetIcon()
             self.SetIcon(icon)
 
@@ -383,7 +392,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             images.Add(img.GetBitmap())
 
         self.batteryIconIndices = {}
-        batImages = [item for item in battery_icons.__dict__.items()
+        batImages = [item for item in vars(battery_icons).items()
                      if item[0].startswith('battery')]
 
         for i, (name, icon) in enumerate(batImages, images.GetImageCount()):
@@ -438,15 +447,20 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 bat += '\n'
 
         icon = self.ICON_NONE
-        now = datetime.now()
+
+        now = datetime.datetime.now(datetime.timezone.utc)
 
         if dev.birthday:
-            age = now - dev.birthday
+            # HACK: datetime values differed at least 3 times between Python
+            #  versions 3.9 and 3.12+; make explicitly sure we're using UTC.
+            age = now - dev.birthday.replace(tzinfo=datetime.timezone.utc)
             lifeleft = dev.LIFESPAN - age
         else:
             age = lifeleft = None
 
         calExp = dev.getCalExpiration()
+        if calExp:
+            calExp = calExp.replace(tzinfo=datetime.timezone.utc)
 
         pathtext = dev.path
         if dev.path and os.path.exists(dev.path):
@@ -732,7 +746,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnItemDoubleClick(self, evt):
         """ Hande lsit item (row) double-click.
         """
-        if self.list.GetSelectedItemCount() > 0:
+        if self.list.GetSelectedItemCount() > 0 and self.okButton.IsEnabled():
             # Close the dialog
             self.EndModal(wx.ID_OK)
         evt.Skip()
@@ -908,7 +922,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.lastUpdate = now
             self.updateList()
 
-        if  self.updateTimerCalls == 0:
+        if self.updateTimerCalls == 0:
             # First update; resize to fit list contents
             logger.debug('first update')
             self.SetSize((self.listWidth + (self.GetDialogBorder() * 4), -1))

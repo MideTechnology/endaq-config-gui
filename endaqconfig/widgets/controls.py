@@ -87,17 +87,28 @@ class ControlButtons(wx.Panel):
         self.configBtn.Show(showConfig)
 
 
+    def _setRecButton(self, label, tooltip, bg, fg):
+        if label:
+            self.recBtn.SetLabel(label)
+        self.recBtn.SetToolTip(tooltip or '')
+        if bg is not None:
+            self.recBtn.SetBackgroundColour(bg)
+        if fg is not None:
+            self.recBtn.SetForegroundColour(fg)
+
+
     def updateButtons(self, enabled=True):
         """ Update the button labels, tooltips, and enabled/disabled state.
         """
         try:
-            status = self.device.command.status[0]
+            status = self.device.command.status[1]
+            if status and status >= 200:
+                status %= 100
         except (AttributeError, CommandError, UnsupportedFeature):
             status = None
 
-        self.recording = status == DeviceStatusCode.RECORDING
+        self.recording = status in (DeviceStatusCode.RECORDING, DeviceStatusCode.STREAMING)
         self.uploading = status == DeviceStatusCode.UPLOADING
-
 
         self.recBtn.Show(self.device.canRecord)
         self.recBtn.Enable(enabled
@@ -111,15 +122,12 @@ class ControlButtons(wx.Panel):
                               and not self.recording)
 
         if self.recording:
-            self.recBtn.SetLabel("Stop Recording")
-            self.recBtn.SetToolTip(self.STOP_TT)
-            self.recBtn.SetBackgroundColour(self.BG_RECORDING)
-            self.recBtn.SetForegroundColour(self.FG_RECORDING)
+            label = "Stop Streaming" if status == DeviceStatusCode.STREAMING else "Stop Recording"
+            self._setRecButton(label, self.STOP_TT,
+                               self.BG_RECORDING, self.FG_RECORDING)
         else:
-            self.recBtn.SetLabel("Start Recording")
-            self.recBtn.SetToolTip(self.START_TT)
-            self.recBtn.SetBackgroundColour(self.BG_NORMAL)
-            self.recBtn.SetForegroundColour(self.FG_NORMAL)
+            self._setRecButton("Start Recording", self.START_TT,
+                               self.BG_NORMAL, self.FG_NORMAL)
 
 
     def OnRecordButton(self, evt):
@@ -145,6 +153,7 @@ class ControlButtons(wx.Panel):
         except RuntimeError:
             # Dialog probably closed during scan, which is okay.
             pass
+
 
 # ===========================================================================
 # Column 'formatters.' They actually set the column display and return the
@@ -239,7 +248,7 @@ def populateStatusColumn(dev: Recorder,
         return ''
 
     try:
-        code, msg = dev.command.status
+        _, code, msg = dev.command.status
     except (AttributeError, UnsupportedFeature):
         code, msg = None, ''
 
