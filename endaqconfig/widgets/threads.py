@@ -38,7 +38,7 @@ class DeviceScanThread(threading.Thread):
                  devFilter: Optional[Callable] = None,
                  interval: Union[int, float] = 3,
                  oneshot: bool = False,
-                 timeout: Optional[float] = 4,
+                 timeout: float = 9,
                  **getDevicesArgs):
         """ A background thread for finding devices and their states. It can be
             stopped by calling `DeviceScanThread.stop()`.
@@ -52,7 +52,7 @@ class DeviceScanThread(threading.Thread):
             :param oneshot: If True, the thread will terminate after one
                 scan. For doing manual updates.
             :param timeout: Seconds to retain devices that have disconnected
-                and no longer appears in `getDevices()`. Prevents devices
+                and no longer appear in `getDevices()`. Prevents devices
                 that momentarily disconnect when starting/stopping recording
                 or resetting from disappearing and reappearing in the list.
 
@@ -146,7 +146,7 @@ class DeviceScanThread(threading.Thread):
 
                     try:
                         bat = dev.command.getBatteryStatus(callback=cancelSet)
-                        stat = dev.command.status
+                        stat = dev.command.status[1:]
                     except (NotImplementedError, UnsupportedFeature):
                         # Very old firmware and/or no serial command interface.
                         bat = None
@@ -157,7 +157,7 @@ class DeviceScanThread(threading.Thread):
                         try:
                             dev.command.ping(callback=cancelSet)
                             bat = None
-                            stat = dev.command.status
+                            stat = dev.command.status[1:]
                         except (DeviceError, AttributeError, IOError):
                             bat = None
                             stat = DeviceStatusCode.IDLE, None
@@ -165,6 +165,7 @@ class DeviceScanThread(threading.Thread):
                     # logger.debug(f'{dev} {bat=} {stat=}')
                     status[dev] = bat, stat, dev.path
 
+                # logger.debug('posting EVT_DEVICE_LIST_UPDATE')
                 evt = EvtDeviceListUpdate(devices=result, status=status)
 
                 # Check parent again to avoid a race condition during shutdown
@@ -234,8 +235,8 @@ class DeviceCommandThread(threading.Thread):
         try:
             self.command(*self.args, **self.kwargs)
             self.completed.set()
-            logger.debug(f'{self.command} succeeded')
+            logger.debug(f'DeviceCommandThread: {self.device} {self.command.__name__} succeeded')
         except Exception as err:
             self.failed.set()
             self.failure = err
-            logger.error(f'{self.command} failed: {err!r}')
+            logger.error(f'DeviceCommandThread: {self.device} {self.command.__name__} failed: {err!r}')

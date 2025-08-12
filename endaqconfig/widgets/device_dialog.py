@@ -256,6 +256,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.Bind(EVT_DEVICE_LIST_UPDATE, self.OnDeviceListUpdate)
 
 
+    # XXX: REMOVE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
+    # noinspection PyUnresolvedReferences
     def _addBrokerSelect(self, pane):
         """ Add MQTT Broker selection widgets.
         """
@@ -278,6 +280,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.OnRemoteCheckChanged(None)
 
 
+    # XXX: REMOVE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
+    # noinspection PyUnresolvedReferences
     def _addButtons(self, pane, okText, okHelp, cancelText):
         """ Add device selection dialog bottom buttons.
         """
@@ -347,7 +351,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.list = ULC.UltimateListCtrl(parent, -1,
                                          agwStyle=(wx.LC_REPORT
-                                                   # | wx.LC_NO_HEADER
                                                    | wx.BORDER_NONE
                                                    | wx.LC_HRULES
                                                    | wx.LC_SINGLE_SEL
@@ -426,6 +429,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             elif 'mqtt' in configname:
                 return self.ICON_CONNECTION_WIFI
             elif any(n in configname for n in ('bluetooth', 'bt', 'ble')):
+                # For future use
                 return self.ICON_CONNECTION_BT
         except (AttributeError, NotImplementedError, UnsupportedFeature):
             pass
@@ -610,8 +614,25 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         # Status code `None` means device is (temporarily) unavailable
         # (i.e., not present but not yet expired)
+        # XXX: Only file/serial devices should have `None` status?
+        # XXX: Either use `recorderStatus` or `device.command.status` - don't mix!
+        #  (populateStatusColumn() uses `device.command.status`)
+        # XXX: Use something other than status == None to indicate disconnected device!
+        #  (in order to have devices w/ a status and also disabled, e.g. locked devices)
         status = self.recorderStatus.get(dev, (None, (DeviceStatusCode.IDLE, '')))[1][0]
         enabled = enabled and status is not None
+
+        if status is None:
+            try:
+                lastCommand = dev.command.lastCommand[1]['EBMLCommand']
+                if 'RecStart' in lastCommand:
+                    status = DeviceStatusCode.START_PENDING
+                elif 'RecStop' in lastCommand:
+                    status = DeviceStatusCode.STOP_PENDING
+            except (AttributeError, IndexError, KeyError):
+                pass
+
+        dev._displayStatus = status
 
         # enable or disable the row
         # excludes button panel - do that explicitly
@@ -670,6 +691,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         try:
             if not self.thread or not self.thread.is_alive():
+                logger.debug('command thread is not alive')
                 return True
             return self.thread._cancel.is_set()
         except (AttributeError, RuntimeError) as err:
@@ -875,6 +897,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if not recorder:
                 recorder = self.recordersByIndex.get(self.selected, None)
             if recorder and recorder.canRecord:
+                # XXX: Will this be a problem with MQTT devices that actually respond to the 'StartRecording' command?
                 self.updateRow(recorder, enabled=False)
                 if stop:
                     # recorder.command.stopRecording()
@@ -908,7 +931,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         now = time()
         new = evt.devices
         stat = evt.status
-        devicesChanged = new != self.recorders
+        devicesChanged = set(new) != set(self.recorders)
         statsChanged = stat != self.recorderStatus
 
         self.recorders = new
