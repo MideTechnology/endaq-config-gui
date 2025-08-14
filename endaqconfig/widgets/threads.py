@@ -10,6 +10,7 @@ from typing import Callable, Optional, Union
 from endaq.device import (Recorder, getDevices,
                           deviceChanged, UnsupportedFeature, DeviceError,
                           CommandError, DeviceTimeout)
+from endaq.device.command_interfaces import SerialCommandInterface
 from endaq.device.response_codes import DeviceStatusCode
 import wx
 
@@ -103,7 +104,7 @@ class DeviceScanThread(threading.Thread):
         updates = -1
         cancelSet = self._cancel.is_set
         pauseSet = self._pause.is_set
-        updatingSet = self.parent.updating.is_set
+        updatingSet = self.parent.updatingDisplay.is_set
         timeout = self.timeout
 
         while bool(self.parent) and not cancelSet():
@@ -196,6 +197,33 @@ class DeviceScanThread(threading.Thread):
         logger.debug('Scanning thread stopped')
 
 
+    # =======================================================================
+    #
+    # =======================================================================
+
+    def updateDeviceStatus(self, dev: Recorder):
+        """ Update the device's cached status and battery info (if supported).
+            If `getBatteryStatus()` isn't supported, `ping()` is used. To be
+            run in a thread.
+        """
+        # TODO: Consider using asyncio instead of multiple threads.
+        try:
+            dev.command.getBatteryStatus(callback=self._cancel.is_set)
+        except CommandError:
+            # Older FW that doesn't support GetBatteryStatus returns
+            # ERR_INVALID_COMMAND. Try to ping to get status.
+            try:
+                dev.command.ping(callback=self._cancel.is_set)
+            except (DeviceError, AttributeError, IOError):
+                pass
+        except (NotImplementedError, UnsupportedFeature):
+            pass
+
+
+# ===========================================================================
+#
+# ===========================================================================
+
 class DeviceCommandThread(threading.Thread):
     """
     A slightly safer-than-normal thread for asynchronously calling simple
@@ -240,3 +268,26 @@ class DeviceCommandThread(threading.Thread):
             self.failed.set()
             self.failure = err
             logger.error(f'DeviceCommandThread: {self.device} {self.command.__name__} failed: {err!r}')
+
+
+# ===========================================================================
+#
+# ===========================================================================
+
+def getDeviceStatus(device: Recorder, callback: Callable, timeout=1):
+    if not device.hasCommandInterface:
+        return
+    elif type(device.command) is SerialCommandInterface:
+        try:
+            device.command.getBatteryStatus(timeout=timeout, callback=callback)
+        except CommandError:
+            # Older FW that doesn't support GetBatteryStatus returns
+            # ERR_INVALID_COMMAND. Try to ping to get status.
+            try:
+                device.command.ping(timeout=timeout, callback=callback)
+            except (DeviceError, AttributeError, IOError):
+                pass
+        except (NotImplementedError, UnsupportedFeature):
+            # Very old firmware and/or no serial command interface.
+            pass
+

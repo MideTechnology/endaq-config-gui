@@ -10,7 +10,7 @@ import logging
 import os.path
 import threading
 from time import sleep, time
-from typing import Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import wx
 import wx.lib.sized_controls as sc
@@ -19,7 +19,9 @@ from wx.lib.agw import ultimatelistctrl as ULC
 
 from endaq.device import (Recorder, RECORDERS,
                           UnsupportedFeature, DeviceError)
+from endaq.device import getDevices
 from endaq.device.base import os_specific
+from endaq.device.command_interfaces import SerialCommandInterface
 from endaq.device.response_codes import DeviceStatusCode
 from endaq.device.mqtt.discovery import findBrokers
 
@@ -29,7 +31,7 @@ from .controls import (_attribFormatter, populateStatusColumn,
                        populateButtonColumn, populateBatteryColumn)
 from .events import (EVT_DEVICE_LIST_UPDATE,
                      EvtRecordButton, EVT_RECORD_BUTTON)
-from .threads import DeviceScanThread, DeviceCommandThread
+from .threads import DeviceScanThread, DeviceCommandThread, getDeviceStatus
 from .shared import DeviceToolTip
 
 logger = logging.getLogger(__name__)
@@ -60,7 +62,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     ID_SET_TIME = wx.NewIdRef()
     ID_START_RECORDING = wx.NewIdRef()
 
-    # Indices of icons. Proportional to severity.
+    # Indices of icons in the `PyImageList`. Proportional to severity.
     # Icons after these are battery level, etc.
     ICON_NONE, ICON_INFO, ICON_WARN, ICON_ERROR = range(4)
 
@@ -217,11 +219,23 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             icon = icon or icons.icon.GetIcon()
             self.SetIcon(icon)
 
-        self.thread = None  # Device scanning thread
-        self.updating = threading.Event()  # Set while updating, so other calls skip.
+        self.scanTimer = wx.Timer(self)
+        self.scanCount = 0
+        self.scanCancelled = threading.Event()  # Use as callback for getBatteryStatus/ping commands
 
-        self.brokers = []
-        self.broker = None
+        self.thread = None  # Device scanning thread
+        self.updatingDisplay = threading.Event()  # Set while updating, so other calls skip.
+
+        self.recorders: List[Recorder] = []  # Results of previous `getDevices()`.
+        self.recorderStatus: Dict[Recorder, Tuple[Optional[int], Optional[str]]] = {}  # Recorder status, battery state, and path, keyed by `Recorder`
+        self.recorderTimeout = 5  # Seconds to keep disconnected recorders in list (for devices that don't report recording start, etc.)
+        self.recorderTimeouts: Dict[Recorder, float] = {}  # Time to remove a recorder from `recorderStatus` if not in `recorders`
+        self.recordersByIndex: Dict[int, Recorder] = {}  # `Recorder` instances keyed by list index.
+        self.indicesByRecorder: Dict[Recorder, int] = {}  # List index keyed by `Recorder`
+        self.updatingRecorders = threading.RLock()  # To avoid simultaneous dict changes
+
+        self.brokers = []  # List of found MQTT broker mDNS names
+        self.broker = None  # Current MQTT broker's mDNS name
 
         # TODO: Better column collection (assemble piecemeal based on parameters)
         cols = self.ADVANCED_COLUMNS if self.showAdvanced else self.COLUMNS
@@ -256,7 +270,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.Bind(EVT_DEVICE_LIST_UPDATE, self.OnDeviceListUpdate)
 
 
-    # XXX: REMOVE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
+    # XXX: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
     # noinspection PyUnresolvedReferences
     def _addBrokerSelect(self, pane):
         """ Add MQTT Broker selection widgets.
@@ -280,7 +294,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.OnRemoteCheckChanged(None)
 
 
-    # XXX: REMOVE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
+    # XXX: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
     # noinspection PyUnresolvedReferences
     def _addButtons(self, pane, okText, okHelp, cancelText):
         """ Add device selection dialog bottom buttons.
@@ -335,11 +349,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             elif col.formatter == populateStatusColumn:
                 self.statusCol = i
 
-        self.recorders = []  # Results of previous `getDevices()`.
-        self.recorderStatus = {}  # Recorder status, battery state, and path, keyed by `Recorder`
-        self.recordersByIndex = {}  # `Recorder` instances keyed by list index.
-        self.indicesByRecorder = {}  # List index keyed by `Recorder`
-        # self.recorderBusy = defaultdict(threading.Event)  # Events indicating a recorder is updating, keyed by `Recorder`
         self.selected = None
         self.selectedIdx = None
         self.firstDrawing = True
@@ -537,12 +546,12 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def populateList(self):
         """ Find recorders and add them to the list.
         """
-        if self.updating.is_set():
+        if self.updatingDisplay.is_set():
             return
 
         try:
             logger.debug('populating list')
-            self.updating.set()
+            self.updatingDisplay.set()
             self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
 
             self.list.ClearAll()
@@ -594,7 +603,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         finally:
             self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-            self.updating.clear()
+            self.updatingDisplay.clear()
 
 
     def updateRow(self, dev: Recorder, enabled: bool = True):
@@ -620,7 +629,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # XXX: Use something other than status == None to indicate disconnected device!
         #  (in order to have devices w/ a status and also disabled, e.g. locked devices)
         status = self.recorderStatus.get(dev, (None, (DeviceStatusCode.IDLE, '')))[1][0]
-        enabled = enabled and status is not None
+        enabled = enabled and dev.command.available
 
         if status is None:
             try:
@@ -663,17 +672,17 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         # Bail if an update is already being handled
         # (e.g., called from a different thread)
-        if self.updating.is_set():
+        if self.updatingDisplay.is_set():
             return
 
         try:
-            self.updating.set()
+            self.updatingDisplay.set()
             # logger.debug('Updating display')
             for dev in self.recorders:
                 self.updateRow(dev)
 
         finally:
-            self.updating.clear()
+            self.updatingDisplay.clear()
 
 
     def getSelected(self) -> Optional[Recorder]:
@@ -711,6 +720,62 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     # =======================================================================
     # Event handling
     # =======================================================================
+
+    def OnScanTimerTick(self, evt):
+        """ Handle the device-scanning timer ticking.
+        """
+        now = time()
+
+        self.scanCancelled.set()
+        wx.MilliSleep(50)
+        self.scanCancelled.clear()
+
+        devicesChanged = False
+        statsChanged = False
+        newStats = {}
+
+        if self.scanCount % 4 == 0:
+            #
+            with self.updatingRecorders:
+                new = getDevices()
+
+                if self.filter:
+                    new = [self.filter(dev) for dev in new]
+
+                self.recorderTimeouts.update({dev: time() + self.recorderTimeout for dev in new})
+                devicesChanged = set(new) != set(self.recorders)
+                self.recorders = new
+
+        if self.scanCount % 2 == 0:
+            for dev in self.recorders:
+                thread = threading.Thread(target=getDeviceStatus,
+                                          args=(dev, self.scanCancelled.is_set),
+                                          daemon=True)
+                thread.start()
+
+        with self.updatingRecorders:
+            stats = {dev: dev.command.status[1:] for dev in self.recorders}
+            statsChanged = stats != self.recorderStatus
+            self.recorderStatus = stats
+
+        if devicesChanged:
+            # Repopulate list
+            self.populateList()
+            
+        if statsChanged or now - self.lastUpdate > 10:
+            # update list
+            self.lastUpdate = now
+            self.updateList()
+
+        if self.scanCount == 0:
+            # First update; resize to fit list contents
+            logger.debug('first update')
+            self.SetSize((self.listWidth + (self.GetDialogBorder() * 4), -1))
+
+        # XXX: THIS IS WHERE I LEFT OFF ON THURSDAY
+
+        self.scanCount += 1
+
 
     def OnColClick(self, evt):
         # Required by ColumnSorterMixin

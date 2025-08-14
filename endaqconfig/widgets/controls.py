@@ -107,7 +107,10 @@ class ControlButtons(wx.Panel):
         except (AttributeError, CommandError, UnsupportedFeature):
             status = None
 
-        self.recording = status in (DeviceStatusCode.RECORDING, DeviceStatusCode.STREAMING)
+        self.recording = status in (DeviceStatusCode.START_PENDING,
+                                    DeviceStatusCode.RECORDING,
+                                    DeviceStatusCode.STREAMING,
+                                    DeviceStatusCode.TRIGGERING)
         self.uploading = status == DeviceStatusCode.UPLOADING
 
         self.recBtn.Show(self.device.canRecord)
@@ -122,7 +125,8 @@ class ControlButtons(wx.Panel):
                               and not self.recording)
 
         if self.recording:
-            label = "Stop Streaming" if status == DeviceStatusCode.STREAMING else "Stop Recording"
+            label = ("Stop Streaming" if status == DeviceStatusCode.STREAMING
+                     else "Stop Recording")
             self._setRecButton(label, self.STOP_TT,
                                self.BG_RECORDING, self.FG_RECORDING)
         else:
