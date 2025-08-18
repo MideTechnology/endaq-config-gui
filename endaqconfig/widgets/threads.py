@@ -9,14 +9,14 @@ from typing import Callable, Optional, Union
 
 from endaq.device import (Recorder, getDevices,
                           deviceChanged, UnsupportedFeature, DeviceError,
-                          CommandError, DeviceTimeout)
+                          CommandError, DeviceTimeout, UnsupportedFeature)
 from endaq.device.command_interfaces import SerialCommandInterface
 from endaq.device.response_codes import DeviceStatusCode
 import wx
 
 from .events import EvtDeviceListUpdate
 
-from typing import TYPE_CHECKING
+from typing import Tuple, TYPE_CHECKING
 if TYPE_CHECKING:
     from .device_dialog import DeviceSelectionDialog
 
@@ -274,20 +274,50 @@ class DeviceCommandThread(threading.Thread):
 #
 # ===========================================================================
 
-def getDeviceStatus(device: Recorder, callback: Callable, timeout=1):
-    if not device.hasCommandInterface:
-        return
-    elif type(device.command) is SerialCommandInterface:
-        try:
-            device.command.getBatteryStatus(timeout=timeout, callback=callback)
-        except CommandError:
-            # Older FW that doesn't support GetBatteryStatus returns
-            # ERR_INVALID_COMMAND. Try to ping to get status.
-            try:
-                device.command.ping(timeout=timeout, callback=callback)
-            except (DeviceError, AttributeError, IOError):
-                pass
-        except (NotImplementedError, UnsupportedFeature):
-            # Very old firmware and/or no serial command interface.
-            pass
+# def getAllDevices(filterFunc: Optional[Callable] = None):
 
+
+
+def updateDeviceStatus(device: Recorder, callback: Callable, timeout=1):
+    """ Get updated status and battery info (if available) from the device.
+        To be run in its own thread for asynchronicity.
+    """
+    if not device.hasCommandInterface:
+        # Very old firmware and/or no serial command interface.
+        return
+    if type(device.command) is not SerialCommandInterface:
+        return
+
+    try:
+        device.command.getBatteryStatus(timeout=timeout, callback=callback)
+    except CommandError:
+        # Older FW that doesn't support GetBatteryStatus returns
+        # ERR_INVALID_COMMAND. Try to `ping` to get status.
+        try:
+            device.command.ping(timeout=timeout, callback=callback)
+        except (DeviceError, AttributeError, IOError):
+            pass
+    except (NotImplementedError, UnsupportedFeature):
+        pass
+    except TimeoutError:
+        logger.debug(f'updateDeviceStatus(): Timed out updating {device}')
+        pass
+
+
+def getDeviceStatus(device: Recorder) \
+        -> Tuple[Optional[Tuple], Tuple[Optional[int], str], Optional[str], Optional[int]]:
+    """ Get the device's cached battery info, status, and lock ID in a form
+        that can be hashed and easily tested for changes.
+    """
+    if not device.hasCommandInterface:
+        # Old devices won't have a CommandInterface.
+        return (None, (DeviceStatusCode.IDLE, ''), None, None)
+
+    # All command interfaces have _battery, status, and lockId, but only
+    # newer serial and MQTT interfaces set them. Older devices will set
+    # status, but it will be the same as the command response.
+    cmd = device.command
+    bat = cmd._battery[1]
+    if isinstance(bat, dict):
+        bat = tuple(bat.values())
+    return (bat, cmd.status[1:], device.path, cmd.lockId)

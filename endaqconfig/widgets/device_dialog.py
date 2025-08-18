@@ -24,6 +24,7 @@ from endaq.device.base import os_specific
 from endaq.device.command_interfaces import SerialCommandInterface
 from endaq.device.response_codes import DeviceStatusCode
 from endaq.device.mqtt.discovery import findBrokers
+from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface
 
 from . import battery_icons
 from . import icons
@@ -31,7 +32,7 @@ from .controls import (_attribFormatter, populateStatusColumn,
                        populateButtonColumn, populateBatteryColumn)
 from .events import (EVT_DEVICE_LIST_UPDATE,
                      EvtRecordButton, EVT_RECORD_BUTTON)
-from .threads import DeviceScanThread, DeviceCommandThread, getDeviceStatus
+from .threads import DeviceScanThread, DeviceCommandThread, getDeviceStatus, updateDeviceStatus
 from .shared import DeviceToolTip
 
 logger = logging.getLogger(__name__)
@@ -134,6 +135,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         101: "Waking",
         110: "Offline",
     }
+
+
+    SERIAL_TIMEOUT = 5
+    MQTT_TIMEOUT = 125
 
     # ==============================================================================
     #
@@ -726,13 +731,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         now = time()
 
+        # Try to kill any existing (unresponsive) threads
         self.scanCancelled.set()
         wx.MilliSleep(50)
         self.scanCancelled.clear()
 
         devicesChanged = False
-        statsChanged = False
-        newStats = {}
+        statusChanged = False
 
         if self.scanCount % 4 == 0:
             #
@@ -742,34 +747,40 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 if self.filter:
                     new = [self.filter(dev) for dev in new]
 
-                self.recorderTimeouts.update({dev: time() + self.recorderTimeout for dev in new})
+                for dev in new:
+                    self.recorderTimeouts[dev] = (now + self.MQTT_TIMEOUT if isinstance(dev.command, MQTTCommandInterface)
+                                                  else now + self.SERIAL_TIMEOUT)
+
+                self.recorderTimeouts = {k: v for k, v in self.recorderTimeouts if v > now}
                 devicesChanged = set(new) != set(self.recorders)
                 self.recorders = new
 
         if self.scanCount % 2 == 0:
             for dev in self.recorders:
-                thread = threading.Thread(target=getDeviceStatus,
+                thread = threading.Thread(target=updateDeviceStatus,
                                           args=(dev, self.scanCancelled.is_set),
                                           daemon=True)
                 thread.start()
 
         with self.updatingRecorders:
-            stats = {dev: dev.command.status[1:] for dev in self.recorders}
-            statsChanged = stats != self.recorderStatus
-            self.recorderStatus = stats
+            newStatus = {dev: getDeviceStatus(dev) for dev in self.recorders}
+            statusChanged = newStatus != self.recorderStatus
+            self.recorderStatus = newStatus
 
         if devicesChanged:
             # Repopulate list
+            logger.debug(f'scan {self.scanCount}: (re-)building list')
             self.populateList()
-            
-        if statsChanged or now - self.lastUpdate > 10:
+
+        elif statusChanged or now - self.lastUpdate > 10:
             # update list
+            logger.debug(f'scan {self.scanCount}: updating list')
             self.lastUpdate = now
             self.updateList()
 
         if self.scanCount == 0:
             # First update; resize to fit list contents
-            logger.debug('first update')
+            logger.debug('first update, fitting list to width')
             self.SetSize((self.listWidth + (self.GetDialogBorder() * 4), -1))
 
         # XXX: THIS IS WHERE I LEFT OFF ON THURSDAY
