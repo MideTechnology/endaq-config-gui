@@ -14,7 +14,7 @@ from endaq.device.response_codes import DeviceStatusCode
 
 import wx
 
-from .events import EvtDeviceListUpdate
+# from .events import EvtDeviceListUpdate
 
 import logging
 logger = logging.getLogger(__name__)
@@ -319,13 +319,17 @@ def updateDeviceStatus(device: Recorder, callback: Callable, timeout=1):
 
 
 def getDeviceStatus(device: Recorder) \
-        -> Tuple[Optional[Tuple], Tuple[Optional[int], str], Optional[str], Optional[int]]:
-    """ Get the device's cached battery info, status, and lock ID in a form
-        that can be hashed and easily tested for changes.
+        -> Tuple[Optional[Tuple],
+                 Tuple[Optional[int], str],
+                 Optional[str], Optional[int],
+                 bool]:
+    """ Get the device's cached battery info, status, lock ID, and command
+        interface availability in a form that can be hashed and easily tested
+        for changes.
     """
     if not device.hasCommandInterface:
         # Old devices won't have a CommandInterface.
-        return (None, (DeviceStatusCode.IDLE, ''), None, None)
+        return (None, (DeviceStatusCode.IDLE, ''), None, None, True)
 
     # All command interfaces have _battery, status, and lockId, but only
     # newer serial and MQTT interfaces set them. Older devices will set
@@ -334,4 +338,4 @@ def getDeviceStatus(device: Recorder) \
     bat = cmd._battery[1]
     if isinstance(bat, dict):
         bat = tuple(bat.values())
-    return (bat, cmd.status[1:], device.path, cmd.lockId)
+    return (bat, cmd.status[1:], device.path, cmd.lockId, device.command.available)

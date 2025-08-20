@@ -103,10 +103,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     STATUS_COLORS = {
         0: None,  # Idle
         10: wx.BLUE,  # Recording
-        20: wx.YELLOW,  # Reset pending
-        30: wx.YELLOW,  # Start Pending
+        20: wx.Colour(0, 200, 0),  # Reset pending
+        30: wx.Colour(0, 200, 0),  # Start Pending
         31: wx.BLUE,  # Stopping recording
-        40: wx.YELLOW,  # Triggering
+        40: wx.Colour(0, 200, 0),  # Triggering
         50: wx.BLUE,  # Uploading
         100: wx.Colour(200, 200, 200),  # Sleeping
         101: wx.Colour(200, 200, 200),  # Waking
@@ -123,9 +123,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         1: "Ready",
         10: "Recording",
         20: "Resetting",
-        30: "Starting Recording",
-        31: "Stopping Recording",
-        40: "Awaiting Trigger",
+        29: "Updating",  # Not a real code, replace if added or number reused
+        30: "Starting",
+        31: "Stopping",
+        40: "Triggering",
         50: "Uploading",
         60: "Streaming",
         100: "Sleeping",
@@ -133,8 +134,19 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         110: "Offline",
     }
 
+    # Status text
+    # Longer forms of some STATUS_TEXT, used where there's more space
+    # TODO: Use this in tooltips!
+    STATUS_TOOLTIP = {
+        29: "Updating Software",  # Not a real code, replace if added or number reused
+        30: "Starting Recording",
+        31: "Stopping Recording",
+        40: "Awaiting Trigger",
+        50: "Uploading to Cloud",
+    }
 
-    SERIAL_TIMEOUT = 5
+
+    SERIAL_TIMEOUT = 10
     MQTT_TIMEOUT = 125
 
     # ==============================================================================
@@ -195,7 +207,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                  wx.DIALOG_EX_CONTEXTHELP |
                  wx.SYSTEM_MENU)
 
-        self.autoUpdate = kwargs.pop('autoUpdate', 500)
+        self.autoUpdate = kwargs.pop('autoUpdate', 250)
         self.hideClock = kwargs.pop('hideClock', False)
         self.hideRecord = kwargs.pop('hideRecord', True)
         self.showWarnings = kwargs.pop('showWarnings', True)
@@ -228,10 +240,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.updatingDisplay = threading.Event()  # Set while updating, so other calls skip.
 
-        self.recorders: List[Recorder] = []  # Results of previous `getDevices()`.
+        self.recorders: List[Recorder] = []  # The currently-displayed recorders.
         self.recorderStatus: Dict[Recorder, Tuple[Optional[int], Optional[str]]] = {}  # Recorder status, battery state, and path, keyed by `Recorder`
-        self.recorderTimeout = 5  # Seconds to keep disconnected recorders in list (for devices that don't report recording start, etc.)
-        self.recorderTimeouts: Dict[Recorder, float] = {}  # Time to remove a recorder from `recorderStatus` if not in `recorders`
+        self.recorderTimeouts: Dict[Recorder, float] = {}  # Time to remove a recorder from `recorderStatus` if not in `getDevices()`
         self.recordersByIndex: Dict[int, Recorder] = {}  # `Recorder` instances keyed by list index.
         self.indicesByRecorder: Dict[Recorder, int] = {}  # List index keyed by `Recorder`
         self.updatingRecorders = threading.RLock()  # To avoid simultaneous dict changes
@@ -273,7 +284,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.Bind(wx.EVT_TIMER, self.OnUpdateTimerTick, id=self.updateTimer.GetId())
 
 
-    # XXX: REMOVE NEXT COMMENT LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
+    # TODO: REMOVE NEXT COMMENT LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
     # noinspection PyUnresolvedReferences
     def _addBrokerSelect(self, pane):
         """ Add MQTT Broker selection widgets.
@@ -297,7 +308,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.OnRemoteCheckChanged(None)
 
 
-    # XXX: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
+    # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
     # noinspection PyUnresolvedReferences
     def _addButtons(self, pane, okText, okHelp, cancelText):
         """ Add device selection dialog bottom buttons.
@@ -332,7 +343,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.cancelButton.SetSizerProps(halign="right")
 
 
-    # XXX: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
+    # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
     # noinspection PyUnresolvedReferences
     def initList(self,
                  parent: wx.Panel,
@@ -627,25 +638,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         if self.showWarnings:
             self.setItemIcon(index, dev)
 
-        # Status code `None` means device is (temporarily) unavailable
-        # (i.e., not present but not yet expired)
-        # XXX: Only file/serial devices should have `None` status?
-        # XXX: Either use `recorderStatus` or `device.command.status` - don't mix!
-        #  (populateStatusColumn() uses `device.command.status`)
-        # XXX: Use something other than status == None to indicate disconnected device!
-        #  (in order to have devices w/ a status and also disabled, e.g. locked devices)
         status = self.recorderStatus.get(dev, (None, (DeviceStatusCode.IDLE, '')))[1][0]
-        enabled = enabled and dev.command.available
-
-        if status is None:
-            try:
-                lastCommand = dev.command.lastCommand[1]['EBMLCommand']
-                if 'RecStart' in lastCommand:
-                    status = DeviceStatusCode.START_PENDING
-                elif 'RecStop' in lastCommand:
-                    status = DeviceStatusCode.STOP_PENDING
-            except (AttributeError, IndexError, KeyError, TypeError):
-                pass
+        enabled = enabled and self.recorderStatus[dev][-1]  # dev.command.available
 
         dev._displayStatus = status
 
@@ -730,10 +724,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         wx.MilliSleep(50)
         self.updateCancelled.clear()
 
-        foundChanged = deviceChanged(recordersOnly=False)
+        drivesChanged = deviceChanged(recordersOnly=False)
+        foundChanged = False
         statusChanged = False
 
-        if foundChanged or self.updateCount % 4 == 0:
+        if drivesChanged or self.updateCount % 4 == 0:
             # Look for new recorders every 4th call.
             with self.updatingRecorders:
                 new = getAllDevices(self.filter)
@@ -744,8 +739,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                         else now + self.SERIAL_TIMEOUT
                     )
 
-                self.recorderTimeouts = {k: v for k, v in self.recorderTimeouts.items() if now > v}
-                foundChanged = foundChanged or set(new) != set(self.recorders)
+                self.recorderTimeouts = {k: v for k, v in self.recorderTimeouts.items() if now < v}
+                new = list(self.recorderTimeouts)
+                foundChanged = set(new) != set(self.recorders)
                 self.recorders = new
 
         if foundChanged or self.updateCount % 2 == 0:
@@ -758,7 +754,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         with self.updatingRecorders:
             newStatus = {dev: getDeviceStatus(dev) for dev in self.recorders}
-            statusChanged = newStatus != self.recorderStatus
+            statusChanged = newStatus != self.recorderStatus or now - self.lastUpdate > 10
             self.recorderStatus = newStatus
 
         if foundChanged:
@@ -766,7 +762,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             logger.debug(f'scan {self.updateCount}: (re-)building list')
             self.populateList()
 
-        elif statusChanged or now - self.lastUpdate > 10:
+        elif drivesChanged or statusChanged:
             # update list
             logger.debug(f'scan {self.updateCount}: updating list')
             self.lastUpdate = now
@@ -963,8 +959,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if not recorder:
                 recorder = self.recordersByIndex.get(self.selected, None)
             if recorder and recorder.canRecord:
-                # XXX: Will this be a problem with MQTT devices that actually respond to the 'StartRecording' command?
-                self.updateRow(recorder, enabled=False)
                 if stop:
                     # recorder.command.stopRecording()
                     DeviceCommandThread(recorder, recorder.command.stopRecording,
@@ -973,7 +967,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                     # recorder.command.startRecording()
                     DeviceCommandThread(recorder, recorder.command.startRecording,
                                         callback=self.isDead)
+                self.updateRow(recorder, enabled=False)
         finally:
+            # self.updateList()
             if self.autoUpdate:
                 self.updateTimer.Start(self.autoUpdate)
 

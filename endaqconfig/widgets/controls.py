@@ -1,6 +1,7 @@
 """
 Device control buttons and column population/content formatting.
 """
+from time import time
 
 import wx
 from wx.lib.agw import ultimatelistctrl as ULC
@@ -254,25 +255,39 @@ def populateStatusColumn(dev: Recorder,
 
     try:
         _, code, msg = dev.command.status
+        code = code or DeviceStatusCode.IDLE
     except (AttributeError, UnsupportedFeature):
-        code, msg = None, ''
+        code, msg = DeviceStatusCode.IDLE, ''
 
-    code = code or DeviceStatusCode.IDLE
+    if dev.hasCommandInterface and 'MQTT' not in str(dev.command) and not dev.command.available:
+        t, cmd = dev.command.lastCommand
+        cmd = (cmd or {}).get('EBMLCommand', {})
+        if cmd and t < time() + 45:
+            if 'RecStart' in cmd:
+                code, msg = DeviceStatusCode.START_PENDING, ''
+            elif 'RecStop' in cmd:
+                code, msg = DeviceStatusCode.STOP_PENDING, ''
+            elif 'Reset' in cmd:
+                code, msg = DeviceStatusCode.RESET_PENDING, ''
+            elif 'FlashPackage' or 'SecureUpdateAll' in cmd:
+                # An update command. No DeviceStatusCode for 'upload pending'
+                # but there is one in STATUS_TEXT. Replace if one gets
+                # added to the DeviceStatusCode enum.
+                code, msg = 29, ''
+            elif any(k.startswith('Legacy') for k in cmd):
+                # Legacy update command. See above.
+                code, msg = 29, ''
 
-    if code is None:
-        color = None
-        text = None
-        code = 1000
+        print(dev, cmd, code)
 
-    else:
-        # Find specific color, or round to lowest multiple of 10
-        displayCode = code if code in root.STATUS_COLORS else code // 10
-        color = root.STATUS_COLORS.get(displayCode, None)
-        text = root.STATUS_TEXT.get(displayCode, "")
+    # Find specific color, or round to lowest multiple of 10
+    displayCode = code if code in root.STATUS_COLORS else (code // 10) * 10
+    color = root.STATUS_COLORS.get(displayCode, None)
+    text = root.STATUS_TEXT.get(displayCode, "")
 
-        if code < 0:
-            color = color or root.STATUS_COLORS.get(-10)
-            text = text or root.STATUS_TEXT.get(-10)
+    if code < 0:
+        color = color or root.STATUS_COLORS.get(-10)
+        text = text or root.STATUS_TEXT.get(-10)
 
     root.list.SetStringItem(index, column, text)
 
@@ -287,4 +302,3 @@ def populateStatusColumn(dev: Recorder,
     root.list.SetItem(item)
 
     return code
-
