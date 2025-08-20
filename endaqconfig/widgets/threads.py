@@ -5,29 +5,31 @@ simple commands to devices in the background.
 
 import threading
 from time import sleep, time
-from typing import Callable, Optional, Union
+from typing import Callable, List, Optional, Tuple, Union, TYPE_CHECKING
 
-from endaq.device import (Recorder, getDevices,
-                          deviceChanged, UnsupportedFeature, DeviceError,
+from endaq.device import (Recorder, getDevices, deviceChanged, DeviceError,
                           CommandError, DeviceTimeout, UnsupportedFeature)
 from endaq.device.command_interfaces import SerialCommandInterface
 from endaq.device.response_codes import DeviceStatusCode
+
 import wx
 
 from .events import EvtDeviceListUpdate
 
-from typing import Tuple, TYPE_CHECKING
-if TYPE_CHECKING:
-    from .device_dialog import DeviceSelectionDialog
-
 import logging
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    # noinspection PyUnusedImports
+    from .device_dialog import DeviceSelectionDialog
 
 
 # ===========================================================================
 #
 # ===========================================================================
 
+# XXX: REMOVE DeviceScanThread (after making sure all functionality has been
+#  implemented in OnUpdateTimerTick)
 class DeviceScanThread(threading.Thread):
     """
     A background thread for finding devices and their states. It can be
@@ -274,13 +276,25 @@ class DeviceCommandThread(threading.Thread):
 #
 # ===========================================================================
 
-# def getAllDevices(filterFunc: Optional[Callable] = None):
+def getAllDevices(filterFunc: Optional[Callable] = None, **kwargs) -> List[Recorder]:
+    """ Get all available devices.
+    """
+    # TODO: Get MQTT devices! Needs `update` implementation in `MQTTConnector.getDevices()`
+    # This may become partially redundant with those changes, but keep for the filtering.
+    devices = getDevices(**kwargs)
 
+    if filterFunc is not None:
+        return [d for d in devices if filterFunc(d)]
+
+    return devices
 
 
 def updateDeviceStatus(device: Recorder, callback: Callable, timeout=1):
-    """ Get updated status and battery info (if available) from the device.
-        To be run in its own thread for asynchronicity.
+    """ Get updated status and battery info (if available) from the device
+        via serial (filesystem-based devices don't report status, MQTT
+        devices automatically update themselves).
+
+        This is intended to be run in its own thread for asynchronicity.
     """
     if not device.hasCommandInterface:
         # Very old firmware and/or no serial command interface.

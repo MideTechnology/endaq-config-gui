@@ -15,9 +15,6 @@ EvtConfigButton, EVT_CONFIG_BUTTON = NewEvent()
 # Start (or stop) a recording. Carries `device` as attribute.
 EvtRecordButton, EVT_RECORD_BUTTON = NewEvent()
 
-# Called when the `getDevices()` thread completes
-EvtDeviceListUpdate, EVT_DEVICE_LIST_UPDATE = NewEvent()
-
 # ===========================================================================
 # Wi-Fi events
 # ===========================================================================

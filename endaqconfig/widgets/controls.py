@@ -13,6 +13,7 @@ from .events import EvtConfigButton, EvtRecordButton
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
+    # noinspection PyUnusedImports
     from .device_dialog import DeviceSelectionDialog
 
 
@@ -225,7 +226,7 @@ def populateBatteryColumn(dev: Recorder,
     batIcon, batDesc = 0, ''
 
     try:
-        batStat = root.recorderStatus[dev][0]
+        batStat = dev.command._battery[1]
         batName, batDesc = battery_icons.batStat2name(batStat)
         batIcon = root.batteryIconIndices.get(batName, 0)
     except KeyError:
