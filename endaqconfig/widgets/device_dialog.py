@@ -714,7 +714,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     # Event handling
     # =======================================================================
 
-    def OnUpdateTimerTick(self, _evt):
+    def OnUpdateTimerTick(self, _evt: Optional[wx.TimerEvent]):
         """ Handle the device-scanning timer ticking.
         """
         now = time()
@@ -892,6 +892,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                     self.updateTimer.Start(1000)
         else:
             self.updateTimer.Stop()
+            self.updateCancelled.set()
+            self.updatingDisplay.set()
             if self.tooltipFrame:
                 self.tooltipFrame.timer.Stop()
                 self.tooltipFrame.Hide()
