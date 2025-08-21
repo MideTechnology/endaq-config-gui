@@ -236,7 +236,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.updateTimer = wx.Timer(self)
         self.updateCount = 0
         self.updateCancelled = threading.Event()  # Use as callback for getBatteryStatus/ping commands
-        self.updateThreads = List[threading.Thread]
+        self.updateThreads: Dict[Recorder, threading.Thread] = {}
 
         self.updatingDisplay = threading.Event()  # Set while updating, so other calls skip.
 
@@ -722,6 +722,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # Try to kill any existing (unresponsive) threads
         self.updateCancelled.set()
         wx.MilliSleep(50)
+        for dev, thread in tuple(self.updateThreads.items()):
+            if not thread.is_alive():
+                del self.updateThreads[dev]
         self.updateCancelled.clear()
 
         drivesChanged = deviceChanged(recordersOnly=False)
@@ -747,10 +750,14 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         if foundChanged or self.updateCount % 2 == 0:
             # Fetch fresh state data every 2nd call.
             for dev in self.recorders:
-                thread = threading.Thread(target=updateDeviceStatus,
-                                          args=(dev, self.updateCancelled.is_set),
-                                          daemon=True)
-                thread.start()
+                if dev in self.updateThreads and self.updateThreads[dev].is_alive():
+                    logger.debug(f'update thread for device {dev} is still running')
+                    continue
+
+                self.updateThreads[dev] = threading.Thread(target=updateDeviceStatus,
+                                                           args=(dev, self.updateCancelled.is_set),
+                                                           daemon=True)
+                self.updateThreads[dev].start()
 
         with self.updatingRecorders:
             newStatus = {dev: getDeviceStatus(dev) for dev in self.recorders}
