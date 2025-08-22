@@ -74,19 +74,6 @@ class DeviceCommandThread(threading.Thread):
 #
 # ===========================================================================
 
-def getAllDevices(filterFunc: Optional[Callable] = None, **kwargs) -> List[Recorder]:
-    """ Get all available devices.
-    """
-    # TODO: Get MQTT devices! Needs `update` implementation in `MQTTConnector.getDevices()`
-    # This may become partially redundant with those changes, but keep for the filtering.
-    devices = getDevices(**kwargs)
-
-    if filterFunc is not None:
-        return [d for d in devices if filterFunc(d)]
-
-    return devices
-
-
 def updateDeviceStatus(device: Recorder, callback: Callable, timeout=1):
     """ Get updated status and battery info (if available) from the device
         via serial (filesystem-based devices don't report status, MQTT

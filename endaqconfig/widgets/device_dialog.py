@@ -10,7 +10,7 @@ import logging
 import os.path
 import threading
 from time import sleep, time
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import wx
 import wx.lib.sized_controls as sc
@@ -18,19 +18,18 @@ import wx.lib.mixins.listctrl as listmix
 from wx.lib.agw import ultimatelistctrl as ULC
 
 from endaq.device import (Recorder, RECORDERS, UnsupportedFeature,
-                          DeviceError, deviceChanged)
+                          DeviceError, deviceChanged, getDevices)
 from endaq.device.base import os_specific
 from endaq.device.response_codes import DeviceStatusCode
-from endaq.device.mqtt.discovery import findBrokers
-from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface
+from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface, MQTTConnector
 
 from . import battery_icons
 from . import icons
 from .controls import (_attribFormatter, populateStatusColumn,
                        populateButtonColumn, populateBatteryColumn)
-from .events import EvtRecordButton, EVT_RECORD_BUTTON
-from .threads import DeviceCommandThread, getAllDevices, getDeviceStatus, updateDeviceStatus
-from .shared import DeviceToolTip
+from .events import EvtRecordButton, EVT_RECORD_BUTTON, EVT_BROKER_UPDATE
+from .threads import DeviceCommandThread, getDeviceStatus, updateDeviceStatus
+from .shared import DeviceToolTip, BrokerField
 
 logger = logging.getLogger(__name__)
 
@@ -196,33 +195,41 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             :keyword checks: If `True`, show checkboxes for each device.
             :keyword mustConfig: If `True`, the 'OK' button will only become
                 enabled if the device can be configured.
+            :keyword remote: If `True`, show the MQTT broker selection field.
+            :keyword remoteChecked: The initial state of the 'use remote'
+                checkbox, if `remote` is `True`. `True` by default.
+            :keyword broker: The name of the selected broker. `None` will
+                select the default.
+
         """
         # Clear cached devices
         RECORDERS.clear()
 
-        style = (wx.DEFAULT_DIALOG_STYLE |
-                 wx.RESIZE_BORDER |
-                 wx.MAXIMIZE_BOX |
-                 wx.MINIMIZE_BOX |
-                 wx.DIALOG_EX_CONTEXTHELP |
-                 wx.SYSTEM_MENU)
+        self.autoUpdate: Union[int, bool] = kwargs.pop('autoUpdate', 250)
+        self.hideClock: bool = kwargs.pop('hideClock', False)
+        self.hideRecord: bool = kwargs.pop('hideRecord', True)
+        self.showWarnings: bool = kwargs.pop('showWarnings', True)
+        self.showConnection: bool = kwargs.pop('showConnection', True)
+        self.showAdvanced: bool = kwargs.pop('showAdvanced', False)
+        self.filter: Callable = kwargs.pop('filter', lambda x: True)
+        self.checks: bool = kwargs.pop('checks', False)
+        self.mustConfigure: bool = kwargs.pop('mustConfig', True)
+        self.remote: bool = kwargs.pop('remote', True)
+        self.remoteChecked: bool = kwargs.pop('remoteChecked', self.remote)
+        self.broker: Optional[str] = kwargs.pop('broker', None)
 
-        self.autoUpdate = kwargs.pop('autoUpdate', 250)
-        self.hideClock = kwargs.pop('hideClock', False)
-        self.hideRecord = kwargs.pop('hideRecord', True)
-        self.showWarnings = kwargs.pop('showWarnings', True)
-        self.showConnection = kwargs.pop('showConnection', True)
-        self.showAdvanced = kwargs.pop('showAdvanced', False)
-        self.filter = kwargs.pop('filter', lambda x: True)
-        self.checks = kwargs.pop('checks', False)
-        self.mustConfigure = kwargs.pop('mustConfig', True)
-        self.remote = kwargs.pop('remote', True)
         okText = kwargs.pop('okText', "Configure")
         okHelp = kwargs.pop('okHelp', 'Configure the selected device')
         cancelText = kwargs.pop('cancelText', "Close")
         icon = kwargs.pop('icon', None)
         tooltips = kwargs.pop('tooltips', True)
-        kwargs.setdefault('style', style)
+        kwargs.setdefault('style', (wx.DEFAULT_DIALOG_STYLE
+                                    | wx.RESIZE_BORDER
+                                    | wx.MAXIMIZE_BOX
+                                    | wx.MINIMIZE_BOX
+                                    | wx.DIALOG_EX_CONTEXTHELP
+                                    | wx.SYSTEM_MENU
+                                    ))
 
         # Not currently used, but consistent with the main dialog.
         self.DEBUG = kwargs.pop('debug', False)
@@ -249,6 +256,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.brokers = []  # List of found MQTT broker mDNS names
         self.broker = None  # Current MQTT broker's mDNS name
+        self.brokerInfo = None
 
         # TODO: Better column collection (assemble piecemeal based on parameters)
         cols = self.ADVANCED_COLUMNS if self.showAdvanced else self.COLUMNS
@@ -294,18 +302,15 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         selpane.SetSizerProps(expand=True)
         self.remoteCheck = wx.CheckBox(selpane, -1, "Show Remote Devices")
         self.remoteCheck.SetSizerProps(valign='centre')
-        self.brokerText = wx.StaticText(selpane, -1, "Broker:", size=(-1, self.remoteCheck.GetSize()[1]))
-        self.brokerText.SetSizerProps(proportion=0, valign='centre', halign="right")
-        self.brokerList = wx.Choice(selpane, -1)
-        self.brokerList.SetSizerProps(proportion=2)
-        self.brokerScanBtn = wx.Button(selpane, -1, "Rescan")
 
-        self.remoteCheck.Bind(wx.EVT_CHECKBOX, self.OnRemoteCheckChanged)
-        self.brokerList.Bind(wx.EVT_CHOICE, self.OnBrokerSelected)
-        self.brokerScanBtn.Bind(wx.EVT_BUTTON, self.OnBrokerRescan)
+        self.brokerList = BrokerField(selpane)
+        self.brokerList.SetSizerProps(valign='center', expand=True)
 
         self.remoteCheck.SetValue(self.remote)
-        self.OnRemoteCheckChanged(None)
+        self.brokerList.Show(self.remote)
+
+        self.remoteCheck.Bind(wx.EVT_CHECKBOX, self.OnRemoteCheckChanged)
+        self.Bind(EVT_BROKER_UPDATE, self.OnBrokerSelected)
 
 
     # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
@@ -710,6 +715,18 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             b.Enable(enabled)
 
 
+    def getAllDevices(self) -> List[Recorder]:
+        """ Get all available devices.
+        """
+        # TODO: Get MQTT devices! Needs `update` implementation in `MQTTConnector.getDevices()`
+        devices = getDevices()
+
+        if self.filter is not None:
+            return [d for d in devices if self.filter(d)]
+
+        return devices
+
+
     # =======================================================================
     # Event handling
     # =======================================================================
@@ -734,7 +751,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         if drivesChanged or self.updateCount % 4 == 0:
             # Look for new recorders every 4th call.
             with self.updatingRecorders:
-                new = getAllDevices(self.filter)
+                new = self.getAllDevices()
 
                 for dev in new:
                     self.recorderTimeouts[dev] = (
@@ -886,6 +903,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """ Handle dialog being shown/hidden.
         """
         if evt.IsShown():
+            try:
+                if self.remote:
+                    if self.remoteCheck.IsChecked():
+                        wx.CallAfter(self.brokerList.postSelectionEvent)
+            except Exception as err:
+                logger.error(f'Failed to post first broker selection event: {err!r}')
+
             self.OnUpdateTimerTick(None)
             if self.autoUpdate:
                 if not self.updateTimer.IsRunning():
@@ -1000,63 +1024,22 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             things on startup.
         """
         checked = self.remoteCheck.GetValue()
-        self.brokerText.Show(checked)
         self.brokerList.Show(checked)
-        self.brokerScanBtn.Show(checked)
+        self.populateList()
 
 
-    def OnBrokerSelected(self, _evt):
+    def OnBrokerSelected(self, evt):
         """ Handle an MQTT broker selection.
         """
-        # TODO: Implement me!
-        idx = self.brokerList.GetSelection()
-        if idx < 0:
-            return
-
-        newBroker = self.brokers[idx]
-        if self.broker == newBroker:
-            logger.debug('same broker selected')
-            return
-
-        self.broker = self.brokers[idx]
-        self.brokerList.SetToolTip(f'{self.broker}')
-        ...
-
-
-    def OnBrokerRescan(self, _evt):
-        """ Handle 'scan' button press, starting a broker list update.
-        """
-        # TODO: Implement me!
-        brokers = findBrokers()
-        del self.brokers[:]
-        self.brokers.extend(brokers)
-
-        names = [b['name'] for b in self.brokers]
-        self.brokerList.SetItems(names)
-
-        if not names:
-            return
-
-        prevBroker = self.broker
-
-        if self.broker and self.broker['name'] in names:
-            idx = names.index(self.broker['name'])
+        info = evt.broker
+        if not info:
+            logger.debug("No broker info in selection event, bad broker address?")
+        elif info == self.brokerInfo:
+            logger.debug('same broker selected, ignoring')
         else:
-            idx = 0
-            self.broker = None
-
-        self.brokerList.SetSelection(idx)
-
-        if self.brokers[idx] != prevBroker:
-            self.OnBrokerSelected(None)
-
-
-    def OnBrokerListUpdate(self, evt):
-        """ Handle an event generated by the completion of a mDNS scan for
-            MQTT brokers
-        """
-        # TODO: Implement me!
-        ...
+            print(f'OnBrokerSelected: {evt.broker}')
+            # TODO: Implement me!
+            self.OnUpdateTimerTick(None)
 
 
 # ===========================================================================
