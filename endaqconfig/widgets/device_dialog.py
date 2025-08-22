@@ -257,6 +257,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.brokers = []  # List of found MQTT broker mDNS names
         self.broker = None  # Current MQTT broker's mDNS name
         self.brokerInfo = None
+        self.connector: MQTTConnector = None
 
         # TODO: Better column collection (assemble piecemeal based on parameters)
         cols = self.ADVANCED_COLUMNS if self.showAdvanced else self.COLUMNS
@@ -626,6 +627,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         finally:
             self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
             self.updatingDisplay.clear()
+            logger.debug('populating list complete')
 
 
     def updateRow(self, dev: Recorder, enabled: bool = True):
@@ -719,19 +721,25 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """ Get all available devices.
         """
         # TODO: Get MQTT devices! Needs `update` implementation in `MQTTConnector.getDevices()`
-        devices = getDevices()
+
+        devices = set()
+
+        if self.connector:
+            devices.update(self.connector.getDevices())
+
+        devices.update(getDevices())
 
         if self.filter is not None:
             return [d for d in devices if self.filter(d)]
 
-        return devices
+        return list(devices)
 
 
     # =======================================================================
     # Event handling
     # =======================================================================
 
-    def OnUpdateTimerTick(self, _evt: Optional[wx.TimerEvent]):
+    def OnUpdateTimerTick(self, _evt: Optional[wx.TimerEvent] = None):
         """ Handle the device-scanning timer ticking.
         """
         now = time()
@@ -910,7 +918,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             except Exception as err:
                 logger.error(f'Failed to post first broker selection event: {err!r}')
 
-            self.OnUpdateTimerTick(None)
+            # self.OnUpdateTimerTick(None)
+            wx.CallAfter(self.OnUpdateTimerTick)
+
             if self.autoUpdate:
                 if not self.updateTimer.IsRunning():
                     self.updateTimer.Start(1000)
@@ -921,6 +931,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if self.tooltipFrame:
                 self.tooltipFrame.timer.Stop()
                 self.tooltipFrame.Hide()
+            if self.connector:
+                self.connector.disconnect()
         evt.Skip()
         
 
@@ -1034,12 +1046,28 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         info = evt.broker
         if not info:
             logger.debug("No broker info in selection event, bad broker address?")
+            return
         elif info == self.brokerInfo:
             logger.debug('same broker selected, ignoring')
-        else:
-            print(f'OnBrokerSelected: {evt.broker}')
-            # TODO: Implement me!
-            self.OnUpdateTimerTick(None)
+            return
+
+        print(f'OnBrokerSelected: {evt.broker}')
+
+        oldConnector = self.connector
+        if oldConnector:
+            oldConnector.disconnect()
+
+        try:
+            newcon = MQTTConnector(info['host'], info['port'], name=info['name'])
+            newcon.connect()
+            self.connector = newcon
+        except Exception:
+            if oldConnector:
+                self.connector = oldConnector
+                self.connector.connect()
+            raise
+
+        wx.CallAfter(self.OnUpdateTimerTick)
 
 
 # ===========================================================================

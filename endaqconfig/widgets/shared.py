@@ -216,7 +216,8 @@ def parseIP(val: str,
     """
     Validate and parse an IP address, optionally with a port number separated
     by a colon. If the structure of the address is valid, the ability to
-    connect will be tested (optional).
+    connect will be tested (optional). ``localhost`` is a special case,
+    and gets converted to the computer's actual IP.
 
     :param val: The IP address (e.g., ``192.168.0.1`` or ``192.168.0.1:1883``).
     :param defaultPort: The default port number to use (if not included in `val`).
@@ -235,6 +236,7 @@ def parseIP(val: str,
                 raise ValueError
 
         port = int(port or defaultPort)
+
     except (AttributeError, ValueError, TypeError):
         raise ValueError(f'Invalid IP address: {val!r}') from None
 
@@ -258,12 +260,10 @@ class BrokerField(wx.Panel):
     A widget for selecting an MQTT broker, either from advertising or
     a manually-entered IP address.
 
-    @todo: implement manual entry of IP address!
     """
 
-    # Warning symbol to append to bad names/IPs
-    WARNING = ' \u26A0'
-
+    # Background/foreground color of selection field if the broker
+    # name/address is invalid. `None` means that color doesn't change.
     BAD_COLOR = (wx.Colour(255, 200, 200), None)
 
 
@@ -336,10 +336,10 @@ class BrokerField(wx.Panel):
 
             self.selectedName = self.GetString()
 
-            self.brokers = {b['name']: b for b in findBrokers(**self.scanKwargs)}
+            self.brokers = {b['name']: b for b in findBrokers(None, **self.scanKwargs)}
             self.names = sorted(self.brokers)
 
-            if not self.selectedName:
+            if self.names and not self.selectedName:
                 self.selectedName = self.names[0]
 
             self.list.SetItems(self.names)
@@ -357,12 +357,16 @@ class BrokerField(wx.Panel):
 
 
     def _setListColor(self, color):
+        """ Convenience method to set the list back/fore colors.
+        """
         bg, fg = color
         self.list.SetBackgroundColour(bg or self.defaultColors[0])
         self.list.SetForegroundColour(fg or self.defaultColors[1])
 
 
     def _setSelectedToolTip(self):
+        """ Update the list tooktip for the currently selected broker name.
+        """
         selected = self.GetString()
         if not selected:
             self.list.SetToolTip('')
@@ -377,7 +381,13 @@ class BrokerField(wx.Panel):
         self.list.SetToolTip("{name}.{serviceType}\nIP {host[0]} port {port}".format(**info))
 
 
-    def validateSelection(self):
+    def validateSelection(self) -> bool:
+        """ Check that the currently selected (or typed) broker IP address
+            is valid and update the tooltip. Bad values are indicated by
+            the list background color.
+
+            :return: True if valid, False otherwise.
+        """
         if not self.validate:
             return True
 
@@ -413,9 +423,13 @@ class BrokerField(wx.Panel):
 
 
     def postSelectionEvent(self):
+        """ Post a broker selection event to the main window.
+        """
         logger.debug('Posting broker change')
-        wx.PostEvent(wx.GetActiveWindow(),
-                     EvtBrokerUpdate(broker=self.GetValue()))
+
+        # TODO: Make sure this works when called through enDAQ Lab, etc.
+        dest = wx.GetActiveWindow()
+        wx.PostEvent(dest, EvtBrokerUpdate(broker=self.GetValue()))
 
 
     def OnBrokerScan(self, _evt):
@@ -472,11 +486,13 @@ class BrokerField(wx.Panel):
 
 
     def GetString(self) -> str:
-        return self.list.GetValue().replace(self.WARNING, '').strip()
+        """ Get the currently selected broker name/IP.
+        """
+        return self.list.GetValue().strip()
 
 
     def IsValid(self) -> bool:
         """ Is the currently-selected broker name/address valid?
         """
-        txt = self.list.GetValue()
-        return txt and self.WARNING not in txt
+        broker = self.GetValue()
+        return bool(broker)

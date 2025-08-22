@@ -69,7 +69,8 @@ class ControlButtons(wx.Panel):
 
         sizer.Fit(self)
 
-        self.updateButtons()
+        # updateList should do this
+        # self.updateButtons()
 
 
     def addButtons(self, sizer, showConfig):
@@ -120,11 +121,12 @@ class ControlButtons(wx.Panel):
                            and self.device.canRecord
                            and not self.uploading)
 
-        self.configBtn.Enable(enabled
-                              and self.device.hasConfigInterface
-                              and self.device.config.available
-                              and not self.uploading
-                              and not self.recording)
+        if self.configBtn.IsShown():
+            self.configBtn.Enable(enabled
+                                  and self.device.hasConfigInterface
+                                  and self.device.config.available
+                                  and not self.uploading
+                                  and not self.recording)
 
         if self.recording:
             label = ("Stop Streaming" if status == DeviceStatusCode.STREAMING
