@@ -493,10 +493,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         else:
             age = lifeleft = None
 
-        calExp = dev.getCalExpiration()
-        if calExp:
-            calExp = calExp.replace(tzinfo=datetime.timezone.utc)
-
         pathtext = dev.path
         if dev.path and os.path.exists(dev.path):
             freeSpace = os_specific.getFreeSpace(dev.path) / 1048576
@@ -519,13 +515,21 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if lifeleft.days < 0:
                 icon = max(icon, self.ICON_WARN)
 
-        if calExp:
-            if calExp < now:
-                tips.append(f"This device's calibration has expired on {calExp.date()}.")
-                icon = max(icon, self.ICON_WARN)
-            elif now - calExp < CAL_WARN_DAYS:
-                tips.append(f"This device's calibration will expire on {calExp.date()}.")
-                icon = max(icon, self.ICON_INFO)
+        # Check for cached cal data, skip if not present
+        # XXX: TODO: put `dev.getCalExpiration()` in the update thread.
+        #  Getting calibration expiration on serial-only/MQTT devices involves several commands
+        #  and it lags when a device first appears.
+
+        if True:  # dev._calibration:
+            calExp = dev.getCalExpiration()
+            if calExp:
+                calExp = calExp.replace(tzinfo=datetime.timezone.utc)
+                if calExp < now:
+                    tips.append(f"This device's calibration has expired on {calExp.date()}.")
+                    icon = max(icon, self.ICON_WARN)
+                elif now - calExp < CAL_WARN_DAYS:
+                    tips.append(f"This device's calibration will expire on {calExp.date()}.")
+                    icon = max(icon, self.ICON_INFO)
 
         if self.showConnection:
             self.list.SetItemImage(index, [icon, self.getConnectionIcon(dev)])
