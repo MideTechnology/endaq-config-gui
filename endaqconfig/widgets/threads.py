@@ -24,6 +24,93 @@ if TYPE_CHECKING:
 #
 # ===========================================================================
 
+class DeviceScanThread(threading.Thread):
+    """
+    Thread that collects devices, connected via USB and MQTT.
+    """
+
+    def __init__(self,
+                 parent: "DeviceSelectionDialog",
+                 interval: float = 3):
+        """
+        Thread that collects devices, connected via USB and MQTT.
+
+        :param parent: The parent dialog.
+        :param interval: Time (seconds) between scans for devices.
+        """
+        self.parent = parent
+        self.interval = interval
+
+        self.paused = threading.Event()  # Set to pause the scanning
+        self.stop = threading.Event()  # Set to kill the thread
+        self.mqttUpdated = threading.Event()  # Set when an update from the Device Manager arrives
+        self.updating = threading.RLock()
+
+        self.mqttDevices = set()  # Last found MQTT devices
+        self.lastMqttSerials = set()  # Serial numbers of known MQTT devices
+        self.devices = set()  # All found devices, USB and MQTT
+
+        super().__init__(daemon=True)
+        self.name = self.name.replace('Thread', type(self).__name__)
+
+        self.mqttUpdated.set()
+        # self.start()
+
+
+    def onUpdate(self, devices: List[int]):
+        """
+        Called by the `MQTTConnector` when an update arrives. The parent
+        must supply this to `MQTTConnector` during its instantiation.
+
+        :param devices:
+        :return:
+        """
+        # XXX: Modify MQTTConnector._onManagerState() to send list of all SN
+        #  in the message instead of existing device instances
+        devices = set(devices)
+        if devices != self.lastMqttSerials:
+            self.lastMqttSerials = devices
+            self.mqttUpdated.set()
+
+
+    def run(self):
+        """ Main loop. """
+        while not self.stop.is_set():
+            if self.paused.is_set():
+                sleep(0.1)
+                continue
+
+            devices = set()
+
+            if (self.mqttUpdated.is_set()
+                    and self.parent.connector
+                    and self.parent.connector.client.is_connected()):
+                self.mqttUpdated.clear()
+                try:
+                    self.mqttDevices = set(self.parent.connector.getDevices())
+                except TimeoutError:
+                    logger.debug('timed out getting MQTT devices')
+
+            devices.update(self.mqttDevices)
+            devices.update(getDevices())
+
+            with self.updating:
+                self.devices = devices
+
+            sleep(self.interval)
+
+
+    def getDevices(self) -> List[Recorder]:
+        """ Get a list of all active devices.
+        """
+        with self.updating:
+            return sorted(self.devices, key=lambda x: x.serialNumberInt)
+
+
+# ===========================================================================
+#
+# ===========================================================================
+
 class DeviceCommandThread(threading.Thread):
     """
     A slightly safer-than-normal thread for asynchronously calling simple
