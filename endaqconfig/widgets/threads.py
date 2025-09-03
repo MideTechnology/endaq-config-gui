@@ -189,7 +189,7 @@ class DeviceCommandThread(threading.Thread):
         self.completed = threading.Event()  # Set upon successful completion
         self.result: Any = None  # The result of the function (if any)
         self.failed = threading.Event()  # Set if command raises an exception
-        self.failure: Exception = None  # Exception raised by the command (if any)
+        self.failure: Optional[Exception] = None  # Exception raised by the command (if any)
 
         super().__init__(daemon=True)
         self.name = self.name.replace('Thread', type(self).__name__)
@@ -200,12 +200,12 @@ class DeviceCommandThread(threading.Thread):
         try:
             self.result = self.command(*self.args, **self.kwargs)
             self.completed.set()
-            logger.debug(f'DeviceCommandThread: {self.device} '
-                         f'{self.command.__name__} succeeded')
+            # logger.debug(f'{self.name}: {self.device} '
+            #              f'{self.command.__name__} succeeded')
         except Exception as err:
             self.failed.set()
             self.failure = err
-            logger.error(f'DeviceCommandThread: {self.device} '
+            logger.error(f'{self.name}: {self.device} '
                          f'{self.command.__name__} failed: {err!r}')
 
 
