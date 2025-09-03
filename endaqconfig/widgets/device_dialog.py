@@ -18,9 +18,9 @@ import wx.lib.mixins.listctrl as listmix
 from wx.lib.agw import ultimatelistctrl as ULC
 
 from endaq.device import (Recorder, RECORDERS, UnsupportedFeature,
-                          DeviceError, deviceChanged, getDevices)
+                          DeviceError, deviceChanged)
 from endaq.device.base import os_specific
-from endaq.device.response_codes import DeviceStatusCode
+# from endaq.device.response_codes import DeviceStatusCode
 from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface, MQTTConnector
 
 from . import battery_icons
@@ -28,7 +28,7 @@ from . import icons
 from .controls import (_attribFormatter, populateStatusColumn,
                        populateButtonColumn, populateBatteryColumn)
 from .events import EvtRecordButton, EVT_RECORD_BUTTON, EVT_BROKER_UPDATE
-from .threads import DeviceCommandThread, getDeviceStatus, updateDeviceStatus
+from .threads import DeviceScanThread, DeviceCommandThread, getDeviceStatus
 from .shared import DeviceToolTip, BrokerField
 
 logger = logging.getLogger(__name__)
@@ -168,6 +168,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             :keyword autoUpdate: A number of milliseconds to delay between
                 checks for changes to attached recorders. 0 will never
                 automatically refresh. Default is 500 ms.
+            :keyword scanInterval: The number of milliseconds between
+                scans for new devices. Default is 4000 ms.
             :keyword showWarnings: If `False`, battery age and calibration
                 expiration warnings will not be shown for selected devices.
                 Default is `True`.
@@ -205,7 +207,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # Clear cached devices
         RECORDERS.clear()
 
-        self.autoUpdate: Union[int, bool] = kwargs.pop('autoUpdate', 250)
+        self.autoUpdate: Union[int, bool] = kwargs.pop('autoUpdate', 500)
+        self.scanInterval: Union[int, bool] = kwargs.pop('scanInterval', 4000)
         self.hideClock: bool = kwargs.pop('hideClock', False)
         self.hideRecord: bool = kwargs.pop('hideRecord', True)
         self.showWarnings: bool = kwargs.pop('showWarnings', True)
@@ -243,12 +246,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.updateTimer = wx.Timer(self)
         self.updateCount = 0
         self.updateCancelled = threading.Event()  # Use as callback for getBatteryStatus/ping commands
-        self.updateThreads: Dict[Recorder, threading.Thread] = {}
+        self.updateThreads: Dict[Recorder, threading.Thread] = {}  # XXX: remove?
+        self.scanThread: DeviceScanThread = None
 
         self.updatingDisplay = threading.Event()  # Set while updating, so other calls skip.
 
         self.recorders: List[Recorder] = []  # The currently-displayed recorders.
-        self.recorderStatus: Dict[Recorder, Tuple[Optional[int], Optional[str]]] = {}  # Recorder status, battery state, and path, keyed by `Recorder`
+        self.recorderStatus: Dict[Recorder, Tuple] = {}  # Recorder status, battery state, and path, keyed by `Recorder`
         self.recorderTimeouts: Dict[Recorder, float] = {}  # Time to remove a recorder from `recorderStatus` if not in `getDevices()`
         self.recordersByIndex: Dict[int, Recorder] = {}  # `Recorder` instances keyed by list index.
         self.indicesByRecorder: Dict[Recorder, int] = {}  # List index keyed by `Recorder`
@@ -449,6 +453,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """ Get the index of the appropriate connection type icon.
         """
         if dev.available:
+            # Mounted as a drive
             return self.ICON_CONNECTION_MSD
 
         try:
@@ -515,12 +520,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if lifeleft.days < 0:
                 icon = max(icon, self.ICON_WARN)
 
-        # Check for cached cal data, skip if not present
-        # XXX: TODO: put `dev.getCalExpiration()` in the update thread.
-        #  Getting calibration expiration on serial-only/MQTT devices involves several commands
-        #  and it lags when a device first appears.
-
-        if True:  # dev._calibration:
+        # Check for cached cal data, skip if not present. As it can be slow
+        # on MQTT devices (endaq.device circa 2025-09), reading this is done
+        # in a separate thread.
+        if dev._calibration:
             calExp = dev.getCalExpiration()
             if calExp:
                 calExp = calExp.replace(tzinfo=datetime.timezone.utc)
@@ -649,10 +652,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         if self.showWarnings:
             self.setItemIcon(index, dev)
 
-        status = self.recorderStatus.get(dev, (None, (DeviceStatusCode.IDLE, '')))[1][0]
-        enabled = enabled and self.recorderStatus[dev][-1]  # dev.command.available
-
-        dev._displayStatus = status
+        # status = self.recorderStatus.get(dev, (None, (DeviceStatusCode.IDLE, '')))[1][0]
+        enabled = enabled and self.recorderStatus[dev][-2]  # dev.command.available
 
         # enable or disable the row
         # excludes button panel - do that explicitly
@@ -721,22 +722,39 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             b.Enable(enabled)
 
 
-    def getAllDevices(self) -> List[Recorder]:
-        """ Get all available devices.
+    def startUpdater(self):
+        """ Start the disply updating threads and timers.
         """
-        # TODO: Get MQTT devices! Needs `update` implementation in `MQTTConnector.getDevices()`
+        if not self.scanThread or not self.scanThread.is_alive():
+            interval = self.scanInterval / 1000 if self.autoUpdate else 0
+            self.scanThread = DeviceScanThread(self, interval)
+            self.scanThread.start()
 
-        devices = set()
+        self.scanThread.paused.clear()
+        self.updateCancelled.clear()
 
-        if self.connector:
-            devices.update(self.connector.getDevices())
+        if self.autoUpdate:
+            self.updateTimer.Start(self.autoUpdate)
 
-        devices.update(getDevices())
 
-        if self.filter is not None:
-            return [d for d in devices if self.filter(d)]
+    def stopUpdater(self):
+        """ Terminate the display updating threads and timers.
+        """
+        self.updateTimer.Stop()
+        self.updateCancelled.set()
+        self.updatingDisplay.set()
 
-        return list(devices)
+        if self.scanThread and self.scanThread.is_alive():
+            self.scanThread.stop.set()
+
+
+    def pauseUpdater(self):
+        """ Temporarily pause the display updating. Resume it with
+            `startUpdater()`.
+        """
+        self.updateTimer.Stop()
+        if self.scanThread and self.scanThread.is_alive():
+            self.scanThread.paused.set()
 
 
     # =======================================================================
@@ -748,45 +766,21 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         now = time()
 
-        # Try to kill any existing (unresponsive) threads
-        self.updateCancelled.set()
-        wx.MilliSleep(50)
-        for dev, thread in tuple(self.updateThreads.items()):
-            if not thread.is_alive():
-                del self.updateThreads[dev]
-        self.updateCancelled.clear()
-
-        drivesChanged = deviceChanged(recordersOnly=False)
+        drivesChanged = deviceChanged(recordersOnly=False)  # XXX: remove this?
         foundChanged = False
         statusChanged = False
 
-        if drivesChanged or self.updateCount % 4 == 0:
-            # Look for new recorders every 4th call.
-            with self.updatingRecorders:
-                new = self.getAllDevices()
+        with self.updatingRecorders:
+            for dev in self.scanThread.getDevices():
+                self.recorderTimeouts[dev] = (
+                    now + self.MQTT_TIMEOUT if isinstance(dev.command, MQTTCommandInterface)
+                    else now + self.SERIAL_TIMEOUT
+                )
 
-                for dev in new:
-                    self.recorderTimeouts[dev] = (
-                        now + self.MQTT_TIMEOUT if isinstance(dev.command, MQTTCommandInterface)
-                        else now + self.SERIAL_TIMEOUT
-                    )
-
-                self.recorderTimeouts = {k: v for k, v in self.recorderTimeouts.items() if now < v}
-                new = list(self.recorderTimeouts)
-                foundChanged = set(new) != set(self.recorders)
-                self.recorders = new
-
-        if foundChanged or self.updateCount % 2 == 0:
-            # Fetch fresh state data every 2nd call.
-            for dev in self.recorders:
-                if dev in self.updateThreads and self.updateThreads[dev].is_alive():
-                    logger.debug(f'update thread for device {dev} is still running')
-                    continue
-
-                self.updateThreads[dev] = threading.Thread(target=updateDeviceStatus,
-                                                           args=(dev, self.updateCancelled.is_set),
-                                                           daemon=True)
-                self.updateThreads[dev].start()
+            self.recorderTimeouts = {k: v for k, v in self.recorderTimeouts.items() if now < v}
+            new = list(self.recorderTimeouts)
+            foundChanged = set(new) != set(self.recorders)
+            self.recorders = new
 
         with self.updatingRecorders:
             newStatus = {dev: getDeviceStatus(dev) for dev in self.recorders}
@@ -922,21 +916,17 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             except Exception as err:
                 logger.error(f'Failed to post first broker selection event: {err!r}')
 
-            # self.OnUpdateTimerTick(None)
             wx.CallAfter(self.OnUpdateTimerTick)
+            self.startUpdater()
 
-            if self.autoUpdate:
-                if not self.updateTimer.IsRunning():
-                    self.updateTimer.Start(1000)
         else:
-            self.updateTimer.Stop()
-            self.updateCancelled.set()
-            self.updatingDisplay.set()
+            self.stopUpdater()
             if self.tooltipFrame:
                 self.tooltipFrame.timer.Stop()
                 self.tooltipFrame.Hide()
             if self.connector:
                 self.connector.disconnect()
+
         evt.Skip()
         
 
@@ -1065,6 +1055,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             newcon = MQTTConnector(info['host'], info['port'], name=info['name'])
             newcon.connect()
             self.connector = newcon
+
+            self.recorders = []
+            self.recorderStatus.clear()
+            self.recorderTimeouts.clear()
+            self.recordersByIndex.clear()
+            self.indicesByRecorder.clear()
+
         except Exception:
             if oldConnector:
                 self.connector = oldConnector
