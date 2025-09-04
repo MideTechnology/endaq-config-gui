@@ -705,15 +705,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         return self.recordersByIndex.get(self.selected, None)
 
 
-    def isDead(self) -> bool:
-        """ Callback function that indicates the dialog is still working.
-            Primarily for use as a callback in threads sending commands
-            to devices.
-        """
-        # TODO: This may need more work
-        return not self.updateTimer.IsRunning()
-
-
     def enableButtons(self, enabled=True):
         """ Disable/enable main dialog buttons while a command executes.
         """
@@ -758,7 +749,29 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     # =======================================================================
-    # Event handling
+    # Callbacks (not wxPython events)
+    # =======================================================================
+
+    def isDead(self) -> bool:
+        """ Callback function that indicates the dialog is still working.
+            Primarily for use as a callback in threads sending commands
+            to devices.
+        """
+        # TODO: This may need more work
+        return (not self.updateTimer.IsRunning()
+                and not (self.scanThread and self.scanThread.is_alive()))
+
+
+    def onMqttUpdate(self, data):
+        """ Callback function executed when the `MQTTConnector` receives
+            a state update from the Device Manager.
+        """
+        if self.scanThread and self.scanThread.is_alive():
+            self.scanThread.onUpdate(data)
+
+
+    # =======================================================================
+    # wxPython Event handling
     # =======================================================================
 
     def OnUpdateTimerTick(self, _evt: Optional[wx.TimerEvent] = None):
@@ -1052,7 +1065,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             oldConnector.disconnect()
 
         try:
-            newcon = MQTTConnector(info['host'], info['port'], name=info['name'])
+            newcon = MQTTConnector(info['host'], info['port'], name=info['name'],
+                                   updateCallback=self.onMqttUpdate)
             newcon.connect()
             self.connector = newcon
 

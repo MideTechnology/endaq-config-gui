@@ -64,7 +64,8 @@ class DeviceScanThread(threading.Thread):
     def onUpdate(self, update: dict):
         """
         Called by the `MQTTConnector` when an update arrives. The parent
-        must supply this to `MQTTConnector` during its instantiation.
+        must supply this to `MQTTConnector` during its instantiation (via
+        the `updateCallback` argument).
 
         :param update: A dictionary of data, the ``EBMLResponse`` content of
             a `MQTTDeviceManager` state update message.
@@ -115,7 +116,8 @@ class DeviceScanThread(threading.Thread):
             currentThreads = {}
 
             # Check if any previous update threads failed and collect any
-            # that are still running (although they should all be done by now)
+            # that are still running (although they should all be done by now,
+            # either successfully or had the command time out)
             for dev, thread in self.updateThreads.items():
                 if thread.failed.is_set():
                     logger.debug(f'Update thread for {dev} failed: {thread.failure!r}')
@@ -124,7 +126,7 @@ class DeviceScanThread(threading.Thread):
 
             for dev in devices:
                 if dev not in self.updateThreads:
-                    currentThreads[dev] = DeviceCommandThread(dev, dev.getCalExpiration)
+                    currentThreads[dev] = DeviceCommandThread(dev, updateDeviceStatus, dev, callback=self.stopped)
 
             self.devices = devices
             self.updateThreads = currentThreads
