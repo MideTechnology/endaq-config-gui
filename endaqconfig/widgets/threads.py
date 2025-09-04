@@ -74,9 +74,8 @@ class DeviceScanThread(threading.Thread):
             sns = set(d.get('SerialNumber') for d in update['DeviceList']['DeviceListItem'])
             if sns != self.lastMqttSerials:
                 logger.debug('Got update from Manager; devices changed')
-                with self.updating:
-                    self.lastMqttSerials = sns
-                    self.mqttUpdated.set()
+                self.lastMqttSerials = sns
+                self.mqttUpdated.set()
             else:
                 logger.debug('Got update from Manager; same devices')
         except KeyError:
@@ -124,11 +123,12 @@ class DeviceScanThread(threading.Thread):
                 elif dev in devices and thread.is_alive():
                     currentThreads[dev] = thread
 
-            for dev in devices:
+            self.devices = devices
+
+        with self.updating:
+            for dev in self.devices:
                 if dev not in self.updateThreads:
                     currentThreads[dev] = DeviceCommandThread(dev, updateDeviceStatus, dev, callback=self.stopped)
-
-            self.devices = devices
             self.updateThreads = currentThreads
 
 

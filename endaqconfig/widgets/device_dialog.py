@@ -97,52 +97,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     RECORD_UNSUPPORTED = "Device does not support recording via software"
     RECORD_ENABLED = "Initiate recording on all capable devices"
 
-    # Text colors for the Status column
-    # If status >= 200, use status % 100.
-    STATUS_COLORS = {
-        0: None,  # Idle
-        10: wx.BLUE,  # Recording
-        20: wx.Colour(0, 200, 0),  # Reset pending
-        30: wx.Colour(0, 200, 0),  # Start Pending
-        31: wx.BLUE,  # Stopping recording
-        40: wx.Colour(0, 200, 0),  # Triggering
-        50: wx.BLUE,  # Uploading
-        100: wx.Colour(200, 200, 200),  # Sleeping
-        101: wx.Colour(200, 200, 200),  # Waking
-        110: wx.Colour(200, 200, 200),  # Going offline
-        -10: wx.RED  # Error (default for all negative status codes)
-    }
-
-    # Status text
-    # DeviceStatusCode seems to get cast to int, so enum names not available
-    # If status >= 200, use status % 100.
-    STATUS_TEXT = {
-        -10: "Error",
-        0: "Ready",
-        1: "Ready",
-        10: "Recording",
-        20: "Resetting",
-        29: "Updating",  # Not a real code, replace if added or number reused
-        30: "Starting",
-        31: "Stopping",
-        40: "Triggering",
-        50: "Uploading",
-        60: "Streaming",
-        100: "Sleeping",
-        101: "Waking",
-        110: "Offline",
-    }
-
-    # Status text
-    # Longer forms of some STATUS_TEXT, used where there's more space
-    # TODO: Use this in tooltips!
-    STATUS_TOOLTIP = {
-        29: "Updating Software",  # Not a real code, replace if added or number reused
-        30: "Starting Recording",
-        31: "Stopping Recording",
-        40: "Awaiting Trigger",
-        50: "Uploading to Cloud",
-    }
 
 
     SERIAL_TIMEOUT = 10
