@@ -51,6 +51,7 @@ class DeviceScanThread(threading.Thread):
         self.updateCancelled = threading.Event()
 
         self.lastScan: float = 0.0
+        self.lastMqttGet: float = 0.0  # last time parent.connector.getDevices() called
         self.mqttDevices = set()  # Last found MQTT devices
         self.lastMqttSerials = set()  # Serial numbers of known MQTT devices
         self.devices = set()  # All found devices, USB and MQTT
@@ -76,6 +77,11 @@ class DeviceScanThread(threading.Thread):
                 logger.debug('Got update from Manager; devices changed')
                 self.lastMqttSerials = sns
                 self.mqttUpdated.set()
+            elif set(d.serialInt for d in self.parent.recorders).difference(sns):
+                # XXX: Occasionally reported devices unchanged but some not shown... not sure why, so here's a hack
+                logger.debug('Got update from Manager; same devices, but some not displayed?')
+                self.lastMqttSerials = sns
+                self.mqttUpdated.set()
             else:
                 logger.debug('Got update from Manager; same devices')
         except KeyError:
@@ -91,21 +97,22 @@ class DeviceScanThread(threading.Thread):
     def scan(self):
         """ Collect found devices.
         """
-        self.lastScan = time()
+        self.lastScan = now = time()
         devices = set()
 
-        if (self.mqttUpdated.is_set()
-                and self.parent.connector
-                and self.parent.connector.client.is_connected()):
+        connected = self.parent.connector and self.parent.connector.client.is_connected()
+
+        if connected and (self.mqttUpdated.is_set() or now - self.lastMqttGet > 30):
             logger.debug('Collecting MQTT devices...')
-            self.mqttUpdated.clear()
             try:
                 mqttDevices = set(self.parent.connector.getDevices(callback=self.stopped))
                 with self.updating:
                     self.mqttDevices = mqttDevices
+                    self.lastMqttGet = now
             except TimeoutError:
                 logger.debug('timed out getting MQTT devices')
 
+        self.mqttUpdated.clear()
         devices.update(self.mqttDevices)
 
         logger.debug('Collecting USB devices...')
@@ -140,7 +147,8 @@ class DeviceScanThread(threading.Thread):
                 sleep(0.1)
                 continue
 
-            if not self.interval or time() - self.lastScan > self.interval:
+            now = time()
+            if not self.interval or now - self.lastScan > self.interval or self.mqttUpdated.is_set():
                 self.scan()
 
             if not self.interval:
