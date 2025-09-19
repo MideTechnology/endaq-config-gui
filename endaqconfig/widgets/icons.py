@@ -373,12 +373,12 @@ connection_bt = PyEmbeddedImage(
 #----------------------------------------------------------------------
 connection_msd = PyEmbeddedImage(
     b'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAnXAAAJ1wGxbhe3'
-    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAN5JREFUOI3F0rFKQ0EQ'
-    b'heFPYuU7mFYFfQBDEBKw0MpeC4O1tU+Ryk4bU5hatBKtFXtBkWCVJ4iIKAgWzr0sN7nJ7XJg'
-    b'4TCz52d2GeathQm1dayV3H/B8zTAHk7xWALYxDGuJjUXMUCzJCx6g7g7pg7upoQz3eOwWKzh'
-    b'DVsVAI10imyUA3xiN84sfWAfvQzQxjfOKoShFZkc8IUbvMcEXQwLoTpWwl9jOX3CD0bhl3CJ'
-    b'fgFwkfhRZHLAr/+PhFds46QAeEp8LTL5Iu3gHA+qqYEj3KabuIHVioCxlZ6f/gDThycMg2u2'
-    b'iAAAAABJRU5ErkJggg==')
+    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAPtJREFUOI2l0zFKBEEQ'
+    b'BdBXutcwM1DQAygibOhGHkBBMTYz8xhmmngE0Ug01gsIgognMFoRUVjKYGfG3oGBwS1oaKr+'
+    b'/91V/Tsy0zyxMBcbg3YiItaw2oF/zsynGXzZQkTs4gyPHQIbOM7MqyaTmSqRAV6xVefaC1sV'
+    b'ZtDkiuIh7rrIBe4eBzMCWMQLtnsIbJa3qIe4j0+MImLU0X8ZH9jDZS0wxDfOe5Br/LAU+MJN'
+    b'Zr71YUfENZb488EPxlVxGSeIFu89M0+r/bjiNE6cmA6yFm2Ty8NU2AmVkSJiBxd46NOC6Usc'
+    b'ZeZt48SIWMdKT4HG0jNW/k/M/Rt/AUyyo1z4rYZfAAAAAElFTkSuQmCC')
 
 #----------------------------------------------------------------------
 connection_usb = PyEmbeddedImage(
@@ -393,10 +393,13 @@ connection_usb = PyEmbeddedImage(
 #----------------------------------------------------------------------
 connection_wifi = PyEmbeddedImage(
     b'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAnXAAAJ1wGxbhe3'
-    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAJlJREFUOI3t0bEKwXEU'
-    b'xfGPKGVTbB7AKjyCycBmJrzCf+J9lGJgMtpt3sAiu9ngKumH7L7Tr3POvZ3ujz+5hFZCFx3U'
-    b'Qjthhy2uz+H8y/AAGzRxwB5HFDFGFsuOqTYZzuh9aNyPTJYyF6jHu4p5VN5ihkp49ci+pY0L'
-    b'VhhihHVorU+DD5aYJPRpeD/RcD/oWwpfFpSlv/rPEze37hjRQSs+hQAAAABJRU5ErkJggg==')
+    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAASpJREFUOI3F06FL3VEU'
+    b'B/DPHSLGp3lM4xaEtzLHFh0mXZiCNouwpl3/AMcwuCgWtdkNdhFMKugUFBwIk8W39IpyDDtP'
+    b'fupzBoMXTjjnfL/c77nfc0tEeMp58SQ2OqpJKaXgIyZQx6tsnWMP69iOquyIkPlb7CAeiV28'
+    b'v+EleQZXCfiDRQyjP2MEP7IXiZ1uCRnP4iXmUcMo1rCVsYov6Ma3xEZydWIDYzn/8X/kH+ED'
+    b'PmMTXdU3+IRmAk8wm2MMYw6n2WtisMWr2niIC3zHAP6mGxNo4B0WEvPzngupooY3+NVG/hle'
+    b'o1bl3NqDiGiUUvrQgwMso2AKveiKiEaVU9qtcimljt+YzNIKXkbE/j1wVc6dcYb8s+sSQw/h'
+    b'2iqoKPmalyw9iHn233gNNzS50l+5eOkAAAAASUVORK5CYII=')
 
 #----------------------------------------------------------------------
 button_config_normal = PyEmbeddedImage(
