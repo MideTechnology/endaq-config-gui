@@ -1,10 +1,12 @@
 """
 Device control buttons and column population/content formatting.
 """
+import os.path
 from time import time
 
 import wx
 from wx.lib.agw import ultimatelistctrl as ULC
+import wx.lib.platebtn as platebtn
 
 from endaq.device.response_codes import DeviceStatusCode
 from endaq.device import CommandError, UnsupportedFeature, Recorder
@@ -220,6 +222,62 @@ class ControlButtons(wx.Panel):
 
 
 # ===========================================================================
+
+class NewControlButtons(ControlButtons):
+
+    def _loadImages(self):
+        """
+        TEST. Reads icons from a PNG for easy iteration. Replace with hard-coded converted images later.
+        """
+        filename = os.path.join(os.path.dirname(__file__), 'control_buttons.png')
+        img = wx.Image(filename, wx.BITMAP_TYPE_PNG)
+
+        numIcons = 7
+        size = img.GetWidth() // numIcons
+        icons = []
+        for col in range(numIcons):
+            icons.append([img.GetSubImage(wx.Rect(col * size, row * size, size, size)).ConvertToBitmap() for row in range(4)])
+
+        self.configIcons, self.recordIcons, self.stopIcons, self.streamIcons, self.streamingIcons, self.lockIcons, self.lockedIcons = icons
+        self.icons = icons
+
+    def addButtons(self, sizer, showConfig):
+        """
+        """
+        self._loadImages()
+        size = self.configIcons[0].GetSize()
+
+        style = wx.NO_BORDER | wx.BU_EXACTFIT
+        self.stopBtn = wx.BitmapButton(self, -1, self.stopIcons[0], style=style, size=size)
+        sizer.Add(self.stopBtn, 1, wx.EXPAND)
+        self.recBtn = wx.BitmapButton(self, -1, self.recordIcons[0], style=style, size=size)
+        sizer.Add(self.recBtn, 1, wx.EXPAND)
+        self.streamBtn = wx.BitmapButton(self, -1, self.streamIcons[0], style=style, size=size)
+        sizer.Add(self.streamBtn, 1, wx.EXPAND)
+        self.configBtn = wx.BitmapButton(self, -1, self.configIcons[0], style=style, size=size)
+        sizer.Add(self.configBtn, 1, wx.EXPAND)
+        self.lockBtn = wx.BitmapButton(self, -1, self.lockIcons[0], style=style, size=size)
+        sizer.Add(self.lockBtn, 1, wx.EXPAND)
+
+        self.stopBtn.Enable(False)
+        if not self.device.isRemote:
+            self.streamBtn.Enable(False)
+
+        if 'MQTT' not in type(self.device.command).__name__:
+            self.lockBtn.Enable(False)
+
+        for r, btn in ((0, self.configBtn), (1, self.recBtn), (2, self.stopBtn), (3, self.streamBtn), (5, self.lockBtn)):
+            btn.SetBitmapCurrent(self.icons[r][1])
+            btn.SetBitmapPressed(self.icons[r][2])
+            btn.SetBitmapDisabled(self.icons[r][3])
+            btn.SetBackgroundColour(self.GetBackgroundColour())
+
+        if self.BG_NORMAL is None:
+            self.__class__.BG_NORMAL = self.recBtn.GetBackgroundColour()
+            self.__class__.FG_NORMAL = self.recBtn.GetForegroundColour()
+
+
+# ===========================================================================
 # Column 'formatters.' They actually set the column display and return the
 # value for the list sorting (usually the same as the display text, if any).
 # Standard arguments are the `Recorder`, the index (row), the column number,
@@ -261,7 +319,7 @@ def populateButtonColumn(dev: Recorder,
         :param root: The parent window/dialog.
         :return: A string for use in column sorting ("" in this case).
     """
-    pan = ControlButtons(root, root.list, dev, index, column)
+    pan = NewControlButtons(root, root.list, dev, index, column)
     root.list.SetItemWindow(index, column, pan, expand=True)
     root.minWidths[root.buttonCol] = pan.GetSize()[0]
     return ""

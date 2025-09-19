@@ -169,7 +169,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.showConnection: bool = kwargs.pop('showConnection', True)
         self.showAdvanced: bool = kwargs.pop('showAdvanced', False)
         self.filter: Callable = kwargs.pop('filter', lambda x: True)
-        self.checks: bool = kwargs.pop('checks', False)
+        self.checks: bool = True #kwargs.pop('checks', False)
         self.mustConfigure: bool = kwargs.pop('mustConfig', True)
         self.remote: bool = kwargs.pop('remote', True)
         self.remoteChecked: bool = kwargs.pop('remoteChecked', self.remote)
