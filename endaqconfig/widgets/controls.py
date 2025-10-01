@@ -241,23 +241,29 @@ class NewControlButtons(ControlButtons):
         self.configIcons, self.recordIcons, self.stopIcons, self.streamIcons, self.streamingIcons, self.lockIcons, self.lockedIcons = icons
         self.icons = icons
 
+
     def addButtons(self, sizer, showConfig):
         """
         """
         self._loadImages()
         size = self.configIcons[0].GetSize()
-
         style = wx.NO_BORDER | wx.BU_EXACTFIT
-        self.stopBtn = wx.BitmapButton(self, -1, self.stopIcons[0], style=style, size=size)
-        sizer.Add(self.stopBtn, 1, wx.EXPAND)
-        self.recBtn = wx.BitmapButton(self, -1, self.recordIcons[0], style=style, size=size)
-        sizer.Add(self.recBtn, 1, wx.EXPAND)
-        self.streamBtn = wx.BitmapButton(self, -1, self.streamIcons[0], style=style, size=size)
-        sizer.Add(self.streamBtn, 1, wx.EXPAND)
-        self.configBtn = wx.BitmapButton(self, -1, self.configIcons[0], style=style, size=size)
-        sizer.Add(self.configBtn, 1, wx.EXPAND)
-        self.lockBtn = wx.BitmapButton(self, -1, self.lockIcons[0], style=style, size=size)
-        sizer.Add(self.lockBtn, 1, wx.EXPAND)
+
+        def _add(icons, tooltip):
+            btn = wx.BitmapButton(self, -1, icons[0], style=style, size=size)
+            btn.SetBitmapCurrent(icons[1])
+            btn.SetBitmapPressed(icons[2])
+            btn.SetBitmapDisabled(icons[3])
+            btn.SetBackgroundColour(self.GetBackgroundColour())
+            btn.SetToolTip(tooltip)
+            sizer.Add(btn, 1, wx.EXPAND)
+            return btn
+
+        self.stopBtn = _add(self.stopIcons, 'Stop Recording/Streaming')
+        self.recBtn = _add(self.recordIcons, 'Start Recording')
+        self.streamBtn = _add(self.streamIcons, 'Start Streaming')
+        self.configBtn = _add(self.configIcons, 'Configure Device')
+        self.lockBtn = _add(self.lockIcons, 'Set Device Lock')
 
         self.stopBtn.Enable(False)
         if not self.device.isRemote:
@@ -266,15 +272,20 @@ class NewControlButtons(ControlButtons):
         if 'MQTT' not in type(self.device.command).__name__:
             self.lockBtn.Enable(False)
 
-        for r, btn in ((0, self.configBtn), (1, self.recBtn), (2, self.stopBtn), (3, self.streamBtn), (5, self.lockBtn)):
-            btn.SetBitmapCurrent(self.icons[r][1])
-            btn.SetBitmapPressed(self.icons[r][2])
-            btn.SetBitmapDisabled(self.icons[r][3])
-            btn.SetBackgroundColour(self.GetBackgroundColour())
-
         if self.BG_NORMAL is None:
             self.__class__.BG_NORMAL = self.recBtn.GetBackgroundColour()
             self.__class__.FG_NORMAL = self.recBtn.GetForegroundColour()
+
+
+    def updateLock(self):
+        lockId = self.device.command.lockId[1]
+        locked = lockId and any(lockId)
+
+        icons = self.lockedIcons if locked else self.lockIcons
+        self.lockBtn.SetBitmap(icons[0])
+        self.lockBtn.SetBitmapCurrent(icons[1])
+        self.lockBtn.SetBitmapPressed(icons[2])
+        self.lockBtn.SetBitmapDisabled(icons[3])
 
 
 # ===========================================================================

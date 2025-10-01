@@ -16,6 +16,7 @@ import wx
 import wx.lib.sized_controls as sc
 import wx.lib.mixins.listctrl as listmix
 from wx.lib.agw import ultimatelistctrl as ULC
+import wx.lib.filebrowsebutton as FBB
 
 from endaq.device import (Recorder, RECORDERS, UnsupportedFeature,
                           DeviceError, deviceChanged)
@@ -97,15 +98,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     RECORD_UNSUPPORTED = "Device does not support recording via software"
     RECORD_ENABLED = "Initiate recording on all capable devices"
 
-
-
     SERIAL_TIMEOUT = 10
     MQTT_TIMEOUT = 125
+
 
     # ==============================================================================
     #
     # ==============================================================================
-
 
     def GetListCtrl(self):
         # Required by ColumnSorterMixin
@@ -149,14 +148,18 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             :keyword tooltips: If `True` (default), show list tooltips
                 containing all important device infomation.
             :keyword checks: If `True`, show checkboxes for each device.
+            :keyword allowDoubleClick: If `True`, double-clicking a list item
+                will be the same as selecting it and clicking OK. Defaults
+                to `False` if `checks` is `True`.
             :keyword mustConfig: If `True`, the 'OK' button will only become
                 enabled if the device can be configured.
             :keyword remote: If `True`, show the MQTT broker selection field.
             :keyword remoteChecked: The initial state of the 'use remote'
                 checkbox, if `remote` is `True`. `True` by default.
-            :keyword broker: The name of the selected broker. `None` will
-                select the default.
-
+            :keyword broker: The name of the default, initially selected
+                broker. `None` will select the first found.
+            :keyword showSave: If `True`, show the save path selector.
+            :keyword savePath: The default save path for streams.
         """
         # Clear cached devices
         RECORDERS.clear()
@@ -169,12 +172,15 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.showConnection: bool = kwargs.pop('showConnection', True)
         self.showAdvanced: bool = kwargs.pop('showAdvanced', False)
         self.filter: Callable = kwargs.pop('filter', lambda x: True)
-        self.checks: bool = True #kwargs.pop('checks', False)
+        self.checks: bool = kwargs.pop('checks', True)
+        self.allowDoubleClick: bool = kwargs.pop('allowDoubleClick', not self.checks)
         self.mustConfigure: bool = kwargs.pop('mustConfig', True)
         self.remote: bool = kwargs.pop('remote', True)
         self.remoteChecked: bool = kwargs.pop('remoteChecked', self.remote)
-        self.broker: Optional[str] = kwargs.pop('broker', None)
+        self.showSave: bool = kwargs.pop('showSave', True)
+        self.savePath: str = kwargs.pop('savePath', '')
 
+        defaultBroker: Optional[str] = kwargs.pop('broker', None)
         okText = kwargs.pop('okText', "Configure")
         okHelp = kwargs.pop('okHelp', 'Configure the selected device')
         cancelText = kwargs.pop('cancelText', "Close")
@@ -200,7 +206,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.updateTimer = wx.Timer(self)
         self.updateCount = 0
         self.updateCancelled = threading.Event()  # Use as callback for getBatteryStatus/ping commands
-        self.updateThreads: Dict[Recorder, threading.Thread] = {}  # XXX: remove?
         self.scanThread: DeviceScanThread = None
 
         self.updatingDisplay = threading.Event()  # Set while updating, so other calls skip.
@@ -212,9 +217,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.indicesByRecorder: Dict[Recorder, int] = {}  # List index keyed by `Recorder`
         self.updatingRecorders = threading.RLock()  # To avoid simultaneous dict changes
 
-        self.brokers = []  # List of found MQTT broker mDNS names
-        self.broker = None  # Current MQTT broker's mDNS name
-        self.brokerInfo = None
+        self.checkedRecorders: Dict[int, Recorder] = {}  # Checked items/recorders (to keep checks after update)
+
+        self.brokerInfo = None  # Selected MQTT broker's mDNS info
         self.connector: MQTTConnector = None
 
         # TODO: Better column collection (assemble piecemeal based on parameters)
@@ -227,6 +232,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.initList(pane, tooltips)
 
+        if self.checks:
+            self._addSelectButtons(pane)
+
         # Selected device info
         self.infoText = wx.StaticText(pane, -1, " \n \n \n")
         # noinspection PyUnresolvedReferences
@@ -234,7 +242,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.infoText.Show(self.showWarnings)
 
         if self.remote is not None:
-            self._addBrokerSelect(pane)
+            self._addBrokerSelect(pane, default=defaultBroker)
+
+        # if self.showSave:
+        #     self._addStreamTo(pane, default=self.savePath)
 
         self._addButtons(pane, okText, okHelp, cancelText)
 
@@ -242,6 +253,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.Fit()
         self.SetMinSize((640, 300))
         self.SetMaxSize((1500, 600))
+        self.SetSize((640, 440 if self.checks else 300))
 
         self.Layout()
         self.Centre()
@@ -249,11 +261,12 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.Bind(wx.EVT_SHOW, self.OnShow)
         self.Bind(EVT_RECORD_BUTTON, self.OnStartRecording)
         self.Bind(wx.EVT_TIMER, self.OnUpdateTimerTick, id=self.updateTimer.GetId())
+        print(f'dialog size: {self.GetSize()}')
 
 
     # TODO: REMOVE NEXT COMMENT LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
     # noinspection PyUnresolvedReferences
-    def _addBrokerSelect(self, pane):
+    def _addBrokerSelect(self, pane, default=None):
         """ Add MQTT Broker selection widgets.
         """
         selpane = sc.SizedPanel(pane, -1)
@@ -262,7 +275,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.remoteCheck = wx.CheckBox(selpane, -1, "Show Remote Devices")
         self.remoteCheck.SetSizerProps(valign='centre')
 
-        self.brokerList = BrokerField(selpane)
+        self.brokerList = BrokerField(selpane, default=default)
         self.brokerList.SetSizerProps(valign='center', expand=True)
 
         self.remoteCheck.SetValue(self.remote)
@@ -270,6 +283,59 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.remoteCheck.Bind(wx.EVT_CHECKBOX, self.OnRemoteCheckChanged)
         self.Bind(EVT_BROKER_UPDATE, self.OnBrokerSelected)
+
+
+    # TODO: REMOVE NEXT COMMENT LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
+    # noinspection PyUnresolvedReferences
+    def _addStreamTo(self, pane, default=''):
+        """ Add stream save directory selection selection widgets.
+        """
+        selpane = sc.SizedPanel(pane, -1)
+        selpane.SetSizerType("horizontal")
+        selpane.SetSizerProps(expand=True)
+        self.saveCheck = wx.CheckBox(selpane, -1, "")
+        self.saveCheck.SetSizerProps(valign='centre')
+
+        self.savePathField = FBB.DirBrowseButton(selpane,
+                                                 labelText="Save streams to:",
+                                                 initialValue=default,
+                                                 changeCallback=self.OnSavePathPicked)
+        self.savePathField.SetSizerProps(valign='center', expand=True, proportion=1)
+
+        # self.saveCheck.SetValue(self.remote)
+        # self.savePathField.Show(self.remote)
+
+        # self.saveCheck.Bind(wx.EVT_CHECKBOX, self.OnSaveCheckChanged)
+
+
+    # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
+    # noinspection PyUnresolvedReferences
+    def _addSelectButtons(self, pane, defaultPath=''):
+        """ Add buttons for selecting and controlling selected items.
+        """
+        buttonpane = sc.SizedPanel(pane, -1)
+        buttonpane.SetSizerType("horizontal")
+        buttonpane.SetSizerProps(expand=True)
+        self.selectAllBtn = wx.BitmapButton(buttonpane, -1, icons.select_all.GetBitmap())
+        self.selectNoneBtn = wx.BitmapButton(buttonpane, -1, icons.select_none.GetBitmap())
+
+        h = self.selectAllBtn.GetSize().height
+
+        self.multiStartBtn = wx.Button(buttonpane, -1, "Start Checked")
+        self.multiStreamBtn = wx.Button(buttonpane, -1, "Stream From Checked")
+        self.savePathField = FBB.DirBrowseButton(buttonpane,
+                                                 labelText="Save to:",
+                                                 initialValue=defaultPath,
+                                                 changeCallback=self.OnSavePathPicked)
+        self.savePathField.SetSizerProps(valign='center', expand=True, proportion=1)
+
+        self.selectAllBtn.SetToolTip('Select All')
+        self.selectNoneBtn.SetToolTip('Select None')
+        self.multiStreamBtn.SetSize((h, -1))
+        self.multiStartBtn.SetSize(self.multiStreamBtn.GetSize())
+
+        self.Bind(wx.EVT_BUTTON, self.OnSelectAllButton, self.selectAllBtn)
+        self.Bind(wx.EVT_BUTTON, self.OnSelectNoneButton, self.selectNoneBtn)
 
 
     # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
@@ -354,6 +420,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.Bind(wx.EVT_LIST_ITEM_DESELECTED, self.OnItemDeselected, self.list)
         self.list.Bind(wx.EVT_LEFT_DCLICK, self.OnItemDoubleClick)
         self.Bind(wx.EVT_LIST_COL_CLICK, self.OnColClick, self.list)
+
+        if self.checks:
+            self.Bind(ULC.EVT_LIST_ITEM_CHECKED, self.OnItemChecked, self.list)
 
         # For doing per-item tool tips in the list
         self.lastToolTipItem = -1
@@ -510,16 +579,26 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             (before starting the updating thread, so there's an initial
             display) and at the beginning of `populateList()`.
         """
+        # NOTE: 1st column width way too narrow for Linux/macOS device paths!
+        #  Maybe just let it truncate in display by default; it usually isn't
+        #  critical info, and the user can resize the columns.
         self.minWidths = []
 
-        for i, c in enumerate(self.columns):
+        start = 0
+        cols = self.columns
+
+        for i, c in enumerate(cols, start):
             self.list.InsertColumn(i, c[0])
-            if c.name == 'Name':
-                width = self.list.GetTextExtent('X' * 25)[0]
+            if c.name == 'Path' and self.checks:
+                width = 50
+            elif c.name == 'Name':
+                width = self.list.GetTextExtent('W' * 25)[0]
             elif c.formatter == populateStatusColumn:
                 width = self.list.GetTextExtent('Awaiting Trigger')[0]
             elif i == self.batteryCol:
                 width = 40
+            elif c.name == 'Type':
+                width = self.list.GetTextExtent('W8-R5000D40')[0]
             else:
                 width = self.list.GetTextExtent(c.name)[0]
 
@@ -538,9 +617,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.updatingDisplay.set()
             self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
 
+            # Get checked devices (may have different list indices)
+            checked = tuple(self.checkedRecorders.values())
+
             self.list.ClearAll()
             self.recordersByIndex.clear()
             self.indicesByRecorder.clear()
+            self.checkedRecorders.clear()
             self.itemDataMap.clear()
             self.listWidth = 0
 
@@ -553,9 +636,15 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             for idx, dev in enumerate(self.recorders):
                 path = dev.path or ''
                 index = self.list.InsertImageStringItem(idx, path, [0], int(self.checks))
+
+                # update dict of checked recorders with new list indices
+                if dev in checked:
+                    self.checkedRecorders[idx] = dev
+
                 self.itemDataMap[index] = [dev.path]
                 self.recordersByIndex[index] = dev
                 self.indicesByRecorder[dev] = index
+
                 for i, col in enumerate(self.columns[1:], 1):
                     try:
                         val = col.formatter(dev, index, i, self)  # populates item and returns data map value
@@ -613,6 +702,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # excludes button panel - do that explicitly
         item = self.list.GetItem(index)
         item.Enable(enabled)
+        item.Check(dev in self.checkedRecorders.values())
         self.list.SetItem(item)
 
         for i, col in enumerate(self.columns[1:], 1):
@@ -627,6 +717,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             else:
                 val = col.formatter(dev, index, i, self)
             self.itemDataMap[index][i] = val or ''
+
+        print(f'{self.list.GetCheckedItemCount()=}')
+        checked = self.list.GetCheckedItemCount()
+        self.multiStreamBtn.Enable(checked > 0)
+        self.multiStartBtn.Enable(checked > 0)
 
 
     def updateList(self):
@@ -829,9 +924,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnItemDoubleClick(self, evt):
         """ Hande lsit item (row) double-click.
         """
-        if self.list.GetSelectedItemCount() > 0 and self.okButton.IsEnabled():
+        if (self.allowDoubleClick and self.list.GetSelectedItemCount() > 0
+                and self.okButton.IsEnabled()):
             # Close the dialog
             self.EndModal(wx.ID_OK)
+
         evt.Skip()
 
 
@@ -1012,8 +1109,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             logger.debug('same broker selected, ignoring')
             return
 
-        print(f'OnBrokerSelected: {evt.broker}')
-
         oldConnector = self.connector
         if oldConnector:
             oldConnector.disconnect()
@@ -1023,6 +1118,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                                    updateCallback=self.onMqttUpdate)
             newcon.connect()
             self.connector = newcon
+            self.brokerInfo = info
 
             self.recorders = []
             self.recorderStatus.clear()
@@ -1037,6 +1133,42 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             raise
 
         wx.CallAfter(self.OnUpdateTimerTick)
+
+
+    def OnItemChecked(self, evt):
+        """ Handle an item check.
+        """
+        # print(f'{[d for d in dir(evt) if d[0].isupper()]}')
+        item = evt.GetItem()
+        idx = evt.GetIndex()
+        if item.IsChecked():
+            self.checkedRecorders[idx] = self.recordersByIndex[idx]
+        else:
+            self.checkedRecorders.pop(idx, None)
+        self.updateList()
+
+
+    def OnSavePathPicked(self, _evt):
+        """ Handle an output directory being chosen.
+            Note: called with every keystroke in the `DirBrowseButton`
+        """
+        pass
+        # self.saveCheck.SetValue(True)
+
+
+    def OnSelectAllButton(self, evt):
+        logger.debug('Check all')
+        self.checkedRecorders.clear()
+        for idx, dev in self.recordersByIndex.items():
+            if self.list.IsItemEnabled(idx):
+                self.checkedRecorders[idx] = dev
+        self.updateList()
+
+
+    def OnSelectNoneButton(self, evt):
+        logger.debug('Check none')
+        self.checkedRecorders.clear()
+        self.updateList()
 
 
 # ===========================================================================
