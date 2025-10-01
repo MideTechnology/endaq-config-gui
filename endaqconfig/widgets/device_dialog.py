@@ -217,7 +217,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.indicesByRecorder: Dict[Recorder, int] = {}  # List index keyed by `Recorder`
         self.updatingRecorders = threading.RLock()  # To avoid simultaneous dict changes
 
-        self.checkedRecorders: Dict[int, Recorder] = {}  # Checked items/recorders (to keep checks after update)
+        self.checkedRecorders: set[Recorder] = set()  # Checked items/recorders (to keep checks after update)
 
         self.brokerInfo = None  # Selected MQTT broker's mDNS info
         self.connector: MQTTConnector = None
@@ -261,7 +261,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.Bind(wx.EVT_SHOW, self.OnShow)
         self.Bind(EVT_RECORD_BUTTON, self.OnStartRecording)
         self.Bind(wx.EVT_TIMER, self.OnUpdateTimerTick, id=self.updateTimer.GetId())
-        print(f'dialog size: {self.GetSize()}')
 
 
     # TODO: REMOVE NEXT COMMENT LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
@@ -329,10 +328,14 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                                                  changeCallback=self.OnSavePathPicked)
         self.savePathField.SetSizerProps(valign='center', expand=True, proportion=1)
 
-        self.selectAllBtn.SetToolTip('Select All')
-        self.selectNoneBtn.SetToolTip('Select None')
-        self.multiStreamBtn.SetSize((h, -1))
+        self.selectAllBtn.SetToolTip('Check All')
+        self.selectNoneBtn.SetToolTip('Check None')
+        self.multiStreamBtn.SetSize((-1, h))
         self.multiStartBtn.SetSize(self.multiStreamBtn.GetSize())
+
+        # Start disabled
+        self.multiStartBtn.Enable(False)
+        self.multiStreamBtn.Enable(False)
 
         self.Bind(wx.EVT_BUTTON, self.OnSelectAllButton, self.selectAllBtn)
         self.Bind(wx.EVT_BUTTON, self.OnSelectNoneButton, self.selectNoneBtn)
@@ -411,6 +414,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                                                    | wx.LC_SINGLE_SEL
                                                    | ULC.ULC_NO_ITEM_DRAG
                                                    # | wx.LC_VRULES
+                                                   | ULC.ULC_HOT_TRACKING
+                                                   # | ULC.ULC_BORDER_SELECT
                                                    ))
 
         self.list.AssignImageList(self.loadIcons(), wx.IMAGE_LIST_SMALL)
@@ -618,7 +623,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
 
             # Get checked devices (may have different list indices)
-            checked = tuple(self.checkedRecorders.values())
+            checked = self.checkedRecorders.copy()
 
             self.list.ClearAll()
             self.recordersByIndex.clear()
@@ -639,7 +644,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
                 # update dict of checked recorders with new list indices
                 if dev in checked:
-                    self.checkedRecorders[idx] = dev
+                    self.checkedRecorders.add(dev)
 
                 self.itemDataMap[index] = [dev.path]
                 self.recordersByIndex[index] = dev
@@ -702,7 +707,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # excludes button panel - do that explicitly
         item = self.list.GetItem(index)
         item.Enable(enabled)
-        item.Check(dev in self.checkedRecorders.values())
+        item.Check(dev in self.checkedRecorders)
         self.list.SetItem(item)
 
         for i, col in enumerate(self.columns[1:], 1):
@@ -718,7 +723,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 val = col.formatter(dev, index, i, self)
             self.itemDataMap[index][i] = val or ''
 
-        print(f'{self.list.GetCheckedItemCount()=}')
         checked = self.list.GetCheckedItemCount()
         self.multiStreamBtn.Enable(checked > 0)
         self.multiStartBtn.Enable(checked > 0)
@@ -882,7 +886,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         recorder = self.recordersByIndex.get(self.selected, None)
         if not recorder:
-            logger.error('Could not get selected recorder!')
+            logger.error(f'Could not get selected recorder with index {self.selected}!')
             self.okButton.Enable(False)
         if recorder.canRecord:
             self.recordButton.SetToolTip(self.RECORD_ENABLED)
@@ -1138,14 +1142,22 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnItemChecked(self, evt):
         """ Handle an item check.
         """
-        # print(f'{[d for d in dir(evt) if d[0].isupper()]}')
         item = evt.GetItem()
         idx = evt.GetIndex()
+        if idx < 0:
+            logger.debug(f'OnItemChecked: {idx=} (bad)')
+            evt.Skip()
+            return
+        dev = self.recordersByIndex[idx]
         if item.IsChecked():
-            self.checkedRecorders[idx] = self.recordersByIndex[idx]
+            self.checkedRecorders.add(dev)
         else:
-            self.checkedRecorders.pop(idx, None)
+            try:
+                self.checkedRecorders.pop(dev, None)
+            except KeyError:
+                pass
         self.updateList()
+        evt.Skip()
 
 
     def OnSavePathPicked(self, _evt):
@@ -1161,7 +1173,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.checkedRecorders.clear()
         for idx, dev in self.recordersByIndex.items():
             if self.list.IsItemEnabled(idx):
-                self.checkedRecorders[idx] = dev
+                self.checkedRecorders.add(dev)
         self.updateList()
 
 

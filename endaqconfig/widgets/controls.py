@@ -1,12 +1,13 @@
 """
 Device control buttons and column population/content formatting.
 """
+import logging
 import os.path
 from time import time
 
 import wx
 from wx.lib.agw import ultimatelistctrl as ULC
-import wx.lib.platebtn as platebtn
+# import wx.lib.platebtn as platebtn
 
 from endaq.device.response_codes import DeviceStatusCode
 from endaq.device import CommandError, UnsupportedFeature, Recorder
@@ -18,6 +19,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     # noinspection PyUnusedImports
     from .device_dialog import DeviceSelectionDialog
+
+
+logger = logging.getLogger(__name__)
 
 
 # ===========================================================================
@@ -196,11 +200,20 @@ class ControlButtons(wx.Panel):
                                self.BG_NORMAL, self.FG_NORMAL)
 
 
+    def selectSelf(self):
+        """ Select this device's row in the list.
+        """
+        try:
+            idx = self.root.indicesByRecorder[self.device]
+            self.list.Select(idx)
+        except KeyError:
+            logger.debug(f'could not find {self.device} in indicesByRecorder')
+
     def OnRecordButton(self, evt):
         """ Handle Start/Stop Recording button press.
         """
         try:
-            self.list.Select(self.index)
+            self.selectSelf()
             wx.PostEvent(self.root, EvtRecordButton(device=self.device,
                                                     stop=self.recording))
             evt.Skip()
@@ -213,7 +226,7 @@ class ControlButtons(wx.Panel):
         """ Handle Configure button press.
         """
         try:
-            self.list.Select(self.index)
+            self.selectSelf()
             wx.PostEvent(self.root, EvtConfigButton(device=self.device))
             evt.Skip()
         except RuntimeError:
@@ -223,23 +236,73 @@ class ControlButtons(wx.Panel):
 
 # ===========================================================================
 
-class NewControlButtons(ControlButtons):
+class NewControlButtons(wx.Panel):
+    """
+    Panel containing device control buttons (start/stop recording and config).
+    """
+
+    BG_NORMAL = None  # Taken from widget's defaults
+    FG_NORMAL = None
+
+    ICONS = None  # class variable, a list of icons, set on first use
+
+
+    def __init__(self, root, parent, device, index, column,
+                 showConfig=True):
+        """
+        Panel containing device control buttons (start/stop recording and
+        config).
+
+        :param root: The dialog root.
+        :param parent: The parent widget (the list control).
+        :param device: The corresponding recorder for this row.
+        :param index: The index of the row in the list.
+        :param column: The list control column index.
+        :param showConfig: If `True`, show the configuration button.
+            Not yet supported!
+        """
+        super().__init__(parent, -1)
+        self.root = root
+        self.list = parent
+        self.device = device
+        self.index = index
+        self.column = column
+
+        self.recording = False
+        self.uploading = False
+
+        bg = parent.GetBackgroundColour()
+        self.SetBackgroundColour(bg)
+
+        sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.SetSizer(sizer)
+
+        self.addButtons(sizer, showConfig)
+        self.updateButtons()
+
+        sizer.Fit(self)
+
 
     def _loadImages(self):
         """
         TEST. Reads icons from a PNG for easy iteration. Replace with hard-coded converted images later.
         """
-        filename = os.path.join(os.path.dirname(__file__), 'control_buttons.png')
-        img = wx.Image(filename, wx.BITMAP_TYPE_PNG)
+        cls = self.__class__
+        if cls.ICONS is None:
 
-        numIcons = 7
-        size = img.GetWidth() // numIcons
-        icons = []
-        for col in range(numIcons):
-            icons.append([img.GetSubImage(wx.Rect(col * size, row * size, size, size)).ConvertToBitmap() for row in range(4)])
+            filename = os.path.join(os.path.dirname(__file__), 'control_buttons.png')
+            img = wx.Image(filename, wx.BITMAP_TYPE_PNG)
 
-        self.configIcons, self.recordIcons, self.stopIcons, self.streamIcons, self.streamingIcons, self.lockIcons, self.lockedIcons = icons
-        self.icons = icons
+            numIcons = 7
+            size = img.GetWidth() // numIcons
+            cls.ICONS = []
+            for col in range(numIcons):
+                cls.ICONS.append([img.GetSubImage(wx.Rect(col * size, row * size, size, size)).ConvertToBitmap()
+                                  for row in range(4)])
+
+        (self.configIcons, self.recordIcons, self.stopIcons, self.streamIcons,
+         self.streamingIcons, self.lockIcons, self.lockedIcons) = cls.ICONS
+        self.icons = cls.ICONS
 
 
     def addButtons(self, sizer, showConfig):
@@ -249,7 +312,7 @@ class NewControlButtons(ControlButtons):
         size = self.configIcons[0].GetSize()
         style = wx.NO_BORDER | wx.BU_EXACTFIT
 
-        def _add(icons, tooltip):
+        def _add(icons, tooltip, handler):
             btn = wx.BitmapButton(self, -1, icons[0], style=style, size=size)
             btn.SetBitmapCurrent(icons[1])
             btn.SetBitmapPressed(icons[2])
@@ -257,20 +320,19 @@ class NewControlButtons(ControlButtons):
             btn.SetBackgroundColour(self.GetBackgroundColour())
             btn.SetToolTip(tooltip)
             sizer.Add(btn, 1, wx.EXPAND)
+            btn.Bind(wx.EVT_BUTTON, handler)
             return btn
 
-        self.stopBtn = _add(self.stopIcons, 'Stop Recording/Streaming')
-        self.recBtn = _add(self.recordIcons, 'Start Recording')
-        self.streamBtn = _add(self.streamIcons, 'Start Streaming')
-        self.configBtn = _add(self.configIcons, 'Configure Device')
-        self.lockBtn = _add(self.lockIcons, 'Set Device Lock')
+        self.stopBtn = _add(self.stopIcons, 'Stop Recording/Streaming', self.OnStopButton)
+        self.recBtn = _add(self.recordIcons, 'Start Recording', self.OnRecordButton)
+        self.streamBtn = _add(self.streamIcons, 'Start Streaming', self.OnStreamButton)
+        self.configBtn = _add(self.configIcons, 'Configure Device', self.OnConfigButton)
+        self.lockBtn = _add(self.lockIcons, 'Set Device Lock', self.OnLockButton)
 
         self.stopBtn.Enable(False)
-        if not self.device.isRemote:
-            self.streamBtn.Enable(False)
-
-        if 'MQTT' not in type(self.device.command).__name__:
-            self.lockBtn.Enable(False)
+        self.streamBtn.Enable(self.device.isRemote)
+        self.lockBtn.Enable('MQTT' in type(self.device.command).__name__)
+        self.configBtn.Show(showConfig)
 
         if self.BG_NORMAL is None:
             self.__class__.BG_NORMAL = self.recBtn.GetBackgroundColour()
@@ -278,14 +340,117 @@ class NewControlButtons(ControlButtons):
 
 
     def updateLock(self):
+        if 'MQTT' not in type(self.device.command).__name__:
+            self.lockBtn.Enable(False)
+            self.lockBtn.UnsetToolTip()
+            return
+
         lockId = self.device.command.lockId[1]
         locked = lockId and any(lockId)
+        mine = lockId == self.device.command.hostId
 
         icons = self.lockedIcons if locked else self.lockIcons
         self.lockBtn.SetBitmap(icons[0])
         self.lockBtn.SetBitmapCurrent(icons[1])
         self.lockBtn.SetBitmapPressed(icons[2])
         self.lockBtn.SetBitmapDisabled(icons[3])
+        self.lockBtn.Enable(mine or not locked)
+
+        if mine:
+            self.lockBtn.SetToolTip('You have control of this device\nClick to release lock')
+        elif locked:
+            self.lockBtn.SetToolTip('This device has been locked by another user')
+        else:
+            self.lockBtn.SetToolTip('Device unlocked (available)\nClick to set lock')
+
+
+    def updateButtons(self, enabled=True):
+        """ Update the button labels, tooltips, and enabled/disabled state.
+        """
+        try:
+            status = self.device.command.status[1]
+            if status and status >= 200:
+                status %= 100
+        except (AttributeError, CommandError, UnsupportedFeature):
+            status = None
+
+        self.recording = status in (DeviceStatusCode.START_PENDING,
+                                    DeviceStatusCode.RECORDING,
+                                    DeviceStatusCode.STREAMING,
+                                    DeviceStatusCode.TRIGGERING)
+        self.uploading = status == DeviceStatusCode.UPLOADING
+
+        self.recBtn.Show(self.device.canRecord)
+        self.recBtn.Enable(enabled
+                           and self.device.canRecord
+                           and not self.uploading)
+
+        if self.configBtn.IsShown():
+            self.configBtn.Enable(enabled
+                                  and self.device.hasConfigInterface
+                                  and self.device.config.available
+                                  and not self.uploading
+                                  and not self.recording)
+
+        # TODO: Redo this logic?
+        self.stopBtn.Enable(self.recording and not self.uploading)
+        self.recBtn.Enable(not self.recording and not self.uploading)
+
+        self.updateLock()
+
+
+    # =======================================================================
+    #
+    # =======================================================================
+
+    def OnRecordButton(self, evt):
+        """ Handle Start Recording button press.
+        """
+        try:
+            self.list.Select(self.index)
+            wx.PostEvent(self.root, EvtRecordButton(device=self.device,
+                                                    stop=False))
+            evt.Skip()
+        except RuntimeError:
+            # Dialog probably closed during scan, which is okay.
+            pass
+
+
+    def OnStopButton(self, evt):
+        """ Handle Stop Recording button press.
+        """
+        try:
+            wx.PostEvent(self.root, EvtRecordButton(device=self.device,
+                                                    stop=True))
+            evt.Skip()
+        except RuntimeError:
+            # Dialog probably closed during scan, which is okay.
+            pass
+
+
+    def OnConfigButton(self, evt):
+        """ Handle Configure button press.
+        """
+        try:
+            idx = self.root.indicesByRecorder[self.device]
+            self.list.Select(idx)
+        except KeyError:
+            logger.debug(f'could not find {self.device} in indicesByRecorder')
+
+        try:
+            wx.PostEvent(self.root, EvtConfigButton(device=self.device))
+            evt.Skip()
+        except RuntimeError:
+            # Dialog probably closed during scan, which is okay.
+            pass
+
+
+    def OnStreamButton(self, _evt):
+        logger.debug('OnStreamButton not implemented.')
+
+
+    def OnLockButton(self, _evt):
+        logger.debug('OnLockButton not implemented.')
 
 
 # ===========================================================================
