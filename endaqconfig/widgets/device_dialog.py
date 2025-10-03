@@ -27,7 +27,7 @@ from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface, MQTTConnector
 from . import battery_icons
 from . import icons
 from .controls import (_attribFormatter, populateStatusColumn,
-                       populateButtonColumn, populateBatteryColumn)
+                       populateButtonColumn, populateBatteryColumn, NewControlButtons)
 from .events import EvtRecordButton, EVT_RECORD_BUTTON, EVT_BROKER_UPDATE
 from .threads import DeviceScanThread, DeviceCommandThread, getDeviceStatus
 from .shared import DeviceToolTip, BrokerField
@@ -312,30 +312,55 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def _addSelectButtons(self, pane, defaultPath=''):
         """ Add buttons for selecting and controlling selected items.
         """
+        NewControlButtons._loadImages()
+        startIcons = NewControlButtons.ICONS[1]
+        streamIcons = NewControlButtons.ICONS[3]
+
         buttonpane = sc.SizedPanel(pane, -1)
         buttonpane.SetSizerType("horizontal")
         buttonpane.SetSizerProps(expand=True)
+
+        def _add(label, icons, tooltip, handler):
+            """ Helper to do the button-adding busy work. """
+            btn = wx.Button(buttonpane, -1, label)
+            btn.SetBitmap(icons[0], wx.LEFT)
+            btn.SetBitmapCurrent(icons[1])
+            btn.SetBitmapPressed(icons[2])
+            btn.SetBitmapDisabled(icons[3])
+            btn.SetBitmapMargins((0, 0))
+            btn.SetToolTip(tooltip)
+            btn.Enable(False)
+            btn.Bind(wx.EVT_BUTTON, handler)
+            return btn
+
         self.selectAllBtn = wx.BitmapButton(buttonpane, -1, icons.select_all.GetBitmap())
+        self.selectAllBtn.SetToolTip('Check All')
         self.selectNoneBtn = wx.BitmapButton(buttonpane, -1, icons.select_none.GetBitmap())
+        self.selectNoneBtn.SetToolTip('Check None')
 
-        h = self.selectAllBtn.GetSize().height
+        self.multiStartBtn = _add('Start Checked', startIcons,
+                                  "Send the start recording command to all checked devices",
+                                  self.OnStartSelected)
+        self.multiStreamBtn = _add('Stream from Checked', streamIcons,
+                                   "Send the start command to all checked devices, "
+                                   "saving output to the specified directory",
+                                   self.OnStreamSelected)
 
-        self.multiStartBtn = wx.Button(buttonpane, -1, "Start Checked")
-        self.multiStreamBtn = wx.Button(buttonpane, -1, "Stream From Checked")
         self.savePathField = FBB.DirBrowseButton(buttonpane,
                                                  labelText="Save to:",
                                                  initialValue=defaultPath,
                                                  changeCallback=self.OnSavePathPicked)
         self.savePathField.SetSizerProps(valign='center', expand=True, proportion=1)
 
-        self.selectAllBtn.SetToolTip('Check All')
-        self.selectNoneBtn.SetToolTip('Check None')
-        self.multiStreamBtn.SetSize((-1, h))
-        self.multiStartBtn.SetSize(self.multiStreamBtn.GetSize())
-
-        # Start disabled
-        self.multiStartBtn.Enable(False)
-        self.multiStreamBtn.Enable(False)
+        # Note: setting the width of the all/none buttons wasn't taking for some reason.
+        #  The `SetBitmapMargins` fixes it, but may have cosmetic issues on different
+        #  platforms and/or screen resolutions.
+        h = self.multiStreamBtn.GetSize().height
+        size = wx.Size(h, h)
+        self.selectAllBtn.SetSize(size)
+        self.selectAllBtn.SetBitmapMargins((4, 2))
+        self.selectNoneBtn.SetSize(size)
+        self.selectNoneBtn.SetBitmapMargins((4, 2))
 
         self.Bind(wx.EVT_BUTTON, self.OnSelectAllButton, self.selectAllBtn)
         self.Bind(wx.EVT_BUTTON, self.OnSelectNoneButton, self.selectNoneBtn)
@@ -1093,6 +1118,16 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         evt.Skip()
 
 
+    def OnStartSelected(self, evt):
+        # TODO: XXX: IMPLEMENT
+        logger.debug('Start selected not implemented!')
+
+
+    def OnStreamSelected(self, evt):
+        # TODO: XXX: IMPLEMENT
+        logger.debug('Stream from selected not implemented!')
+
+
     def OnRemoteCheckChanged(self, _evt):
         """ Handle the 'remote' checkbox changing. Also used to update
             things on startup.
@@ -1153,7 +1188,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.checkedRecorders.add(dev)
         else:
             try:
-                self.checkedRecorders.pop(dev, None)
+                self.checkedRecorders.remove(dev)
             except KeyError:
                 pass
         self.updateList()

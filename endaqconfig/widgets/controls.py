@@ -283,11 +283,11 @@ class NewControlButtons(wx.Panel):
         sizer.Fit(self)
 
 
-    def _loadImages(self):
+    @classmethod
+    def _loadImages(cls):
         """
         TEST. Reads icons from a PNG for easy iteration. Replace with hard-coded converted images later.
         """
-        cls = self.__class__
         if cls.ICONS is None:
 
             filename = os.path.join(os.path.dirname(__file__), 'control_buttons.png')
@@ -300,19 +300,19 @@ class NewControlButtons(wx.Panel):
                 cls.ICONS.append([img.GetSubImage(wx.Rect(col * size, row * size, size, size)).ConvertToBitmap()
                                   for row in range(4)])
 
-        (self.configIcons, self.recordIcons, self.stopIcons, self.streamIcons,
-         self.streamingIcons, self.lockIcons, self.lockedIcons) = cls.ICONS
-        self.icons = cls.ICONS
-
 
     def addButtons(self, sizer, showConfig):
         """
         """
         self._loadImages()
+        (self.configIcons, self.recordIcons, self.stopIcons, self.streamIcons,
+         self.streamingIcons, self.lockIcons, self.lockedIcons) = self.ICONS
+
         size = self.configIcons[0].GetSize()
         style = wx.NO_BORDER | wx.BU_EXACTFIT
 
         def _add(icons, tooltip, handler):
+            """ Helper to do the button-adding busy work. """
             btn = wx.BitmapButton(self, -1, icons[0], style=style, size=size)
             btn.SetBitmapCurrent(icons[1])
             btn.SetBitmapPressed(icons[2])
@@ -570,7 +570,7 @@ def populateStatusColumn(dev: Recorder,
                 # Legacy update command. See above.
                 code, msg = 29, ''
 
-        print(dev, cmd, code)
+        # print(dev, cmd, code)
 
     # Find specific color, or round to lowest multiple of 10
     displayCode = code if code in STATUS_COLORS else (code // 10) * 10
