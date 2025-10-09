@@ -622,13 +622,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if c.name == 'Path' and self.checks:
                 width = 50
             elif c.name == 'Name':
-                width = self.list.GetTextExtent('W' * 25)[0]
+                width = self.list.GetTextExtent('W' * 20)[0]
             elif c.formatter == populateStatusColumn:
                 width = self.list.GetTextExtent('Awaiting Trigger')[0]
             elif i == self.batteryCol:
                 width = 40
             elif c.name == 'Type':
-                width = self.list.GetTextExtent('W8-R5000D40')[0]
+                width = self.list.GetTextExtent('W8-R5000D40')[0] + 16
             else:
                 width = self.list.GetTextExtent(c.name)[0]
 

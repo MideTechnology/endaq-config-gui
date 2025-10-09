@@ -115,7 +115,7 @@ class DeviceScanThread(threading.Thread):
         self.mqttUpdated.clear()
         devices.update(self.mqttDevices)
 
-        logger.debug('Collecting USB devices...')
+        # logger.debug('Collecting USB devices...')
         devices.update(getDevices())
 
         with self.updating:
