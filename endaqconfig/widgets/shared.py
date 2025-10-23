@@ -4,10 +4,11 @@ Created on Sep 10, 2015
 :author: dstokes
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import re
 import socket
+from time import time
 from typing import Any, Dict, Optional, Tuple
 
 import wx
@@ -18,6 +19,7 @@ from endaq.device.mqtt.discovery import findBrokers
 from endaq.device.util import getMyIP
 
 from .events import EvtBrokerUpdate
+from .controls import getStatusTooltip
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +152,7 @@ class DeviceToolTip(wx.Frame):
         """
         self.view = view
         self.text = None
+        self.device = None
 
         # Note: color not quite right.
         fgcolor = wx.SystemSettings.GetColour(wx.SYS_COLOUR_GRAYTEXT)
@@ -167,6 +170,8 @@ class DeviceToolTip(wx.Frame):
         self.SetSizer(sizer)
         self.Fit()
 
+        self.lineHeight = self.GetTextExtent('Wg')[1]
+
         self.timer = wx.Timer(self)
 
         self.Bind(wx.EVT_MOTION, self.OnMouseMove)
@@ -177,18 +182,11 @@ class DeviceToolTip(wx.Frame):
         """ Update the hovering display.
         """
         if not text:
+            self.text = ''
             self.timer.Stop()
             return
 
-        if text != self.text:
-            self.text = text
-            w = h = 0
-            for line in text.split('\n'):
-                lw, lh = self.GetTextExtent(line)
-                w = max(w, lw)
-                h += lh
-            self.SetSize((w + 10, h + 10))
-            self.textWidget.SetLabel(text)
+        self.text = text.strip()
 
 
     def OnMouseMove(self, evt):
@@ -203,6 +201,43 @@ class DeviceToolTip(wx.Frame):
         if not self.IsShown():
             self.SetPosition(wx.GetMousePosition() + self.MOUSE_OFFSET)
             self.Show()
+
+
+    def Show(self, show: bool = True) -> bool:
+        """ Shows or hides the window.
+        """
+        if not show:
+            return super().Show(False)
+
+        if self.device:
+            if self.device.name:
+                text = f'{self.device.productName} "{self.device.name}" ({self.device.serial})\n'
+            else:
+                text = f"{self.device.productName} ({self.device.serial})\n"
+            if self.device.command.status[0]:
+                stime, scode, smsg = self.device.command.status
+                stext = getStatusTooltip(scode)
+                if smsg:
+                    text += f'Status: {stext}: {smsg} (updated {prettyTimeDiff(stime)} ago)\n'
+                else:
+                    text += f'Status: {stext} (updated {prettyTimeDiff(stime)} ago)\n'
+        else:
+            logger.debug(f'DeviceToolTip.device is {self.device!r} (should not happen)')
+            text = ''
+
+        text += self.text
+        if not text:
+            return False
+
+        w = h = 0
+        for line in text.split('\n'):
+            lw, lh = self.GetTextExtent(line)
+            w = max(w, lw)
+            h += max(self.lineHeight, lh)
+        self.SetSize((w + 10, h + 10))
+        self.textWidget.SetLabel(text)
+
+        return super().Show()
 
 
 # ===========================================================================
@@ -496,3 +531,19 @@ class BrokerField(wx.Panel):
         """
         broker = self.GetValue()
         return bool(broker)
+
+
+def prettyTimeDiff(t1: float, t2: Optional[float] = None, abstime=True) -> str:
+    """ Return a pretty time difference between two timestamps.
+
+        :param t1: First timestamp.
+        :param t2: Second timestamp. Defaults to the current time.
+        :param abstime: If `True` (default), show the absolute value time.return a string that represents the time difference.
+    """
+    if t2 is None:
+        t2 = time()
+    ts = int(abs(t2 - t1))
+    sign = '-' if t2 < t1 and not abstime else ''
+    if ts < 60:
+        return f"{sign}0:{ts:02d}"
+    return f"{sign}{str(timedelta(seconds=ts)).lstrip('0:')}"

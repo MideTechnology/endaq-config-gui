@@ -48,6 +48,7 @@ STATUS_COLORS = {
 # DeviceStatusCode seems to get cast to int, so enum names not available
 # If status >= 200, use status % 100.
 STATUS_TEXT = {
+    -110: "Disconnected",
     -10: "Error",
     0: "Ready",
     1: "Ready",
@@ -74,6 +75,16 @@ STATUS_TOOLTIP = {
     40: "Awaiting Trigger",
     50: "Uploading to Cloud",
 }
+
+
+def getStatusTooltip(status: DeviceStatusCode):
+    displayCode = status if status in STATUS_TEXT else (status // 10) * 10
+    if displayCode in STATUS_TOOLTIP:
+        return STATUS_TOOLTIP[displayCode]
+    elif displayCode in STATUS_TEXT:
+        return STATUS_TEXT[displayCode]
+    return f'DeviceStatusCode {status}'
+
 
 # ===========================================================================
 #

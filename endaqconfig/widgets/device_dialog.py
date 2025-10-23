@@ -30,7 +30,7 @@ from .controls import (_attribFormatter, populateStatusColumn,
                        populateButtonColumn, populateBatteryColumn, NewControlButtons)
 from .events import EvtRecordButton, EVT_RECORD_BUTTON, EVT_BROKER_UPDATE
 from .threads import DeviceScanThread, DeviceCommandThread, getDeviceStatus
-from .shared import DeviceToolTip, BrokerField
+from .shared import DeviceToolTip, BrokerField, prettyTimeDiff
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +217,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.indicesByRecorder: Dict[Recorder, int] = {}  # List index keyed by `Recorder`
         self.updatingRecorders = threading.RLock()  # To avoid simultaneous dict changes
 
-        self.checkedRecorders: set[Recorder] = set()  # Checked items/recorders (to keep checks after update)
+        self.checkedRecorders: set[Recorder] = set()  # Checked items/recorders (to keep checks after list updates)
 
         self.brokerInfo = None  # Selected MQTT broker's mDNS info
         self.connector: MQTTConnector = None
@@ -411,9 +411,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             :param parent: The parent Panel.
             :param tooltips: Show tooltips if `True`.
         """
-        self.batteryCol = None
-        self.buttonCol = None
-        self.statusCol = None
+        self.listToolTips: list[str] = []
+        self.batteryCol: int = None
+        self.buttonCol: int = None
+        self.statusCol: int = None
 
         for i, col in enumerate(self.columns):
             if col.formatter == populateBatteryColumn:
@@ -592,16 +593,12 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         else:
             self.list.SetItemImage(index, [icon])
 
-        if len(tips) == 0:
-            self.listToolTips[index] = bat or None
-            self.listMsgs[index] = bat or None
-            return
-        else:
-            # Popup tool tips show battery status and each message on its own
-            # line. In-dialog help message under list shows battery on one,
-            # all other messages on the other.
-            self.listToolTips[index] = bat + '\n'.join(tips)
-            self.listMsgs[index] = bat + ' '.join(tips)
+        tips.insert(0, bat)
+        # Popup tool tips show battery status and each message on its own
+        # line. In-dialog help message under list shows battery on one,
+        # all other messages on the other.
+        self.listMsgs[index] = ' '.join(tips)
+        self.listToolTips[index] = '\n'.join(tips)
 
 
     def createColumns(self):
@@ -885,7 +882,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         elif drivesChanged or statusChanged:
             # update list
-            logger.debug(f'scan {self.updateCount}: updating list')
+            # logger.debug(f'scan {self.updateCount}: updating list')
             self.lastUpdate = now
             self.updateList()
 
@@ -977,13 +974,12 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         index, _ = self.list.HitTest(evt.GetPosition())
         if index != wx.NOT_FOUND:
-            if index != self.lastToolTipItem:
-                item = self.list.GetItemData(index)
-                text = self.listToolTips[item]
+            item = self.list.GetItemData(index)
 
-                # Everything here on is part of ULC tooltip workaround.
-                self.tooltipFrame.setText(text)
-                self.lastToolTipItem = index
+            # Everything here on is part of ULC tooltip workaround.
+            self.tooltipFrame.device = self.recordersByIndex[index]
+            self.tooltipFrame.setText(self.listToolTips[item])
+            self.lastToolTipItem = index
             if not self.tooltipFrame.IsShown():
                 self.tooltipFrame.timer.StartOnce(self.tooltipFrame.TOOLTIP_TIME)
 
