@@ -176,7 +176,7 @@ class DeviceToolTip(wx.Frame):
 
         self.Bind(wx.EVT_MOTION, self.OnMouseMove)
         self.Bind(wx.EVT_TIMER, self.OnShowTimerTick, self.timer)
-
+        self.Enable(False)
 
     def setText(self, text: Optional[str]):
         """ Update the hovering display.
@@ -221,6 +221,14 @@ class DeviceToolTip(wx.Frame):
                     text += f'Status: {stext}: {smsg} (updated {prettyTimeDiff(stime)} ago)\n'
                 else:
                     text += f'Status: {stext} (updated {prettyTimeDiff(stime)} ago)\n'
+
+                lockId = self.device.command.lockId[1]
+                if lockId:
+                    if lockId == self.device.command.hostId:
+                        text += 'You have exlusive control of this device.\n'
+                    elif any(lockId):
+                        text += 'This device is currently in use by another user/process.\n'
+
         else:
             logger.debug(f'DeviceToolTip.device is {self.device!r} (should not happen)')
             text = ''

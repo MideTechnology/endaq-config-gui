@@ -69,6 +69,7 @@ STATUS_TEXT = {
 # Longer forms of some STATUS_TEXT, used where there's more space
 # TODO: Use this in tooltips!
 STATUS_TOOLTIP = {
+    0: "Ready (mounted as drive)",
     29: "Updating Software",  # Not a real code, replace if added or number reused
     30: "Starting Recording",
     31: "Stopping Recording",

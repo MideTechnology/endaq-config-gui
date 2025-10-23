@@ -72,6 +72,7 @@ class DeviceScanThread(threading.Thread):
             a `MQTTDeviceManager` state update message.
         """
         try:
+            print(update.get('DeviceList'))
             sns = set(d.get('SerialNumber') for d in update['DeviceList']['DeviceListItem'])
             if sns != self.lastMqttSerials:
                 logger.debug('Got update from Manager; devices changed')
@@ -100,11 +101,16 @@ class DeviceScanThread(threading.Thread):
         self.lastScan = now = time()
         devices = set()
 
+        # logger.debug('Collecting USB devices...')
+        localdevs = getDevices()
+        devices.update(localdevs)
+
         connected = self.parent.connector and self.parent.connector.client.is_connected()
 
         if connected and (self.mqttUpdated.is_set() or now - self.lastMqttGet > 30):
             logger.debug('Collecting MQTT devices...')
             try:
+                self.parent.connector.exclude = {d.serialInt for d in localdevs}
                 mqttDevices = set(self.parent.connector.getDevices(callback=self.stopped))
                 with self.updating:
                     self.mqttDevices = mqttDevices
@@ -114,9 +120,6 @@ class DeviceScanThread(threading.Thread):
 
         self.mqttUpdated.clear()
         devices.update(self.mqttDevices)
-
-        # logger.debug('Collecting USB devices...')
-        devices.update(getDevices())
 
         with self.updating:
             currentThreads = {}
