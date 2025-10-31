@@ -173,10 +173,13 @@ class DeviceToolTip(wx.Frame):
         self.lineHeight = self.GetTextExtent('Wg')[1]
 
         self.timer = wx.Timer(self)
+        self.updateTimer = wx.Timer(self)
 
         self.Bind(wx.EVT_MOTION, self.OnMouseMove)
         self.Bind(wx.EVT_TIMER, self.OnShowTimerTick, self.timer)
+        self.Bind(wx.EVT_TIMER, self.OnUpdateTimerTick, self.updateTimer)
         self.Enable(False)
+
 
     def setText(self, text: Optional[str]):
         """ Update the hovering display.
@@ -189,26 +192,9 @@ class DeviceToolTip(wx.Frame):
         self.text = text.strip()
 
 
-    def OnMouseMove(self, evt):
-        if self.IsShown():
-            self.Hide()
-        evt.Skip()
-
-
-    def OnShowTimerTick(self, _evt):
-        """ Handle the mouse motion timer expiring.
+    def makeText(self) -> str:
+        """ Generate the complete text for the tooltip.
         """
-        if not self.IsShown():
-            self.SetPosition(wx.GetMousePosition() + self.MOUSE_OFFSET)
-            self.Show()
-
-
-    def Show(self, show: bool = True) -> bool:
-        """ Shows or hides the window.
-        """
-        if not show:
-            return super().Show(False)
-
         if self.device:
             if self.device.name:
                 text = f'{self.device.productName} "{self.device.name}" ({self.device.serial})\n'
@@ -233,7 +219,31 @@ class DeviceToolTip(wx.Frame):
             logger.debug(f'DeviceToolTip.device is {self.device!r} (should not happen)')
             text = ''
 
-        text += self.text
+        return text + self.text
+
+
+    def OnMouseMove(self, evt):
+        if self.IsShown():
+            self.Hide()
+        evt.Skip()
+
+
+    def OnShowTimerTick(self, _evt):
+        """ Handle the mouse motion timer expiring.
+        """
+        if not self.IsShown():
+            self.SetPosition(wx.GetMousePosition() + self.MOUSE_OFFSET)
+            self.Show()
+
+
+    def Show(self, show: bool = True) -> bool:
+        """ Shows or hides the window.
+        """
+        if not show:
+            self.updateTimer.Stop()
+            return super().Show(False)
+
+        text = self.makeText()
         if not text:
             return False
 
@@ -245,7 +255,30 @@ class DeviceToolTip(wx.Frame):
         self.SetSize((w + 10, h + 10))
         self.textWidget.SetLabel(text)
 
+        self.updateTimer.Start(1000)
         return super().Show()
+
+
+    def Hide(self) -> bool:
+        return self.Show(False)
+
+
+    def OnUpdateTimerTick(self, evt):
+        """ Update the tooltip content when the timer expires.
+        """
+        # logger.debug('DeviceToolTip.OnUpdateTimerTick')
+
+        if not self.IsShown():
+            # Unlikely, but not impossible (e.g., an error in `Show()`)
+            self.updateTimer.Stop()
+            return
+
+        text = self.makeText()
+        if text:
+            self.textWidget.SetLabel(text)
+        else:
+            # Also unlikely, but not impossible
+            self.Show(False)
 
 
 # ===========================================================================

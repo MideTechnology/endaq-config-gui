@@ -30,7 +30,7 @@ from .controls import (_attribFormatter, populateStatusColumn,
                        populateButtonColumn, populateBatteryColumn, NewControlButtons)
 from .events import EvtRecordButton, EVT_RECORD_BUTTON, EVT_BROKER_UPDATE
 from .threads import DeviceScanThread, DeviceCommandThread, getDeviceStatus
-from .shared import DeviceToolTip, BrokerField, prettyTimeDiff
+from .shared import DeviceToolTip, BrokerField
 
 logger = logging.getLogger(__name__)
 
@@ -364,6 +364,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.Bind(wx.EVT_BUTTON, self.OnSelectAllButton, self.selectAllBtn)
         self.Bind(wx.EVT_BUTTON, self.OnSelectNoneButton, self.selectNoneBtn)
+        self.Bind(wx.EVT_BUTTON, self.OnStartSelected, self.multiStartBtn)
+        self.Bind(wx.EVT_BUTTON, self.OnStreamSelected, self.multiStreamBtn)
 
 
     # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
@@ -556,7 +558,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         if dev.path and os.path.exists(dev.path):
             freeSpace = os_specific.getFreeSpace(dev.path) / 1048576
             if freeSpace < SPACE_WARN_MB:
-                tip = f"This device is nearly full ({freeSpace:.2f} MB available)."
+                tip = f"⚠ This device is nearly full ({freeSpace:.2f} MB available)."
                 icon = self.ICON_INFO
                 if freeSpace < SPACE_MIN_MB:
                     tip += " This may prevent configuration."
@@ -570,8 +572,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         if lifeleft is not None and lifeleft < DEV_WARN_DAYS:
             icon = max(icon, self.ICON_INFO)
-            tips.append(f"This devices is {age.days} days old; battery life may be limited.")
-            if lifeleft.days < 0:
+            if lifeleft.days > 0:
+                tips.append(f"🛈 This devices is {age.days} days old; battery life may be limited.")
+            else:
+                tips.append(f"⚠ This devices is {age.days} days old; battery life may be significantly limited.")
                 icon = max(icon, self.ICON_WARN)
 
         # Check for cached cal data, skip if not present. As it can be slow
@@ -582,10 +586,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if calExp:
                 calExp = calExp.replace(tzinfo=datetime.timezone.utc)
                 if calExp < now:
-                    tips.append(f"This device's calibration has expired on {calExp.date()}.")
+                    tips.append(f"⚠ This device's calibration has expired on {calExp.date()}.")
                     icon = max(icon, self.ICON_WARN)
                 elif now - calExp < CAL_WARN_DAYS:
-                    tips.append(f"This device's calibration will expire on {calExp.date()}.")
+                    tips.append(f"🛈 This device's calibration will expire on {calExp.date()}.")
                     icon = max(icon, self.ICON_INFO)
 
         if self.showConnection:
@@ -821,6 +825,76 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.updateTimer.Stop()
         if self.scanThread and self.scanThread.is_alive():
             self.scanThread.paused.set()
+
+
+    def startThreads(self,
+                     devlist: list[tuple[Recorder, Callable, tuple, dict]],
+                     timeout: float = 5.0,
+                     dialog: bool = True) -> tuple[list, list, list]:
+        """ Run commands on multiple devices, each in its own thread.
+
+            :param devlist: A list of tuples containing the device, the
+                function to execute, a tuple of positional arguments for
+                the function, and a dictionary of keyword arguments.
+            :param timeout: How long to wait for all threads to complete.
+            :param dialog: If `True`, show a modal error dialog if
+                any devices failed.
+            :return: Three lists: successful executions, failures, and
+                ones that failed to complete before the timeout.
+        """
+        self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
+        self.enableButtons(False)
+
+        successes = []
+        failures = []
+        timeouts = []
+
+        try:
+            self.updateTimer.Stop()
+            threads = [DeviceCommandThread(dev, cmd, *args, **kwargs)
+                       for dev, cmd, args, kwargs in devlist]
+
+            if timeout:
+                deadline = time() + timeout
+                while any(t.is_alive() for t in threads):
+                    if time() > deadline:
+                        break
+                    sleep(0.05)
+
+            for t in threads:
+                if t.failed.is_set():
+                    logger.error(f'{t.command.__name__} failed on {t.device}: {t.failure!r}')
+                    failures.append(t)
+                elif t.is_alive():
+                    logger.error(f'{t.command.__name__} did not complete on {t.device} within {timeout} seconds')
+                    timeouts.append(t)
+                else:
+                    successes.append(t)
+
+            if dialog and failures or (timeouts and timeout):
+                if failures:
+                    if len(failures) > 1:
+                        names = "\u2022 " + ('\n\u2022 '.join(failures))
+                        # XXX: Chnange dialog contents
+                        msg = ("Could not set recorder clocks.\n\n"
+                               "Errors prevented the clocks being set on these recorders:\n\n"
+                               f"{names}")
+                    else:
+                        msg = ("Could not set recorder clock.\n\n"
+                               "An error prevented the clock from being set on "
+                               f"recorder {failures[0]}.")
+
+                    wx.MessageBox(msg, "Device Error", parent=self,
+                                  style=wx.OK | wx.ICON_ERROR)
+
+        finally:
+            self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+            self.enableButtons(True)
+
+            if self.autoUpdate:
+                self.updateTimer.Start(self.autoUpdate)
+
+        return successes, failures, timeouts
 
 
     # =======================================================================
@@ -1114,13 +1188,16 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         evt.Skip()
 
 
-    def OnStartSelected(self, evt):
+    def OnStartSelected(self, _evt):
         # TODO: XXX: IMPLEMENT
+        devices = [dev for dev in list(self.checkedRecorders) if dev.command.canRecord]
+
         logger.debug('Start selected not implemented!')
 
 
-    def OnStreamSelected(self, evt):
+    def OnStreamSelected(self, _evt):
         # TODO: XXX: IMPLEMENT
+        devices = [dev for dev in list(self.checkedRecorders) if dev.command.canStream]
         logger.debug('Stream from selected not implemented!')
 
 
@@ -1199,7 +1276,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # self.saveCheck.SetValue(True)
 
 
-    def OnSelectAllButton(self, evt):
+    def OnSelectAllButton(self, _evt):
         logger.debug('Check all')
         self.checkedRecorders.clear()
         for idx, dev in self.recordersByIndex.items():
@@ -1208,7 +1285,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.updateList()
 
 
-    def OnSelectNoneButton(self, evt):
+    def OnSelectNoneButton(self, _evt):
         logger.debug('Check none')
         self.checkedRecorders.clear()
         self.updateList()

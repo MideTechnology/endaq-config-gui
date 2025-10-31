@@ -342,7 +342,7 @@ class NewControlButtons(wx.Panel):
         self.lockBtn = _add(self.lockIcons, 'Set Device Lock', self.OnLockButton)
 
         self.stopBtn.Enable(False)
-        self.streamBtn.Enable(self.device.isRemote)
+        self.streamBtn.Enable(self.device.command.canStream)
         self.lockBtn.Enable('MQTT' in type(self.device.command).__name__)
         self.configBtn.Show(showConfig)
 
