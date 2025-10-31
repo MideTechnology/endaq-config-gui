@@ -284,29 +284,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.Bind(EVT_BROKER_UPDATE, self.OnBrokerSelected)
 
 
-    # TODO: REMOVE NEXT COMMENT LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
-    # noinspection PyUnresolvedReferences
-    def _addStreamTo(self, pane, default=''):
-        """ Add stream save directory selection selection widgets.
-        """
-        selpane = sc.SizedPanel(pane, -1)
-        selpane.SetSizerType("horizontal")
-        selpane.SetSizerProps(expand=True)
-        self.saveCheck = wx.CheckBox(selpane, -1, "")
-        self.saveCheck.SetSizerProps(valign='centre')
-
-        self.savePathField = FBB.DirBrowseButton(selpane,
-                                                 labelText="Save streams to:",
-                                                 initialValue=default,
-                                                 changeCallback=self.OnSavePathPicked)
-        self.savePathField.SetSizerProps(valign='center', expand=True, proportion=1)
-
-        # self.saveCheck.SetValue(self.remote)
-        # self.savePathField.Show(self.remote)
-
-        # self.saveCheck.Bind(wx.EVT_CHECKBOX, self.OnSaveCheckChanged)
-
-
     # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
     # noinspection PyUnresolvedReferences
     def _addSelectButtons(self, pane, defaultPath=''):
@@ -828,6 +805,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     def startThreads(self,
+                     what: str,
                      devlist: list[tuple[Recorder, Callable, tuple, dict]],
                      timeout: float = 5.0,
                      dialog: bool = True) -> tuple[list, list, list]:
@@ -861,28 +839,26 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                         break
                     sleep(0.05)
 
+            names = []
+
             for t in threads:
                 if t.failed.is_set():
                     logger.error(f'{t.command.__name__} failed on {t.device}: {t.failure!r}')
                     failures.append(t)
+                    names.append(f"{t.device.productName} SN:{t.device.serial} (error)")
                 elif t.is_alive():
                     logger.error(f'{t.command.__name__} did not complete on {t.device} within {timeout} seconds')
                     timeouts.append(t)
+                    names.append(f"{t.device.productName} SN:{t.device.serial} (timed out)")
                 else:
                     successes.append(t)
 
             if dialog and failures or (timeouts and timeout):
-                if failures:
-                    if len(failures) > 1:
-                        names = "\u2022 " + ('\n\u2022 '.join(failures))
-                        # XXX: Chnange dialog contents
-                        msg = ("Could not set recorder clocks.\n\n"
-                               "Errors prevented the clocks being set on these recorders:\n\n"
-                               f"{names}")
-                    else:
-                        msg = ("Could not set recorder clock.\n\n"
-                               "An error prevented the clock from being set on "
-                               f"recorder {failures[0]}.")
+                if names:
+                    names = '\u2022 ' + ('\n\u2022 '.join(sorted(names)))
+                    msg = (f"Could not {what} on all devices\n\n"
+                           "The action was unsuccessful on these recorders:\n\n"
+                           f"{names}")
 
                     wx.MessageBox(msg, "Device Error", parent=self,
                                   style=wx.OK | wx.ICON_ERROR)
@@ -1096,6 +1072,15 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnSetClocks(self, _evt=None):
         """ Set all clocks. Used as an event handler.
         """
+        devices = [(rec, rec.setTime, (), {})
+                   for rec in self.recordersByIndex.values()]
+        self.startThreads('set the clock', devices)
+
+
+    def _OnSetClocks(self, _evt=None):
+        """ Set all clocks. Used as an event handler.
+            XXX: OLD VERSION
+        """
         self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
         self.enableButtons(False)
 
@@ -1190,15 +1175,28 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
     def OnStartSelected(self, _evt):
         # TODO: XXX: IMPLEMENT
-        devices = [dev for dev in list(self.checkedRecorders) if dev.command.canRecord]
+        # TODO: Better identification of valid devices (correct status, etc.)
+        devices = [(rec, rec.command.startRecording, (), {})
+                   for rec in list(self.checkedRecorders)
+                   if rec.command.canRecord]
 
-        logger.debug('Start selected not implemented!')
+        # TODO: Handle errors better
+        self.startThreads('start recording', devices)
 
 
     def OnStreamSelected(self, _evt):
         # TODO: XXX: IMPLEMENT
-        devices = [dev for dev in list(self.checkedRecorders) if dev.command.canStream]
-        logger.debug('Stream from selected not implemented!')
+        # TODO: Validate export path!
+        path = self.savePathField.GetValue()
+        suffix = datetime.datetime.now().strftime('%y%m%d_%H%M%S')
+
+        # TODO: Better identification of valid devices (correct status, etc.)
+        devices = [(dev, dev.command.startStream, (os.path.join(path, f'{dev.serial}_{suffix}.ide'),), {})
+                   for dev in list(self.checkedRecorders)
+                   if dev.command.canStream]
+
+        # TODO: Handle errors better
+        self.startThreads('start streaming', devices)
 
 
     def OnRemoteCheckChanged(self, _evt):
