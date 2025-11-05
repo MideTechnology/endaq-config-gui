@@ -80,3 +80,17 @@ def getUtcOffset(seconds=False):
         val /= 60.0 * 60.0
 
     return val
+
+
+#===============================================================================
+#
+#===============================================================================
+
+def deviceString(device):
+    """ Little utility function to generate a nice string for a recorder.
+    """
+    # TODO: Move this to `Recorder.__str__()`?
+    if device.name:
+        return f'{device.productName} "{device.name}" ({device.serial})'
+    else:
+        return f"{device.productName} ({device.serial})"

@@ -15,6 +15,15 @@ EvtConfigButton, EVT_CONFIG_BUTTON = NewEvent()
 # Start (or stop) a recording. Carries `device` as attribute.
 EvtRecordButton, EVT_RECORD_BUTTON = NewEvent()
 
+# Start (or stop) a stream. Carries `device` as attribute.
+EvtStreamButton, EVT_STREAM_BUTTON = NewEvent()
+
+# Lock (or unlock) a device
+EvtLockDevice, EVT_LOCK_DEVICE = NewEvent()
+
+# Blink the recorder's LED.
+EvtBlink, EVT_BLINK = NewEvent()
+
 # ===========================================================================
 # Wi-Fi events
 # ===========================================================================

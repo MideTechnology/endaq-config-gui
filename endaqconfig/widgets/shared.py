@@ -203,6 +203,7 @@ class DeviceToolTip(wx.Frame):
             if self.device.command.status[0]:
                 stime, scode, smsg = self.device.command.status
                 stext = getStatusTooltip(scode)
+                stime = self.device._lastContact if self.device.isRemote else stime
                 if smsg:
                     text += f'Status: {stext}: {smsg} (updated {prettyTimeDiff(stime)} ago)\n'
                 else:

@@ -26,11 +26,13 @@ from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface, MQTTConnector
 
 from . import battery_icons
 from . import icons
-from .controls import (_attribFormatter, populateStatusColumn,
-                       populateButtonColumn, populateBatteryColumn, NewControlButtons)
-from .events import EvtRecordButton, EVT_RECORD_BUTTON, EVT_BROKER_UPDATE
+from .controls import (_attribFormatter, populateStatusColumn, populateButtonColumn,
+                       populateBatteryColumn, NewControlButtons, ListContextMenu)
+from .events import (EvtRecordButton, EVT_RECORD_BUTTON, EVT_BROKER_UPDATE,
+                     EVT_STREAM_BUTTON, EVT_CONFIG_BUTTON, EVT_LOCK_DEVICE, EVT_BLINK)
 from .threads import DeviceScanThread, DeviceCommandThread, getDeviceStatus
 from .shared import DeviceToolTip, BrokerField
+from ..common import deviceString
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +262,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.Bind(wx.EVT_SHOW, self.OnShow)
         self.Bind(EVT_RECORD_BUTTON, self.OnStartRecording)
+        self.Bind(EVT_STREAM_BUTTON, self.OnStartStreaming)
+        self.Bind(EVT_CONFIG_BUTTON, self.OnConfigButton)
+        self.Bind(EVT_BLINK, self.OnBlink)
+        self.Bind(EVT_LOCK_DEVICE, self.OnLockDevice)
+
         self.Bind(wx.EVT_TIMER, self.OnUpdateTimerTick, id=self.updateTimer.GetId())
 
 
@@ -430,6 +437,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.Bind(wx.EVT_LIST_ITEM_DESELECTED, self.OnItemDeselected, self.list)
         self.list.Bind(wx.EVT_LEFT_DCLICK, self.OnItemDoubleClick)
         self.Bind(wx.EVT_LIST_COL_CLICK, self.OnColClick, self.list)
+        self.list.Bind(wx.EVT_RIGHT_DOWN, self.OnListRightClick)
 
         if self.checks:
             self.Bind(ULC.EVT_LIST_ITEM_CHECKED, self.OnItemChecked, self.list)
@@ -811,6 +819,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                      dialog: bool = True) -> tuple[list, list, list]:
         """ Run commands on multiple devices, each in its own thread.
 
+            :param what: Description of the command being run. For display
+                purposes.
             :param devlist: A list of tuples containing the device, the
                 function to execute, a tuple of positional arguments for
                 the function, and a dictionary of keyword arguments.
@@ -1036,6 +1046,31 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         evt.Skip()
 
 
+    def OnListRightClick(self, evt):
+        if not self.recordersByIndex or not self.tooltipFrame:
+            evt.Skip()
+            return
+
+        index, _ = self.list.HitTest(evt.GetPosition())
+        if index != wx.NOT_FOUND:
+            self.tooltipFrame.timer.Stop()
+            self.tooltipFrame.Hide()
+            try:
+                item = self.list.GetItemData(index)
+                device = self.recordersByIndex[index]
+            except IndexError:
+                logger.error(f'OnListRightClick: No Recorder at index {index}, '
+                             f'list coordinates {evt.GetPosition()}!')
+                return
+
+            menu = ListContextMenu(self, device, self.list, index)
+            self.PopupMenu(menu)
+            menu.Destroy()
+
+        evt.Skip()
+
+
+
     def OnExitWindow(self, evt):
         """ Handle the mouse leaving the window. """
         if self.tooltipFrame:
@@ -1161,6 +1196,46 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 self.updateTimer.Start(self.autoUpdate)
 
 
+    def OnStartStreaming(self, evt):
+        self.updateTimer.Stop()
+        # TODO: Make sure updating threads all stopped?
+
+        try:
+            # If EVT_RECORD_BUTTON, get device from event, otherwise use selected
+            recorder = getattr(evt, 'device', None)
+            stop = getattr(evt, 'stop', False)
+            if not recorder:
+                recorder = self.recordersByIndex.get(self.selected, None)
+            if recorder and recorder.canStream:
+                try:
+                    if recorder.command.streaming:
+                        DeviceCommandThread(recorder, recorder.command.stopRecording,
+                                            callback=self.isDead)
+                except AttributeError:
+                    pass
+
+                self.updateRow(recorder, enabled=False)
+        finally:
+            # self.updateList()
+            if self.autoUpdate:
+                self.updateTimer.Start(self.autoUpdate)
+
+
+    def OnLockDevice(self, evt):
+        # XXX: IMPLEMENT OnLockDevice
+        logger.debug('XXX: OnLockDevice not implemented!')
+
+
+    def OnBlink(self, evt):
+        logger.debug(f'Sending Blink to {evt.device}')
+        DeviceCommandThread(evt.device, evt.device.command.blink)
+
+
+    def OnConfigButton(self, evt):
+        # XXX: IMPLEMENT OnConfigButton
+        logger.debug('XXX: OnConfigButton not implemented!')
+
+
     def OnStartAllRecorders(self,
                             evt: Union[wx.CommandEvent, EvtRecordButton, None] = None):
         """ Send the 'start recording' command to all devices.
@@ -1174,7 +1249,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     def OnStartSelected(self, _evt):
-        # TODO: XXX: IMPLEMENT
+        """ Handle the 'Start Checked' button press event.
+        """
         # TODO: Better identification of valid devices (correct status, etc.)
         devices = [(rec, rec.command.startRecording, (), {})
                    for rec in list(self.checkedRecorders)
@@ -1185,9 +1261,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     def OnStreamSelected(self, _evt):
-        # TODO: XXX: IMPLEMENT
-        # TODO: Validate export path!
-        path = self.savePathField.GetValue()
+        """ Handle the 'Stream from Checked' button press event.
+        """
+        path = os.path.abspath(self.savePathField.GetValue())
+        if not os.path.isdir(path):
+            wx.MessageBox(f'Invalid output path\n\nThe directory "{path}"\n'
+                          'does not exist.', style=wx.ICON_ERROR)
+            return
         suffix = datetime.datetime.now().strftime('%y%m%d_%H%M%S')
 
         # TODO: Better identification of valid devices (correct status, etc.)

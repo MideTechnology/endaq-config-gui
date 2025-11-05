@@ -111,7 +111,7 @@ class DeviceScanThread(threading.Thread):
             logger.debug('Collecting MQTT devices...')
             try:
                 self.parent.connector.exclude = {d.serialInt for d in localdevs}
-                mqttDevices = set(self.parent.connector.getDevices(callback=self.stopped))
+                mqttDevices = set(self.parent.connector.getDevices(offline=True, callback=self.stopped))
                 with self.updating:
                     self.mqttDevices = mqttDevices
                     self.lastMqttGet = now
@@ -256,7 +256,8 @@ def updateDeviceStatus(device: Recorder, callback: Callable, timeout=1):
     try:
         # This will read and cache the calibration data.
         # XXX: What if the userpage is updated?
-        device.getCalExpiration()
+        if device.command.status[1] in (DeviceStatusCode.IDLE, DeviceStatusCode.IDLE_UNMOUNTED):
+            device.getCalExpiration()
     except (DeviceError, AttributeError, IOError, TimeoutError):
         pass
 

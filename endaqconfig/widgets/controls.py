@@ -11,9 +11,11 @@ from wx.lib.agw import ultimatelistctrl as ULC
 
 from endaq.device.response_codes import DeviceStatusCode
 from endaq.device import CommandError, UnsupportedFeature, Recorder
+from endaq.device.command_interfaces import SerialCommandInterface
 
 from . import battery_icons
-from .events import EvtConfigButton, EvtRecordButton
+from .events import EvtConfigButton, EvtRecordButton, EvtStreamButton, EvtLockDevice, EvtBlink
+from ..common import deviceString
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -69,7 +71,7 @@ STATUS_TEXT = {
 # Longer forms of some STATUS_TEXT, used where there's more space
 # TODO: Use this in tooltips!
 STATUS_TOOLTIP = {
-    0: "Ready (mounted as drive)",
+    0: "Ready",
     29: "Updating Software",  # Not a real code, replace if added or number reused
     30: "Starting Recording",
     31: "Stopping Recording",
@@ -89,163 +91,6 @@ def getStatusTooltip(status: DeviceStatusCode):
 
 # ===========================================================================
 #
-# ===========================================================================
-
-
-class ControlButtons(wx.Panel):
-    """
-    Panel containing device control buttons (start/stop recording and config).
-    """
-
-    # Tooltip text
-    START_TT = "Start the recording device"
-    STOP_TT = "Stop the recording device"
-    CONFIG_TT = "Configure the recording device"
-
-    BG_NORMAL = None  # Taken from widget's defaults
-    FG_NORMAL = None
-    BG_RECORDING = wx.RED
-    FG_RECORDING = wx.WHITE
-
-    def __init__(self, root, parent, device, index, column,
-                 showConfig=False):
-        """
-        Panel containing device control buttons (start/stop recording and
-        config).
-
-        :param root: The dialog root.
-        :param parent: The parent widget (the list control).
-        :param device: The corresponding recorder for this row.
-        :param index: The index of the row in the list.
-        :param column: The list control column index.
-        :param showConfig: If `True`, show the configuration button.
-            Not yet supported!
-        """
-        super().__init__(parent, -1)
-        self.root = root
-        self.list = parent
-        self.device = device
-        self.index = index
-        self.column = column
-
-        self.recording = False
-        self.uploading = False
-
-        bg = parent.GetBackgroundColour()
-        self.SetBackgroundColour(bg)
-
-        sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.SetSizer(sizer)
-
-        self.addButtons(sizer, showConfig)
-        self.recBtn.Bind(wx.EVT_BUTTON, self.OnRecordButton)
-        self.configBtn.Bind(wx.EVT_BUTTON, self.OnConfigButton)
-
-        sizer.Fit(self)
-
-        # updateList should do this
-        # self.updateButtons()
-
-
-    def addButtons(self, sizer, showConfig):
-        """ Add the button widgets to the panel.
-            (Isolated for easy experiments with alternative subclasses.)
-        """
-        self.recBtn = wx.Button(self, -1, "Start Recording", size=(-1, 22))
-        sizer.Add(self.recBtn, 1, wx.EXPAND)
-
-        self.configBtn = wx.Button(self, -1, "Configure", size=(-1, 22))
-        sizer.Add(self.configBtn, 1, wx.EXPAND)
-
-        if self.BG_NORMAL is None:
-            self.__class__.BG_NORMAL = self.recBtn.GetBackgroundColour()
-            self.__class__.FG_NORMAL = self.recBtn.GetForegroundColour()
-
-        self.configBtn.Show(showConfig)
-
-
-    def _setRecButton(self, label, tooltip, bg, fg):
-        if label:
-            self.recBtn.SetLabel(label)
-        self.recBtn.SetToolTip(tooltip or '')
-        if bg is not None:
-            self.recBtn.SetBackgroundColour(bg)
-        if fg is not None:
-            self.recBtn.SetForegroundColour(fg)
-
-
-    def updateButtons(self, enabled=True):
-        """ Update the button labels, tooltips, and enabled/disabled state.
-        """
-        try:
-            status = self.device.command.status[1]
-            if status and status >= 200:
-                status %= 100
-        except (AttributeError, CommandError, UnsupportedFeature):
-            status = None
-
-        self.recording = status in (DeviceStatusCode.START_PENDING,
-                                    DeviceStatusCode.RECORDING,
-                                    DeviceStatusCode.STREAMING,
-                                    DeviceStatusCode.TRIGGERING)
-        self.uploading = status == DeviceStatusCode.UPLOADING
-
-        self.recBtn.Show(self.device.canRecord)
-        self.recBtn.Enable(enabled
-                           and self.device.canRecord
-                           and not self.uploading)
-
-        if self.configBtn.IsShown():
-            self.configBtn.Enable(enabled
-                                  and self.device.hasConfigInterface
-                                  and self.device.config.available
-                                  and not self.uploading
-                                  and not self.recording)
-
-        if self.recording:
-            label = ("Stop Streaming" if status == DeviceStatusCode.STREAMING
-                     else "Stop Recording")
-            self._setRecButton(label, self.STOP_TT,
-                               self.BG_RECORDING, self.FG_RECORDING)
-        else:
-            self._setRecButton("Start Recording", self.START_TT,
-                               self.BG_NORMAL, self.FG_NORMAL)
-
-
-    def selectSelf(self):
-        """ Select this device's row in the list.
-        """
-        try:
-            idx = self.root.indicesByRecorder[self.device]
-            self.list.Select(idx)
-        except KeyError:
-            logger.debug(f'could not find {self.device} in indicesByRecorder')
-
-    def OnRecordButton(self, evt):
-        """ Handle Start/Stop Recording button press.
-        """
-        try:
-            self.selectSelf()
-            wx.PostEvent(self.root, EvtRecordButton(device=self.device,
-                                                    stop=self.recording))
-            evt.Skip()
-        except RuntimeError:
-            # Dialog probably closed during scan, which is okay.
-            pass
-
-
-    def OnConfigButton(self, evt):
-        """ Handle Configure button press.
-        """
-        try:
-            self.selectSelf()
-            wx.PostEvent(self.root, EvtConfigButton(device=self.device))
-            evt.Skip()
-        except RuntimeError:
-            # Dialog probably closed during scan, which is okay.
-            pass
-
-
 # ===========================================================================
 
 class NewControlButtons(wx.Panel):
@@ -313,8 +158,11 @@ class NewControlButtons(wx.Panel):
                                   for row in range(4)])
 
 
-    def addButtons(self, sizer, showConfig):
-        """
+    def addButtons(self, sizer: wx.Sizer, showConfig: bool):
+        """ Add the buttons to the panel.
+
+            :param sizer: The containing sizer.
+            :param showConfig: If `True`, show the configuration button.
         """
         self._loadImages()
         (self.configIcons, self.recordIcons, self.stopIcons, self.streamIcons,
@@ -411,6 +259,17 @@ class NewControlButtons(wx.Panel):
         self.updateLock()
 
 
+    def _postEvent(self, event):
+        """ Helper to post events generated by list item control buttons.
+        """
+        try:
+            self.list.Select(self.index)
+            wx.PostEvent(self.root, event)
+        except RuntimeError:
+            # Dialog probably closed during scan, which is okay.
+            pass
+
+
     # =======================================================================
     #
     # =======================================================================
@@ -418,51 +277,130 @@ class NewControlButtons(wx.Panel):
     def OnRecordButton(self, evt):
         """ Handle Start Recording button press.
         """
-        try:
-            self.list.Select(self.index)
-            wx.PostEvent(self.root, EvtRecordButton(device=self.device,
-                                                    stop=False))
-            evt.Skip()
-        except RuntimeError:
-            # Dialog probably closed during scan, which is okay.
-            pass
+        self._postEvent(EvtRecordButton(device=self.device, stop=False))
 
 
     def OnStopButton(self, evt):
         """ Handle Stop Recording button press.
         """
-        try:
-            wx.PostEvent(self.root, EvtRecordButton(device=self.device,
-                                                    stop=True))
-            evt.Skip()
-        except RuntimeError:
-            # Dialog probably closed during scan, which is okay.
-            pass
+        self._postEvent(EvtRecordButton(device=self.device, stop=True))
 
 
     def OnConfigButton(self, evt):
         """ Handle Configure button press.
         """
-        try:
-            idx = self.root.indicesByRecorder[self.device]
-            self.list.Select(idx)
-        except KeyError:
-            logger.debug(f'could not find {self.device} in indicesByRecorder')
-
-        try:
-            wx.PostEvent(self.root, EvtConfigButton(device=self.device))
-            evt.Skip()
-        except RuntimeError:
-            # Dialog probably closed during scan, which is okay.
-            pass
+        self._postEvent(EvtConfigButton(device=self.device))
 
 
     def OnStreamButton(self, _evt):
-        logger.debug('OnStreamButton not implemented.')
+        """ Handle Stream button press.
+        """
+        self._postEvent(EvtStreamButton(device=self.device))
 
 
     def OnLockButton(self, _evt):
-        logger.debug('OnLockButton not implemented.')
+        """ Handle Lock button press.
+        """
+        self._postEvent(EvtLockDevice(device=self.device))
+
+
+# ===========================================================================
+#
+# ===========================================================================
+
+class ListContextMenu(wx.Menu):
+    """ 'Right Click' menu for devlice list items. Duplicates most of the
+        functionality of the item control buttons.
+    """
+
+    def _addMI(self, label, handler, helpString='', kind=wx.ITEM_NORMAL):
+        """ Helper to simplify adding list items. """
+        mi = self.Append(wx.ID_ANY, label, helpString, kind)
+        self.Bind(wx.EVT_MENU, handler, id=mi.GetId())
+        return mi
+
+
+    def __init__(self, root, device, devlist, index):
+        """ 'Right Click' menu for devlice list items.
+        """
+        self.root = root
+        self.list = devlist
+        self.device = device
+        self.index = index
+        super().__init__()
+
+        devstr = deviceString(self.device)
+        config = self._addMI(f"Configure {devstr}...", self.OnConfig)
+        startRec = self._addMI(f"Start Recording", self.OnStartRecording)
+        startStream = self._addMI(f"Start Streaming", self.OnStartStreaming)
+        stopRec = self._addMI("Stop Recording/Streaming", self.OnStopRecording)
+        self.AppendSeparator()
+        lock = self._addMI(f"Lock {devstr}", self.OnLock)
+        self.AppendSeparator()
+        blink = self._addMI("Blink Recorder LEDs", self.OnBlink)
+
+        locked, mine = self.device.command.isLocked()
+        anothers = locked and not mine
+
+        isRecording = self.device.command.status[1] in (DeviceStatusCode.RECORDING,
+                                                        DeviceStatusCode.RECORDING_PERIODIC,
+                                                        DeviceStatusCode.TRIGGERING,
+                                                        DeviceStatusCode.TRIGGERING_PERIODIC,
+                                                        DeviceStatusCode.STREAMING)
+
+        config.Enable(not anothers)
+        startRec.Enable(self.device.command.canRecord and not anothers and not isRecording)
+        startStream.Enable(self.device.command.canStream and not anothers and not isRecording)
+        stopRec.Enable(not anothers and isRecording)
+        blink.Enable(isinstance(self.device.command, SerialCommandInterface))
+        lock.Enable(not anothers)
+
+        if mine:
+            lock.SetItemLabel(f'Unlock {devstr}')
+
+
+    def _postEvent(self, event):
+        try:
+            self.list.Select(self.index)
+            wx.PostEvent(self.root, event)
+        except RuntimeError:
+            # Dialog probably closed while processing, which is okay.
+            pass
+
+    def OnStartRecording(self, evt):
+        """ Handle Start Recording menu item.
+        """
+        self._postEvent(EvtRecordButton(device=self.device, stop=False))
+
+
+    def OnStartStreaming(self, evt):
+        """ Handle Start Recording menu item.
+        """
+        self._postEvent(EvtStreamButton(device=self.device))
+
+
+    def OnStopRecording(self, evt):
+        """ Handle Stop Recording menu item.
+        """
+        self._postEvent(EvtRecordButton(device=self.device, stop=True))
+
+
+    def OnConfig(self, evt):
+        """ Handle Configure menu item.
+        """
+        self._postEvent(EvtConfigButton(device=self.device))
+
+
+    def OnLock(self, _evt):
+        """ Handle Lock menu item.
+        """
+        self._postEvent(EvtLockDevice(device=self.device))
+
+
+    def OnBlink(self, evt):
+        """ Handle Blink menu item.
+        """
+        self._postEvent(EvtBlink(device=self.device))
 
 
 # ===========================================================================
