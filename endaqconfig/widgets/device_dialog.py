@@ -755,7 +755,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.updatingDisplay.set()
             # logger.debug('Updating display')
             for dev in self.recorders:
-                self.updateRow(dev)
+                try:
+                    self.updateRow(dev)
+                except IndexError:
+                    # Possible error in row population, or race condition
+                    logger.debug(f'IndexError updating row for device {dev.serial}')
 
         finally:
             self.updatingDisplay.clear()
@@ -1197,6 +1201,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     def OnStartStreaming(self, evt):
+        """ Handle a device list 'stream' button or menu item selection.
+        """
         self.updateTimer.Stop()
         # TODO: Make sure updating threads all stopped?
 
@@ -1206,7 +1212,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             stop = getattr(evt, 'stop', False)
             if not recorder:
                 recorder = self.recordersByIndex.get(self.selected, None)
-            if recorder and recorder.canStream:
+            if recorder and recorder.command.canStream:
                 try:
                     if recorder.command.streaming:
                         DeviceCommandThread(recorder, recorder.command.stopRecording,
@@ -1222,18 +1228,43 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     def OnLockDevice(self, evt):
-        # XXX: IMPLEMENT OnLockDevice
-        logger.debug('XXX: OnLockDevice not implemented!')
+        """ Handle a device list 'lock' button or menu item selection.
+        """
+        device = evt.device
+        clear = getattr(evt, 'clear', False)
+        force = getattr(evt, 'force', False)
+
+        # TODO: this whole thing might need to go into a thread, as
+        #  `isLocked()` could potentially take time to execute.
+        locked, mine = device.command.isLocked()
+        current = device.command.getLockID() if force else None
+
+        if locked and not mine and not force:
+            logger.debug(f'Tried to unlock {device.serial}, claimed by another')
+            return
+        elif clear:
+            logger.debug(f'Clearing lock on device {device.serial}')
+            DeviceCommandThread(device, device.command.clearLockID, current=current)
+        else:
+            logger.debug(f'Setting lock on device {device.serial}')
+            DeviceCommandThread(device, device.command.setLockID, current=current)
+
+        wx.CallAfter(self.updateList)
 
 
     def OnBlink(self, evt):
+        """ Handle a device list 'blink LEDs' button or menu item selection.
+        """
         logger.debug(f'Sending Blink to {evt.device}')
         DeviceCommandThread(evt.device, evt.device.command.blink)
 
 
     def OnConfigButton(self, evt):
-        # XXX: IMPLEMENT OnConfigButton
-        logger.debug('XXX: OnConfigButton not implemented!')
+        """ Handle a device list 'configure' button or menu item selection.
+        """
+        logger.debug(f'Handling config event for {evt.device}')
+        if self.okButton.IsEnabled():
+            self.EndModal(wx.ID_OK)
 
 
     def OnStartAllRecorders(self,

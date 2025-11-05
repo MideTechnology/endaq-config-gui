@@ -205,16 +205,20 @@ class NewControlButtons(wx.Panel):
             self.lockBtn.UnsetToolTip()
             return
 
-        lockId = self.device.command.lockId[1]
-        locked = lockId and any(lockId)
-        mine = lockId == self.device.command.hostId
+        locked, mine = self.device.command.isLocked()
 
-        icons = self.lockedIcons if locked else self.lockIcons
+        icons = self.lockedIcons if locked and not mine else self.lockIcons
         self.lockBtn.SetBitmap(icons[0])
-        self.lockBtn.SetBitmapCurrent(icons[1])
-        self.lockBtn.SetBitmapPressed(icons[2])
-        self.lockBtn.SetBitmapDisabled(icons[3])
-        self.lockBtn.Enable(mine or not locked)
+        if not locked:
+            self.lockBtn.SetBitmapCurrent(icons[1])
+            self.lockBtn.SetBitmapPressed(icons[2])
+            self.lockBtn.SetBitmapDisabled(icons[3])
+        else:
+            self.lockBtn.SetBitmapCurrent(icons[0])
+            self.lockBtn.SetBitmapPressed(icons[0])
+            self.lockBtn.SetBitmapDisabled(icons[0])
+
+            # self.lockBtn.Enable(mine or not locked)
 
         if mine:
             self.lockBtn.SetToolTip('You have control of this device\nClick to release lock')
@@ -240,9 +244,9 @@ class NewControlButtons(wx.Panel):
                                     DeviceStatusCode.TRIGGERING)
         self.uploading = status == DeviceStatusCode.UPLOADING
 
-        self.recBtn.Show(self.device.canRecord)
+        self.recBtn.Show(self.device.command.canRecord)
         self.recBtn.Enable(enabled
-                           and self.device.canRecord
+                           and self.device.command.canRecord
                            and not self.uploading)
 
         if self.configBtn.IsShown():
@@ -301,7 +305,10 @@ class NewControlButtons(wx.Panel):
     def OnLockButton(self, _evt):
         """ Handle Lock button press.
         """
-        self._postEvent(EvtLockDevice(device=self.device))
+        locked, mine = self.device.command.isLocked()
+        self._postEvent(EvtLockDevice(device=self.device,
+                                      clear=locked,
+                                      force=wx.GetKeyState(wx.WXK_CONTROL)))
 
 
 # ===========================================================================
@@ -353,10 +360,15 @@ class ListContextMenu(wx.Menu):
         startStream.Enable(self.device.command.canStream and not anothers and not isRecording)
         stopRec.Enable(not anothers and isRecording)
         blink.Enable(isinstance(self.device.command, SerialCommandInterface))
-        lock.Enable(not anothers)
+
+        self.clearLock = locked
+        self.forceLock = anothers and wx.GetKeyState(wx.WXK_CONTROL)
+        lock.Enable(not locked or mine or self.forceLock)
 
         if mine:
             lock.SetItemLabel(f'Unlock {devstr}')
+        elif self.forceLock:
+            lock.SetItemLabel(f"Force clear lock on {devstr}")
 
 
     def _postEvent(self, event):
@@ -394,7 +406,9 @@ class ListContextMenu(wx.Menu):
     def OnLock(self, _evt):
         """ Handle Lock menu item.
         """
-        self._postEvent(EvtLockDevice(device=self.device))
+        self._postEvent(EvtLockDevice(device=self.device,
+                                      clear=self.clearLock,
+                                      force=self.forceLock))
 
 
     def OnBlink(self, evt):
