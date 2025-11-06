@@ -434,6 +434,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.list.AssignImageList(self.loadIcons(), wx.IMAGE_LIST_SMALL)
         self.list.SetSizerProps(expand=True, proportion=1)
+        self.sleepingListFont = self.list.GetFont().Italic()
 
         self.Bind(wx.EVT_LIST_ITEM_SELECTED, self.OnItemSelected, self.list)
         self.Bind(wx.EVT_LIST_ITEM_DESELECTED, self.OnItemDeselected, self.list)
@@ -451,8 +452,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         # Manual tool tip generation (ULC tooltips seem broken)
         self.tooltipFrame = DeviceToolTip(self) if tooltips else None
-
-        self.updateTimerCalls = 0
 
         listmix.ColumnSorterMixin.__init__(self, len(self.columns))
 
@@ -724,12 +723,12 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         mine = lockId == dev.command.hostId
         anothers = locked and not mine
         enabled = (enabled and status not in (DeviceStatusCode.RESET_PENDING,
-                                             DeviceStatusCode.START_PENDING,
-                                             DeviceStatusCode.STOP_PENDING,
-                                             DeviceStatusCode.STREAMING,
-                                             DeviceStatusCode.OFFLINE,
-                                             DeviceStatusCode.RECORDING_OFFLINE,
-                                             DeviceStatusCode.TRIGGING_OFFLINE)
+                                              DeviceStatusCode.START_PENDING,
+                                              DeviceStatusCode.STOP_PENDING,
+                                              DeviceStatusCode.UPLOADING,
+                                              DeviceStatusCode.OFFLINE,
+                                              DeviceStatusCode.RECORDING_OFFLINE,
+                                              DeviceStatusCode.TRIGGING_OFFLINE)
                    and not anothers)
         sleeping = status in (DeviceStatusCode.SLEEPING,
                               DeviceStatusCode.RECORDING_PERIODIC,
@@ -757,6 +756,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 # Sleeping/periodically online devices not disabled, but
                 # drawn in gray as if they were (so checkbox still accessible)
                 self.list.SetItemTextColour(index, STATUS_COLORS[100])
+                self.list.SetItemFont(index, self.sleepingListFont)
             self.itemDataMap[index][i] = val or ''
 
         checked = self.list.GetCheckedItemCount()
@@ -874,13 +874,17 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         try:
             self.updateTimer.Stop()
-            threads = [DeviceCommandThread(dev, cmd, *args, **kwargs)
-                       for dev, cmd, args, kwargs in devlist]
+            threads = []
+            for dev, cmd, args, kwargs in devlist:
+                kwargs.setdefault('callback', self.isDead)
+                threads.append(DeviceCommandThread(dev, cmd, *args, **kwargs))
 
             if timeout:
                 deadline = time() + timeout
                 while any(t.is_alive() for t in threads):
                     if time() > deadline:
+                        break
+                    if self.isDead():
                         break
                     sleep(0.05)
 
@@ -900,7 +904,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 else:
                     successes.append(t)
 
-            if dialog and failures or (timeouts and timeout):
+            if dialog and (failures or (timeouts and timeout)) and not self.isDead():
                 if names:
                     names = '\u2022 ' + ('\n\u2022 '.join(sorted(names)))
                     msg = (f"Could not {what} on all devices\n\n"
@@ -911,13 +915,51 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                                   style=wx.OK | wx.ICON_ERROR)
 
         finally:
-            self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-            self.enableButtons(True)
+            if not self.isDead():
+                self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+                self.enableButtons(True)
 
-            if self.autoUpdate:
-                self.updateTimer.Start(self.autoUpdate)
+                if self.autoUpdate:
+                    self.updateTimer.Start(self.autoUpdate)
 
         return successes, failures, timeouts
+
+
+    def getChecked(self) -> List[Recorder]:
+        """ Get the devices for all checked, enabled list items.
+        """
+        return [rec for rec in list(self.checkedRecorders)
+                if self.list.GetItem(self.indicesByRecorder[rec]).IsEnabled()]
+
+
+    def startRecording(self, *devices):
+        """ Start one or more devices recording (assuming they can record).
+        """
+        # TODO: Better identification of valid devices (correct status, etc.)
+        recorders = [(dev, dev.command.startRecording, (), {})
+                     for dev in devices if dev.command.canRecord]
+
+        # TODO: Handle errors better
+        self.startThreads('start recording', recorders)
+
+
+    def startStreaming(self, *devices):
+        """ Start one or more devices streaming (assuming they can stream).
+        """
+        path = os.path.abspath(self.savePathField.GetValue())
+        if not os.path.isdir(path):
+            wx.MessageBox(f'Invalid output path\n\nThe directory "{path}"\n'
+                          'does not exist.', style=wx.ICON_ERROR)
+            return
+        suffix = datetime.datetime.now().strftime('%y%m%d_%H%M%S')
+
+        # TODO: Better identification of valid devices (correct status, etc.)
+        streamers = [(dev, dev.command.startStream,
+                      (os.path.join(path, f'{dev.serial}_{suffix}.ide'),), {})
+                     for dev in devices if dev.command.canStream]
+
+        # TODO: Handle errors better
+        self.startThreads('start streaming', streamers)
 
 
     # =======================================================================
@@ -1093,7 +1135,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.tooltipFrame.timer.Stop()
             self.tooltipFrame.Hide()
             try:
-                item = self.list.GetItemData(index)
                 device = self.recordersByIndex[index]
             except IndexError:
                 logger.error(f'OnListRightClick: No Recorder at index {index}, '
@@ -1105,7 +1146,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             menu.Destroy()
 
         evt.Skip()
-
 
 
     def OnExitWindow(self, evt):
@@ -1208,6 +1248,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             :param evt: The event generated by a dialog 'Record' button, or
                 an `EVT_RECORD_BUTTON` event from a row in the list.
         """
+        # XXX: CLEAN THIS UP, USE startRecording()
+        logger.debug('starting recording...')
+
         self.updateTimer.Stop()
         # TODO: Make sure updating threads all stopped?
 
@@ -1219,12 +1262,12 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 recorder = self.recordersByIndex.get(self.selected, None)
             if recorder and recorder.canRecord:
                 if stop:
-                    # recorder.command.stopRecording()
-                    DeviceCommandThread(recorder, recorder.command.stopRecording,
+                    DeviceCommandThread(recorder,
+                                        recorder.command.stopRecording,
                                         callback=self.isDead)
                 else:
-                    # recorder.command.startRecording()
-                    DeviceCommandThread(recorder, recorder.command.startRecording,
+                    DeviceCommandThread(recorder,
+                                        recorder.command.startRecording,
                                         callback=self.isDead)
                 self.updateRow(recorder, enabled=False)
         finally:
@@ -1236,24 +1279,18 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnStartStreaming(self, evt):
         """ Handle a device list 'stream' button or menu item selection.
         """
+        logger.debug('starting stream...')
         self.updateTimer.Stop()
         # TODO: Make sure updating threads all stopped?
 
         try:
-            # If EVT_RECORD_BUTTON, get device from event, otherwise use selected
-            recorder = getattr(evt, 'device', None)
-            stop = getattr(evt, 'stop', False)
-            if not recorder:
-                recorder = self.recordersByIndex.get(self.selected, None)
-            if recorder and recorder.command.canStream:
-                try:
-                    if recorder.command.streaming:
-                        DeviceCommandThread(recorder, recorder.command.stopRecording,
-                                            callback=self.isDead)
-                except AttributeError:
-                    pass
-
-                self.updateRow(recorder, enabled=False)
+            # If EVT_STREAM, get device from event, otherwise use selected
+            dev = getattr(evt, 'device', None)
+            if not dev:
+                dev = self.recordersByIndex.get(self.selected, None)
+            if dev and dev.command.canStream:
+                self.startStreaming(dev)
+                self.updateRow(dev, enabled=False)
         finally:
             # self.updateList()
             if self.autoUpdate:
@@ -1317,7 +1354,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         # TODO: Better identification of valid devices (correct status, etc.)
         devices = [(rec, rec.command.startRecording, (), {})
-                   for rec in list(self.checkedRecorders)
+                   for rec in self.getChecked()
                    if rec.command.canRecord]
 
         # TODO: Handle errors better
@@ -1327,20 +1364,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnStreamSelected(self, _evt):
         """ Handle the 'Stream from Checked' button press event.
         """
-        path = os.path.abspath(self.savePathField.GetValue())
-        if not os.path.isdir(path):
-            wx.MessageBox(f'Invalid output path\n\nThe directory "{path}"\n'
-                          'does not exist.', style=wx.ICON_ERROR)
-            return
-        suffix = datetime.datetime.now().strftime('%y%m%d_%H%M%S')
-
-        # TODO: Better identification of valid devices (correct status, etc.)
-        devices = [(dev, dev.command.startStream, (os.path.join(path, f'{dev.serial}_{suffix}.ide'),), {})
-                   for dev in list(self.checkedRecorders)
-                   if dev.command.canStream]
-
-        # TODO: Handle errors better
-        self.startThreads('start streaming', devices)
+        devs = [dev for dev in self.getChecked() if dev.command.canStream]
+        self.startStreaming(*devs)
 
 
     def OnStopSelected(self, _evt):
@@ -1348,7 +1373,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         # TODO: Better identification of valid devices (correct status, etc.)
         devices = [(rec, rec.command.stopRecording, (), {})
-                   for rec in list(self.checkedRecorders)
+                   for rec in self.getChecked()
                    if rec.command.canRecord]
 
         # TODO: Handle errors better
