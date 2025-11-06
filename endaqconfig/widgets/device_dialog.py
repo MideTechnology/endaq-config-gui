@@ -19,20 +19,20 @@ from wx.lib.agw import ultimatelistctrl as ULC
 import wx.lib.filebrowsebutton as FBB
 
 from endaq.device import (Recorder, RECORDERS, UnsupportedFeature,
-                          DeviceError, deviceChanged)
+                          CommandError, DeviceError, deviceChanged)
 from endaq.device.base import os_specific
-# from endaq.device.response_codes import DeviceStatusCode
+from endaq.device.response_codes import DeviceStatusCode
 from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface, MQTTConnector
 
 from . import battery_icons
 from . import icons
 from .controls import (_attribFormatter, populateStatusColumn, populateButtonColumn,
-                       populateBatteryColumn, NewControlButtons, ListContextMenu)
-from .events import (EvtRecordButton, EVT_RECORD_BUTTON, EVT_BROKER_UPDATE,
-                     EVT_STREAM_BUTTON, EVT_CONFIG_BUTTON, EVT_LOCK_DEVICE, EVT_BLINK)
+                       populateBatteryColumn, NewControlButtons, ListContextMenu,
+                       STATUS_COLORS)
+from .events import (EvtRecord, EVT_RECORD, EVT_BROKER_UPDATE,
+                     EVT_STREAM, EVT_CONFIG, EVT_LOCK_DEVICE, EVT_BLINK)
 from .threads import DeviceScanThread, DeviceCommandThread, getDeviceStatus
 from .shared import DeviceToolTip, BrokerField
-from ..common import deviceString
 
 logger = logging.getLogger(__name__)
 
@@ -261,9 +261,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.Centre()
 
         self.Bind(wx.EVT_SHOW, self.OnShow)
-        self.Bind(EVT_RECORD_BUTTON, self.OnStartRecording)
-        self.Bind(EVT_STREAM_BUTTON, self.OnStartStreaming)
-        self.Bind(EVT_CONFIG_BUTTON, self.OnConfigButton)
+        self.Bind(EVT_RECORD, self.OnStartRecording)
+        self.Bind(EVT_STREAM, self.OnStartStreaming)
+        self.Bind(EVT_CONFIG, self.OnConfigButton)
         self.Bind(EVT_BLINK, self.OnBlink)
         self.Bind(EVT_LOCK_DEVICE, self.OnLockDevice)
 
@@ -298,6 +298,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         NewControlButtons._loadImages()
         startIcons = NewControlButtons.ICONS[1]
+        stopIcons = NewControlButtons.ICONS[2]
         streamIcons = NewControlButtons.ICONS[3]
 
         buttonpane = sc.SizedPanel(pane, -1)
@@ -329,6 +330,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                                    "Send the start command to all checked devices, "
                                    "saving output to the specified directory",
                                    self.OnStreamSelected)
+        self.multiStopBtn = _add('Stop Checked', stopIcons,
+                                   "Send the stop command to all checked devices",
+                                   self.OnStopSelected)
 
         self.savePathField = FBB.DirBrowseButton(buttonpane,
                                                  labelText="Save to:",
@@ -348,8 +352,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.Bind(wx.EVT_BUTTON, self.OnSelectAllButton, self.selectAllBtn)
         self.Bind(wx.EVT_BUTTON, self.OnSelectNoneButton, self.selectNoneBtn)
-        self.Bind(wx.EVT_BUTTON, self.OnStartSelected, self.multiStartBtn)
-        self.Bind(wx.EVT_BUTTON, self.OnStreamSelected, self.multiStreamBtn)
 
 
     # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
@@ -711,8 +713,27 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         if self.showWarnings:
             self.setItemIcon(index, dev)
 
-        # status = self.recorderStatus.get(dev, (None, (DeviceStatusCode.IDLE, '')))[1][0]
-        enabled = enabled and self.recorderStatus[dev][-2]  # dev.command.available
+        try:
+            status = self.recorderStatus[dev][1][0]
+        except (KeyError, IndexError) as err:
+            logger.debug(f'recorder status error: {err!r}')
+            status = 0
+
+        lockId = dev.command.lockId[1]
+        locked = lockId and any(lockId)
+        mine = lockId == dev.command.hostId
+        anothers = locked and not mine
+        enabled = (enabled and status not in (DeviceStatusCode.RESET_PENDING,
+                                             DeviceStatusCode.START_PENDING,
+                                             DeviceStatusCode.STOP_PENDING,
+                                             DeviceStatusCode.STREAMING,
+                                             DeviceStatusCode.OFFLINE,
+                                             DeviceStatusCode.RECORDING_OFFLINE,
+                                             DeviceStatusCode.TRIGGING_OFFLINE)
+                   and not anothers)
+        sleeping = status in (DeviceStatusCode.SLEEPING,
+                              DeviceStatusCode.RECORDING_PERIODIC,
+                              DeviceStatusCode.TRIGGERING_PERIODIC)
 
         # enable or disable the row
         # excludes button panel - do that explicitly
@@ -732,11 +753,16 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                     logger.error(f'Could not get button panel for index {index}')
             else:
                 val = col.formatter(dev, index, i, self)
+            if sleeping:
+                # Sleeping/periodically online devices not disabled, but
+                # drawn in gray as if they were (so checkbox still accessible)
+                self.list.SetItemTextColour(index, STATUS_COLORS[100])
             self.itemDataMap[index][i] = val or ''
 
         checked = self.list.GetCheckedItemCount()
         self.multiStreamBtn.Enable(checked > 0)
         self.multiStartBtn.Enable(checked > 0)
+        self.multiStopBtn.Enable(checked > 0)
 
 
     def updateList(self):
@@ -752,6 +778,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             return
 
         try:
+            logger.debug('starting updateList')
             self.updatingDisplay.set()
             # logger.debug('Updating display')
             for dev in self.recorders:
@@ -762,6 +789,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                     logger.debug(f'IndexError updating row for device {dev.serial}')
 
         finally:
+            logger.debug('exiting updateList')
             self.updatingDisplay.clear()
 
 
@@ -820,7 +848,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                      what: str,
                      devlist: list[tuple[Recorder, Callable, tuple, dict]],
                      timeout: float = 5.0,
-                     dialog: bool = True) -> tuple[list, list, list]:
+                     dialog: bool = True,
+                     ignore: Optional[type] = None) -> tuple[list, list, list]:
         """ Run commands on multiple devices, each in its own thread.
 
             :param what: Description of the command being run. For display
@@ -831,6 +860,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             :param timeout: How long to wait for all threads to complete.
             :param dialog: If `True`, show a modal error dialog if
                 any devices failed.
+            :param ignore: A class of exception to exclude from the list of
+                failures.
             :return: Three lists: successful executions, failures, and
                 ones that failed to complete before the timeout.
         """
@@ -857,6 +888,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
             for t in threads:
                 if t.failed.is_set():
+                    if ignore and isinstance(t.failure, ignore):
+                        continue
                     logger.error(f'{t.command.__name__} failed on {t.device}: {t.failure!r}')
                     failures.append(t)
                     names.append(f"{t.device.productName} SN:{t.device.serial} (error)")
@@ -1169,7 +1202,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     def OnStartRecording(self,
-                         evt: Union[wx.CommandEvent, EvtRecordButton, None] = None):
+                         evt: Union[wx.CommandEvent, EvtRecord, None] = None):
         """ Initiate a recording.
 
             :param evt: The event generated by a dialog 'Record' button, or
@@ -1268,7 +1301,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     def OnStartAllRecorders(self,
-                            evt: Union[wx.CommandEvent, EvtRecordButton, None] = None):
+                            evt: Union[wx.CommandEvent, EvtRecord, None] = None):
         """ Send the 'start recording' command to all devices.
 
             This is placeholder for future functionality. It may or may not
@@ -1310,6 +1343,18 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.startThreads('start streaming', devices)
 
 
+    def OnStopSelected(self, _evt):
+        """ Stop all checked devices.
+        """
+        # TODO: Better identification of valid devices (correct status, etc.)
+        devices = [(rec, rec.command.stopRecording, (), {})
+                   for rec in list(self.checkedRecorders)
+                   if rec.command.canRecord]
+
+        # TODO: Handle errors better
+        self.startThreads('stop recording/streaming', devices, ignore=CommandError)
+
+
     def OnRemoteCheckChanged(self, _evt):
         """ Handle the 'remote' checkbox changing. Also used to update
             things on startup.
@@ -1322,6 +1367,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnBrokerSelected(self, evt):
         """ Handle an MQTT broker selection.
         """
+        logger.debug(f'selected broker: {evt.broker}')
+
         info = evt.broker
         if not info:
             logger.debug("No broker info in selection event, bad broker address?")
@@ -1332,6 +1379,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         oldConnector = self.connector
         if oldConnector:
+            self.stopUpdater()  # XXX: Intended to clear list when changing brokres; not sure if it helps
             oldConnector.disconnect()
 
         try:
@@ -1347,13 +1395,20 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.recordersByIndex.clear()
             self.indicesByRecorder.clear()
 
+            RECORDERS.clear()
+
         except Exception:
             if oldConnector:
                 self.connector = oldConnector
                 self.connector.connect()
             raise
 
-        wx.CallAfter(self.OnUpdateTimerTick)
+        # XXX: Intended to clear list when changing brokers; see above
+        if oldConnector != self.connector:
+            self.startUpdater()
+
+        wx.CallAfter(self.populateList)
+        # wx.CallAfter(self.OnUpdateTimerTick)
 
 
     def OnItemChecked(self, evt):
@@ -1362,7 +1417,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         item = evt.GetItem()
         idx = evt.GetIndex()
         if idx < 0:
-            logger.debug(f'OnItemChecked: {idx=} (bad)')
+            logger.debug(f'{idx=} (bad)')
             evt.Skip()
             return
         dev = self.recordersByIndex[idx]

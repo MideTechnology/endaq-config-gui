@@ -10,13 +10,13 @@ from wx.lib.newevent import NewEvent
 # ===========================================================================
 
 # Configure a device. Carries `device` as attribute.
-EvtConfigButton, EVT_CONFIG_BUTTON = NewEvent()
+EvtConfig, EVT_CONFIG = NewEvent()
 
 # Start (or stop) a recording. Carries `device` as attribute.
-EvtRecordButton, EVT_RECORD_BUTTON = NewEvent()
+EvtRecord, EVT_RECORD = NewEvent()
 
 # Start (or stop) a stream. Carries `device` as attribute.
-EvtStreamButton, EVT_STREAM_BUTTON = NewEvent()
+EvtStream, EVT_STREAM = NewEvent()
 
 # Lock (or unlock) a device
 EvtLockDevice, EVT_LOCK_DEVICE = NewEvent()

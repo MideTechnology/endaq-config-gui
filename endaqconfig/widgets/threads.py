@@ -30,6 +30,9 @@ class DeviceScanThread(threading.Thread):
     MQTT.
     """
 
+    # For debugging, to make it clear in the log if a thread is new
+    _INDEX = 0
+
     def __init__(self,
                  parent: "DeviceSelectionDialog",
                  interval: float = 3):
@@ -56,10 +59,12 @@ class DeviceScanThread(threading.Thread):
         self.lastMqttSerials = set()  # Serial numbers of known MQTT devices
         self.devices = set()  # All found devices, USB and MQTT
 
-        super().__init__(daemon=True)
-        self.name = self.name.replace('Thread', type(self).__name__)
+        DeviceScanThread._INDEX += 1
+        super().__init__(name=f'{type(self).__name__}-{DeviceScanThread._INDEX}',
+                         daemon=True)
 
         self.mqttUpdated.set()
+        logger.debug(f'Created {self.name}')
 
 
     def onUpdate(self, update: dict):
@@ -145,19 +150,25 @@ class DeviceScanThread(threading.Thread):
     def run(self):
         """ Main loop.
         """
-        while not self.stop.is_set():
-            if self.paused.is_set():
-                sleep(0.1)
-                continue
+        logger.debug(f'Starting main loop of {self.name}')
+        try:
+            while not self.stop.is_set():
+                if self.paused.is_set():
+                    sleep(0.1)
+                    continue
 
-            now = time()
-            if not self.interval or now - self.lastScan > self.interval or self.mqttUpdated.is_set():
-                self.scan()
+                now = time()
+                if (not self.interval
+                        or now - self.lastScan > self.interval
+                        or self.mqttUpdated.is_set()):
+                    self.scan()
 
-            if not self.interval:
-                return
+                if not self.interval:
+                    return
 
-            sleep(1)
+                sleep(1)
+        finally:
+            logger.debug(f'Exiting main loop of {self.name}')
 
 
     def getDevices(self) -> List[Recorder]:
@@ -204,8 +215,8 @@ class DeviceCommandThread(threading.Thread):
         self.failed = threading.Event()  # Set if command raises an exception
         self.failure: Optional[Exception] = None  # Exception raised by the command (if any)
 
-        super().__init__(daemon=True)
-        self.name = self.name.replace('Thread', type(self).__name__)
+        super().__init__(name=f'{type(self).__name__}_{device.serial} ({command.__name__})',
+                         daemon=True)
         self.start()
 
 
@@ -275,7 +286,7 @@ def getDeviceStatus(device: Recorder) \
         not ping the device to update it.
 
         :return: A tuple containing the device's battery status, status code
-            and message, path, lock ID, command interface availability and
+            and message, path, lock ID, command interface availability, and
             whether it has read calibration data yet.
     """
     if not device.hasCommandInterface:
@@ -289,5 +300,5 @@ def getDeviceStatus(device: Recorder) \
     bat = cmd._battery[1]
     if isinstance(bat, dict):
         bat = tuple(bat.values())
-    return (bat, cmd.status[1:], device.path, cmd.lockId,
+    return (bat, cmd.status[1:], device.path, cmd.lockId[1],
             device.command.available, bool(device._calibration))
