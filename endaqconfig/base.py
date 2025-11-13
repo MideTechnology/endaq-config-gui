@@ -17,7 +17,7 @@ __copyright__ = "Copyright 2022 Mide Technology Corporation"
 # ===============================================================================
 
 import logging
-logger = logging.getLogger('endaqconfig')
+logger = logging.getLogger(__name__)
 
 # ===============================================================================
 #
@@ -26,6 +26,9 @@ logger = logging.getLogger('endaqconfig')
 from fnmatch import fnmatch
 import string
 import time
+from typing import Optional
+
+from ebmlite import Element, MasterElement
 
 import wx
 import wx.lib.filebrowsebutton as FB
@@ -61,6 +64,17 @@ def registerTab(cls):
     global TAB_TYPES
     TAB_TYPES[cls.__name__] = cls
     return cls
+
+
+
+def getConfigId(el: Element) -> Optional[int]:
+    """ Get a UI widget element's `ConfigID`.
+    """
+    if isinstance(el, MasterElement):
+        for ch in el:
+            if ch.name == 'ConfigID':
+                return ch.value
+    return None
 
 
 # ===============================================================================
@@ -1739,6 +1753,9 @@ class Group(ConfigWidget):
     def addChild(self, el, flags=wx.ALIGN_LEFT | wx.EXPAND | wx.NORTH, border=4):
         """ Add a child field to the Group.
         """
+        if self.root.excludeIds and getConfigId(el) in self.root.excludeIds:
+            return
+
         cls = self.getWidgetClass(el)
         if cls is None:
             return

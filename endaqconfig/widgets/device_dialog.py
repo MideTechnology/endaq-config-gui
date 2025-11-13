@@ -50,6 +50,9 @@ SPACE_WARN_MB = SPACE_MIN_MB * 4
 CAL_WARN_DAYS = datetime.timedelta(days=120)
 DEV_WARN_DAYS = datetime.timedelta(days=182)
 
+# XXX: REMOVE
+from .debug_lock import DebugRLock
+
 
 # ===========================================================================
 #
@@ -160,13 +163,16 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 checkbox, if `remote` is `True`. `True` by default.
             :keyword broker: The name of the default, initially selected
                 broker. `None` will select the first found.
+            :keyword connector: An existing `endaq.device.mqtt.MQTTConnector`
+                instance, if one was already created.
             :keyword showSave: If `True`, show the save path selector.
             :keyword savePath: The default save path for streams.
+
         """
         # Clear cached devices
         RECORDERS.clear()
 
-        self.autoUpdate: Union[int, bool] = kwargs.pop('autoUpdate', 500)
+        self.autoUpdate: Union[int, bool] = kwargs.pop('autoUpdate', 750)
         self.scanInterval: Union[int, bool] = kwargs.pop('scanInterval', 4000)
         self.hideClock: bool = kwargs.pop('hideClock', False)
         self.hideRecord: bool = kwargs.pop('hideRecord', True)
@@ -181,6 +187,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.remoteChecked: bool = kwargs.pop('remoteChecked', self.remote)
         self.showSave: bool = kwargs.pop('showSave', True)
         self.savePath: str = kwargs.pop('savePath', '')
+        self.connector: MQTTConnector = kwargs.pop('connector', None)
+
+        self.ownConnector = self.connector is not None
 
         defaultBroker: Optional[str] = kwargs.pop('broker', None)
         okText = kwargs.pop('okText', "Configure")
@@ -217,12 +226,12 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.recorderTimeouts: Dict[Recorder, float] = {}  # Time to remove a recorder from `recorderStatus` if not in `getDevices()`
         self.recordersByIndex: Dict[int, Recorder] = {}  # `Recorder` instances keyed by list index.
         self.indicesByRecorder: Dict[Recorder, int] = {}  # List index keyed by `Recorder`
-        self.updatingRecorders = threading.RLock()  # To avoid simultaneous dict changes
+        # self.updatingRecorders = threading.RLock()  # To avoid simultaneous dict changes  # XXX: RESTORE
+        self.updatingRecorders = DebugRLock('updatingRecorders')  # XXX: REMOVE & RESTORE PREV. LINE
 
         self.checkedRecorders: set[Recorder] = set()  # Checked items/recorders (to keep checks after list updates)
 
         self.brokerInfo = None  # Selected MQTT broker's mDNS info
-        self.connector: MQTTConnector = None
 
         # TODO: Better column collection (assemble piecemeal based on parameters)
         cols = self.ADVANCED_COLUMNS if self.showAdvanced else self.COLUMNS
@@ -876,7 +885,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.updateTimer.Stop()
             threads = []
             for dev, cmd, args, kwargs in devlist:
-                kwargs.setdefault('callback', self.isDead)
+                if 'callback' in kwargs and kwargs['callback'] is None:
+                    kwargs.pop('callback', None)
+                else:
+                    kwargs.setdefault('callback', self.isDead)
                 threads.append(DeviceCommandThread(dev, cmd, *args, **kwargs))
 
             if timeout:
@@ -991,6 +1003,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnUpdateTimerTick(self, _evt: Optional[wx.TimerEvent] = None):
         """ Handle the device-scanning timer ticking.
         """
+        logger.debug('>>> entering updateTimer tick handler')
         now = time()
 
         drivesChanged = deviceChanged(recordersOnly=False)  # XXX: remove this?
@@ -1021,7 +1034,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         elif drivesChanged or statusChanged:
             # update list
-            # logger.debug(f'scan {self.updateCount}: updating list')
+            logger.debug(f'scan {self.updateCount}: updating list')
             self.lastUpdate = now
             self.updateList()
 
@@ -1031,6 +1044,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.SetSize((self.listWidth + (self.GetDialogBorder() * 4), -1))
 
         self.updateCount += 1
+        logger.debug('<<< exiting updateTimer tick handler')
 
 
     def OnColClick(self, evt):
@@ -1175,8 +1189,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if self.tooltipFrame:
                 self.tooltipFrame.timer.Stop()
                 self.tooltipFrame.Hide()
-            if self.connector:
-                self.connector.disconnect()
+            # if self.connector:
+            #     self.connector.disconnect()
 
         evt.Skip()
         
@@ -1184,7 +1198,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnSetClocks(self, _evt=None):
         """ Set all clocks. Used as an event handler.
         """
-        devices = [(rec, rec.setTime, (), {})
+        devices = [(rec, rec.setTime, (), {'callback': None})
                    for rec in self.recordersByIndex.values()]
         self.startThreads('set the clock', devices)
 
@@ -1405,11 +1419,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         oldConnector = self.connector
         if oldConnector:
             self.stopUpdater()  # XXX: Intended to clear list when changing brokres; not sure if it helps
-            oldConnector.disconnect()
+            if self.ownConnector:
+                oldConnector.disconnect()
 
         try:
             newcon = MQTTConnector(info['host'], info['port'], name=info['name'],
                                    updateCallback=self.onMqttUpdate)
+            self.ownConnector = True
             newcon.connect()
             self.connector = newcon
             self.brokerInfo = info

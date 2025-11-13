@@ -20,6 +20,10 @@ if TYPE_CHECKING:
     from .device_dialog import DeviceSelectionDialog
 
 
+# XXX: REMOVE
+from .debug_lock import DebugRLock
+
+
 # ===========================================================================
 #
 # ===========================================================================
@@ -49,7 +53,8 @@ class DeviceScanThread(threading.Thread):
         self.paused = threading.Event()  # Set to pause the scanning
         self.stop = threading.Event()  # Set to kill the thread
         self.mqttUpdated = threading.Event()  # Set when the set of MQTT devices changes
-        self.updating = threading.RLock()
+        # self.updating = threading.RLock()  # XXX: RESTORE
+        self.updating = DebugRLock("DeviceScanThread")  # XXX: REMOVE & RESTORE PREV. LINE
         self.updateThreads: Dict[Recorder, "DeviceCommandThread"] = {}
         self.updateCancelled = threading.Event()
 
@@ -106,7 +111,7 @@ class DeviceScanThread(threading.Thread):
         self.lastScan = now = time()
         devices = set()
 
-        # logger.debug('Collecting USB devices...')
+        logger.debug('Collecting USB devices...')
         localdevs = getDevices()
         devices.update(localdevs)
 
@@ -123,6 +128,7 @@ class DeviceScanThread(threading.Thread):
             except TimeoutError:
                 logger.debug('timed out getting MQTT devices')
 
+        logger.debug('Got MQTT devices.')
         self.mqttUpdated.clear()
         devices.update(self.mqttDevices)
 
@@ -141,6 +147,7 @@ class DeviceScanThread(threading.Thread):
             self.devices = devices
 
         with self.updating:
+            logger.debug('Starting updateDeviceStatus threads')
             for dev in self.devices:
                 if dev not in self.updateThreads:
                     currentThreads[dev] = DeviceCommandThread(dev, updateDeviceStatus, dev, callback=self.stopped)
@@ -174,8 +181,7 @@ class DeviceScanThread(threading.Thread):
     def getDevices(self) -> List[Recorder]:
         """ Get a list of all active devices.
         """
-        with self.updating:
-            return sorted(self.devices, key=lambda x: x.serialInt)
+        return sorted(self.devices, key=lambda x: x.serialInt)
 
 
 # ===========================================================================

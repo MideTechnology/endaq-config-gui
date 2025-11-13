@@ -35,8 +35,8 @@ import wx.lib.sized_controls as SC
 from ebmlite import loadSchema
 import endaq.device
 from endaq.device import Recorder, configio, ConfigError
+from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface
 
-from .base import logger
 from . import base
 from .common import isCompiled
 from .widgets import icons
@@ -51,6 +51,8 @@ from . import wifi_tab
 # ===============================================================================
 
 __DEBUG__ = False
+
+logger = logging.getLogger(__name__)
 
 # ===============================================================================
 #
@@ -82,6 +84,13 @@ class ConfigDialog(SC.SizedDialog):
                 checkbox will be checked by default.
             :param saveOnOk: If `False`, exiting the dialog with OK will not
                 save to the recorder. Primarily for debugging.
+            :param useUtc: If `True`, the 'in UTC' checkbox for wake times
+                will be checked by default.
+            :param showAdvanced: If `True`, show configuration options flagged
+                as 'advanced.'
+            :param wifi: If `False`, hide configuration options relevant to
+                Wi-Fi. Default is `True` (show Wi-Fi widgets, if present
+                in the `CONFIG.UI`).
         """
         self.schema = loadSchema('mide_config_ui.xml')
 
@@ -90,10 +99,16 @@ class ConfigDialog(SC.SizedDialog):
         self.saveOnOk: bool = kwargs.pop('saveOnOk', True)
         self.useUtc: bool = kwargs.pop('useUtc', True)
         self.showAdvanced: bool = kwargs.pop('showAdvanced', False)
+        self.showWifi: bool = kwargs.pop('wifi', True)
         self.DEBUG: bool = kwargs.pop('debug', __DEBUG__)
         icon = kwargs.pop('icon', None)
 
         self.postConfigMessage = None
+
+        if not self.showWifi:
+            self.excludeIds = [0x18ff7f]
+        else:
+            self.excludeIds = []
 
         if self.DEBUG:
             # May be redundant when running standalone, but just in case:
@@ -161,7 +176,7 @@ class ConfigDialog(SC.SizedDialog):
 
         SC.SizedPanel(check_box_sizer, -1).SetSizerProps(proportion=1)  # Spacer
 
-        if self.device.hasWifi:
+        if self.device.hasWifi and self.showWifi:
             self.applyWifiChangesCheck = wx.CheckBox(check_box_sizer, -1, "Apply Wi-Fi changes on exit")
             self.applyWifiChangesCheck.SetSizerProps(halign='right', expand=True, border=(['top', 'bottom'], 8))
             # self.applyWifiChangesCheck.SetValue(True)
@@ -217,6 +232,9 @@ class ConfigDialog(SC.SizedDialog):
             raise endaq.device.ConfigError('No CONFIG.UI data for {}'.format(self.device))
 
         for el in rootEl:
+            if not self.showWifi and el.name == 'WiFiSelectionTab':
+                continue
+
             if el.name in base.TAB_TYPES:
                 tabType = base.TAB_TYPES[el.name]
                 tab = tabType(self.notebook, -1, element=el, root=self)
@@ -642,10 +660,13 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
                       style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
         return None
 
+    showWifi = not isinstance(dev.command, MQTTCommandInterface)
+
     try:
         with ConfigDialog(parent, device=dev, setTime=setTime,
                           useUtc=useUtc, saveOnOk=saveOnOk,
                           showAdvanced=showAdvanced,
+                          wifi=showWifi,
                           icon=icon, debug=debug) as dlg:
             dlg.ShowModal()
             result = dlg.configData
