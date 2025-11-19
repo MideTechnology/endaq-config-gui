@@ -1507,25 +1507,29 @@ def selectDevice(title: str = "Select Recorder",
         The dialog will (optionally) update automatically when devices are
         added or removed.
 
-        :param title: A title string for the dialog.
-        :param parent: The parent window, if any.
         :keyword filter: An optional function to exclude devices from the
             list. It should take a `Recorder` as an argument, and return a
             boolean.
-        :keyword autoUpdate: A number of milliseconds to delay between checks
-            for changes to attached recorders. 0 will never automatically
-            refresh. Default is 500 ms.
+        :keyword autoUpdate: A number of milliseconds to delay between
+            checks for changes to attached recorders. 0 will never
+            automatically refresh. Default is 500 ms.
+        :keyword scanInterval: The number of milliseconds between
+            scans for new devices. Default is 4000 ms.
         :keyword showWarnings: If `False`, battery age and calibration
             expiration warnings will not be shown for selected devices.
             Default is `True`.
+        :keyword showConnection: If `True`, the connection type icon
+            (USB, Wi-Fi, Bluetooth) will be shown on the left side of
+            each devices' row.
         :keyword showAdvanced: If `True`, show additional columns of
-            information (hardware/firmware version, etc.). Default is `False`.
+            information (hardware/firmware version, etc.). Default is
+            `False`.
         :keyword hideClock: If `True`, the "Set all clocks" button will be
             hidden. Default is `False`.
         :keyword hideRecord: If `True`, the "Start Recording" button will be
             hidden. Default is `False`.
-        :keyword okText: Alternate text to display on the OK/Configure button.
-            Defaults to `"Configure"`.
+        :keyword okText: Alternate text to display on the OK/Configure
+            button. Defaults to `"Configure"`.
         :keyword okHelp: Alternate tooltip for the OK/Configure button.
             Defaults to `"Configure the selected device"`.
         :keyword cancelText: Alternate text to display on the Cancel/Close
@@ -1535,16 +1539,27 @@ def selectDevice(title: str = "Select Recorder",
             `False` will show no icon.
         :keyword tooltips: If `True` (default), show list tooltips containing
             all important device infomation.
+        :keyword checks: If `True`, show checkboxes for each device.
+        :keyword allowDoubleClick: If `True`, double-clicking a list item
+            will be the same as selecting it and clicking OK. Defaults to
+            `False` if `checks` is `True`.
+        :keyword mustConfig: If `True`, the 'OK' button will only become
+            enabled if the device can be configured.
+        :keyword remote: If `True`, show the MQTT broker selection field.
+        :keyword remoteChecked: The initial state of the 'use remote'
+            checkbox, if `remote` is `True`. `True` by default.
+        :keyword broker: The name of the default, initially selected broker.
+            `None` will select the first found.
+        :keyword connector: An existing `endaq.device.mqtt.MQTTConnector`
+            instance, if one was already created.
+        :keyword showSave: If `True`, show the save path selector.
+        :keyword savePath: The default save path for streams.
         :return: The path of the selected device.
     """
     result = None
 
-    dlg = DeviceSelectionDialog(parent, -1, title, **kwargs)
+    with DeviceSelectionDialog(parent, -1, title, **kwargs) as dlg:
+        if dlg.ShowModal() == wx.ID_OK:
+            result = dlg.getSelected()
 
-    if dlg.ShowModal() == wx.ID_OK:
-        result = dlg.getSelected()
-
-    dlg.Destroy()
-    if isinstance(result, dict):
-        result = result.get('_PATH', None)
     return result
