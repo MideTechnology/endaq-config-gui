@@ -4,6 +4,7 @@ Device control buttons and column population/content formatting.
 import logging
 import os.path
 from time import time
+from typing import Union
 
 import wx
 from wx.lib.agw import ultimatelistctrl as ULC
@@ -15,6 +16,7 @@ from endaq.device.command_interfaces import SerialCommandInterface
 from . import battery_icons
 from .events import EvtConfig, EvtRecord, EvtStream, EvtLockDevice, EvtBlink
 from ..common import deviceString
+from .threads import isOnline
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -29,63 +31,62 @@ logger = logging.getLogger(__name__)
 #
 # ===========================================================================
 
-# Text colors for the Status column
+# Status display: (list column text, list text color, tooltip text).
+# `None` for color uses default. `None` for tooltip uses list column text.
+# Note that some codes are for display and may not be in `DeviceStatusCode` (e.g. 29).
 # If status >= 200, use status % 100.
-STATUS_COLORS = {
-    0: None,  # Idle
-    10: wx.BLUE,  # Recording
-    20: wx.Colour(0, 200, 0),  # Reset pending
-    30: wx.Colour(0, 200, 0),  # Start Pending
-    31: wx.BLUE,  # Stopping recording
-    40: wx.Colour(0, 200, 0),  # Triggering
-    50: wx.BLUE,  # Uploading
-    100: wx.Colour(100, 100, 100),  # Sleeping
-    101: wx.Colour(200, 200, 200),  # Waking
-    110: wx.Colour(200, 200, 200),  # Going offline
-    -10: wx.RED  # Error (default for all negative status codes)
-}
-
-# Status text
-# DeviceStatusCode seems to get cast to int, so enum names not available
-# If status >= 200, use status % 100.
-STATUS_TEXT = {
-    -110: "Disconnected",
-    -10: "Error",
-    0: "Ready",
-    1: "Ready",
-    10: "Recording",
-    20: "Resetting",
-    29: "Updating",  # Not a real code, replace if added or number reused
-    30: "Starting",
-    31: "Stopping",
-    40: "Triggering",
-    50: "Uploading",
-    60: "Streaming",
-    100: "Sleeping",
-    101: "Waking",
-    110: "Offline",
-}
-
-# Status text
-# Longer forms of some STATUS_TEXT, used where there's more space
-# TODO: Use this in tooltips!
-STATUS_TOOLTIP = {
-    0: "Ready",
-    29: "Updating Software",  # Not a real code, replace if added or number reused
-    30: "Starting Recording",
-    31: "Stopping Recording",
-    40: "Awaiting Trigger",
-    50: "Uploading to Cloud",
+STATUS_DISPLAY = {
+    -110: ("Disconnected",  wx.RED,                     None),
+    -10:  ("Error",         wx.RED,                     None),  # Also default for other errors
+    0:    ("Ready",         None,                       None),
+    1:    ("Ready",         None,                       None),
+    10:   ("Recording",     wx.BLUE,                    "Recording/Streaming"),
+    20:   ("Resetting",     wx.Colour(0, 200, 0),       None),
+    29:   ("Updating",      wx.Colour(0, 200, 0),       "Updating Software"),
+    30:   ("Starting",      wx.Colour(0, 200, 0),       "Starting Recording"),
+    31:   ("Stopping",      wx.BLUE,                    "Stopping Recording"),
+    40:   ("Triggering",    wx.Colour(0, 200, 0),       "Awaiting Trigger"),
+    50:   ("Uploading",     wx.BLUE,                    "Uploading to Cloud"),
+    60:   ("Streaming",     wx.BLUE,                    "Streaming Data"),
+    100:  ("Sleeping",      wx.Colour(100, 100, 100),   None),
+    101:  ("Waking",        wx.Colour(200, 200, 200),   None),
+    110:  ("Offline",       wx.Colour(200, 200, 200),   None),
 }
 
 
-def getStatusTooltip(status: DeviceStatusCode):
-    displayCode = status if status in STATUS_TEXT else (status // 10) * 10
-    if displayCode in STATUS_TOOLTIP:
-        return STATUS_TOOLTIP[displayCode]
-    elif displayCode in STATUS_TEXT:
-        return STATUS_TEXT[displayCode]
-    return f'DeviceStatusCode {status}'
+def getStatusDisplay(status: Union[DeviceStatusCode, int]) -> tuple[str, wx.Colour, str]:
+    """ Get the 'status' list column contents/color and tooltip text. Unknown
+        and special status codes are handled appropriately.
+        
+        :param status: Device status, as `DeviceStatusCode` or integer.
+        :returns: Tuple of (column text, column text color, tooltip text).
+            Color `None` means use efault.
+    """
+    if status in STATUS_DISPLAY:
+        text, color, tooltip = STATUS_DISPLAY[status]
+        return text, color, tooltip or text
+
+    origStatus = status
+    suffix = tipSuffix = ''
+
+    if status >= 200:
+        if status < 400:
+            tipSuffix = ' (checking Wi-Fi periodically)'
+        else:
+            tipSuffix = ' (offline)'
+        suffix = '*'
+        status = status % 100
+
+    if status not in STATUS_DISPLAY:
+        status = -10 if status < 0 else (status // 10) % 10
+
+    text, color, tooltip = STATUS_DISPLAY.get(status, (None, None, None))
+    if text is None:
+        text, tooltip = '', f'\u00ABDeviceStatusCode {origStatus}\u00BB'
+    else:
+        text, tooltip = f'{text}{suffix}', f'{tooltip or text}{tipSuffix}'
+
+    return text, color, tooltip
 
 
 # ===========================================================================
@@ -273,19 +274,19 @@ class NewControlButtons(wx.Panel):
     #
     # =======================================================================
 
-    def OnRecordButton(self, evt):
+    def OnRecordButton(self, _evt):
         """ Handle Start Recording button press.
         """
         self._postEvent(EvtRecord(device=self.device, stop=False))
 
 
-    def OnStopButton(self, evt):
+    def OnStopButton(self, _evt):
         """ Handle Stop Recording button press.
         """
         self._postEvent(EvtRecord(device=self.device, stop=True))
 
 
-    def OnConfigButton(self, evt):
+    def OnConfigButton(self, _evt):
         """ Handle Configure button press.
         """
         self._postEvent(EvtConfig(device=self.device))
@@ -336,6 +337,7 @@ class ListContextMenu(wx.Menu):
         NewControlButtons._loadImages()
         icons = NewControlButtons.ICONS
 
+        available = isOnline(device)
         devstr = deviceString(self.device)
         config = self._addMI(f"Configure {devstr}...", self.OnConfig, icons[0][0])
         startRec = self._addMI(f"Start Recording", self.OnStartRecording, icons[1][0])
@@ -355,15 +357,15 @@ class ListContextMenu(wx.Menu):
                                                         DeviceStatusCode.TRIGGERING_PERIODIC,
                                                         DeviceStatusCode.STREAMING)
 
-        config.Enable(not anothers)
-        startRec.Enable(self.device.command.canRecord and not anothers and not isRecording)
-        startStream.Enable(self.device.command.canStream and not anothers and not isRecording)
-        stopRec.Enable(not anothers and isRecording)
-        blink.Enable(isinstance(self.device.command, SerialCommandInterface))
+        config.Enable(available and not anothers)
+        startRec.Enable(available and self.device.command.canRecord and not anothers and not isRecording)
+        startStream.Enable(available and self.device.command.canStream and not anothers and not isRecording)
+        stopRec.Enable(available and not anothers and isRecording)
+        blink.Enable(available and isinstance(self.device.command, SerialCommandInterface))
 
         self.clearLock = locked
         self.forceLock = anothers and wx.GetKeyState(wx.WXK_CONTROL)
-        lock.Enable(not locked or mine or self.forceLock)
+        lock.Enable(available and not locked or mine or self.forceLock)
 
         if locked:
             lock.SetBitmap(icons[5][0])
@@ -379,25 +381,25 @@ class ListContextMenu(wx.Menu):
         wx.PostEvent(self.root, event)
 
 
-    def OnStartRecording(self, evt):
+    def OnStartRecording(self, _evt):
         """ Handle Start Recording menu item.
         """
         self._postEvent(EvtRecord(device=self.device, stop=False))
 
 
-    def OnStartStreaming(self, evt):
+    def OnStartStreaming(self, _evt):
         """ Handle Start Recording menu item.
         """
         self._postEvent(EvtStream(device=self.device))
 
 
-    def OnStopRecording(self, evt):
+    def OnStopRecording(self, _evt):
         """ Handle Stop Recording menu item.
         """
         self._postEvent(EvtRecord(device=self.device, stop=True))
 
 
-    def OnConfig(self, evt):
+    def OnConfig(self, _evt):
         """ Handle Configure menu item.
         """
         self._postEvent(EvtConfig(device=self.device))
@@ -411,7 +413,7 @@ class ListContextMenu(wx.Menu):
                                       force=self.forceLock))
 
 
-    def OnBlink(self, evt):
+    def OnBlink(self, _evt):
         """ Handle Blink menu item.
         """
         self._postEvent(EvtBlink(device=self.device))
@@ -477,10 +479,10 @@ def populateBatteryColumn(dev: Recorder,
         :param root: The parent window/dialog.
         :return: A string for use in column sorting.
     """
-    if column is None:
+    if column is None or not isOnline(dev):
         return ''
 
-    batIcon, batDesc = 0, ''
+    batIcon, batDesc = 0, 'Battery state not reported'
 
     try:
         batStat = dev.command._battery[1]
@@ -516,6 +518,8 @@ def populateStatusColumn(dev: Recorder,
         code, msg = DeviceStatusCode.IDLE, ''
 
     if dev.hasCommandInterface and 'MQTT' not in str(dev.command) and not dev.command.available:
+        # Non-MQTT devices only report state when queried, and do not
+        # report as many states. Base status on the last command sent.
         t, cmd = dev.command.lastCommand
         cmd = (cmd or {}).get('EBMLCommand', {})
         if cmd and t < time() + 45:
@@ -536,27 +540,14 @@ def populateStatusColumn(dev: Recorder,
 
     if code == DeviceStatusCode.STREAMING:
         # Only show a device as 'streaming' if the stream is getting saved.
-        try:
-            # `streaming()` still experimental and not in other interfaces.
-            # TODO: Take this out of `try` once `streaming()` in base CommandInterface
-            if not dev.command.streaming():
-                code = DeviceStatusCode.RECORDING
-        except AttributeError:
-            pass
+        if not dev.command.streaming():
+            code = DeviceStatusCode.RECORDING
 
-    # Find specific color, or round to lowest multiple of 10
-    displayCode = code if code in STATUS_COLORS else (code // 10) * 10
-    color = STATUS_COLORS.get(displayCode, None)
-    text = STATUS_TEXT.get(displayCode, "")
-
-    if code < 0:
-        color = color or STATUS_COLORS.get(-10)
-        text = text or STATUS_TEXT.get(-10)
-
-    root.list.SetStringItem(index, column, text)
-
+    text, color, _tooltip = getStatusDisplay(code)
     if not color:
         color = root.list.GetTextColour()
+
+    root.list.SetStringItem(index, column, text)
 
     font = root.list.GetFont()
     item = root.list.GetItem(index, column)

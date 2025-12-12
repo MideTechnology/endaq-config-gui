@@ -19,7 +19,7 @@ from endaq.device.mqtt.discovery import findBrokers
 from endaq.device.util import getMyIP
 
 from .events import EvtBrokerUpdate
-from .controls import getStatusTooltip
+from .controls import getStatusDisplay
 
 logger = logging.getLogger(__name__)
 
@@ -202,7 +202,7 @@ class DeviceToolTip(wx.Frame):
                 text = f"{self.device.productName} ({self.device.serial})\n"
             if self.device.command.status[0]:
                 stime, scode, smsg = self.device.command.status
-                stext = getStatusTooltip(scode)
+                stext = getStatusDisplay(scode)[-1]
                 stime = self.device._lastContact if self.device.isRemote else stime
                 if smsg:
                     text += f'Status: {stext}: {smsg} (updated {prettyTimeDiff(stime)} ago)\n'

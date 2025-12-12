@@ -608,8 +608,9 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
                       debug: bool = __DEBUG__) -> Union[tuple, None]:
     """ Create the configuration dialog for a recording device.
 
-        :param path: The path to the data recorder (e.g. a mount point under
-            *NIX or a drive letter under Windows)
+        :param path: The `Recorder` instance of the device to configure,
+            or the path to the data recorder (e.g. a mount point under
+            *NIX or a drive letter under Windows) if mounted as a drive.
         :param setTime: If `True`, the checkbox to set the device's clock
             on save will be checked by default.
         :param useUtc: If `True`, the 'in UTC' checkbox for wake times will
@@ -649,20 +650,26 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
                       style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
         return None
 
-    if not dev.config.getConfigUI():
-        if exceptions:
-            raise endaq.device.DeviceError("The device appears to have corrupted configuration UI data.", dev)
-
-        wx.MessageBox("Could not configure recorder\n\n"
-                      "Valid configuration UI data could not be retrieved for the device.",
-                      "Configuration Error",
-                      parent=parent,
-                      style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
-        return None
-
-    showWifi = not isinstance(dev.command, MQTTCommandInterface)
+    isWifi = isinstance(dev.command, MQTTCommandInterface)
 
     try:
+        if isWifi:
+            logger.debug("Setting LockID")
+            dev.command.setLockID()
+
+        if not dev.config.getConfigUI():
+            if exceptions:
+                raise endaq.device.DeviceError("The device appears to have corrupted configuration UI data.", dev)
+
+            wx.MessageBox("Could not configure recorder\n\n"
+                          "Valid configuration UI data could not be retrieved for the device.",
+                          "Configuration Error",
+                          parent=parent,
+                          style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
+            return None
+
+        showWifi = not isWifi
+
         with ConfigDialog(parent, device=dev, setTime=setTime,
                           useUtc=useUtc, saveOnOk=saveOnOk,
                           showAdvanced=showAdvanced,
@@ -684,6 +691,11 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
                       parent=parent,
                       style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
         return None
+
+    finally:
+        if isWifi:
+            logger.debug("Clearing LockID")
+            dev.command.clearLockID()
 
     if result is None:
         return None

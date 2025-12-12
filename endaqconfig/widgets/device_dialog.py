@@ -21,17 +21,18 @@ import wx.lib.filebrowsebutton as FBB
 from endaq.device import (Recorder, RECORDERS, UnsupportedFeature,
                           CommandError, DeviceError, deviceChanged)
 from endaq.device.base import os_specific
-from endaq.device.response_codes import DeviceStatusCode
+# from endaq.device.response_codes import DeviceStatusCode
 from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface, MQTTConnector
 
 from . import battery_icons
 from . import icons
 from .controls import (_attribFormatter, populateStatusColumn, populateButtonColumn,
                        populateBatteryColumn, NewControlButtons, ListContextMenu,
-                       STATUS_COLORS)
+                       STATUS_DISPLAY)
 from .events import (EvtRecord, EVT_RECORD, EVT_BROKER_UPDATE,
                      EVT_STREAM, EVT_CONFIG, EVT_LOCK_DEVICE, EVT_BLINK)
-from .threads import DeviceScanThread, DeviceCommandThread, getDeviceStatus
+from .threads import (DeviceScanThread, DeviceCommandThread, getDeviceStatus,
+                      isOnline, isSleeping, isGateway)
 from .shared import DeviceToolTip, BrokerField
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ CAL_WARN_DAYS = datetime.timedelta(days=120)
 DEV_WARN_DAYS = datetime.timedelta(days=182)
 
 # XXX: REMOVE
-from .debug_lock import DebugRLock
+# from .debug_lock import DebugRLock
 
 
 # ===========================================================================
@@ -190,6 +191,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.connector: MQTTConnector = kwargs.pop('connector', None)
 
         self.ownConnector = self.connector is not None
+        self.oldUpdateCallback = None
 
         defaultBroker: Optional[str] = kwargs.pop('broker', None)
         okText = kwargs.pop('okText', "Configure")
@@ -226,8 +228,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.recorderTimeouts: Dict[Recorder, float] = {}  # Time to remove a recorder from `recorderStatus` if not in `getDevices()`
         self.recordersByIndex: Dict[int, Recorder] = {}  # `Recorder` instances keyed by list index.
         self.indicesByRecorder: Dict[Recorder, int] = {}  # List index keyed by `Recorder`
-        # self.updatingRecorders = threading.RLock()  # To avoid simultaneous dict changes  # XXX: RESTORE
-        self.updatingRecorders = DebugRLock('updatingRecorders')  # XXX: REMOVE & RESTORE PREV. LINE
+
+        self.updatingRecorders = threading.RLock()  # To avoid simultaneous dict changes
+        # self.updatingRecorders = DebugRLock('updatingRecorders')  # XXX: REMOVE & RESTORE PREV. LINE
 
         self.checkedRecorders: set[Recorder] = set()  # Checked items/recorders (to keep checks after list updates)
 
@@ -444,6 +447,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.list.AssignImageList(self.loadIcons(), wx.IMAGE_LIST_SMALL)
         self.list.SetSizerProps(expand=True, proportion=1)
         self.sleepingListFont = self.list.GetFont().Italic()
+        self.boldListFont = self.list.GetFont().Bold()
 
         self.Bind(wx.EVT_LIST_ITEM_SELECTED, self.OnItemSelected, self.list)
         self.Bind(wx.EVT_LIST_ITEM_DESELECTED, self.OnItemDeselected, self.list)
@@ -662,6 +666,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             for idx, dev in enumerate(self.recorders):
                 path = dev.path or ''
                 index = self.list.InsertImageStringItem(idx, path, [0], int(self.checks))
+                self.list.EnableItem(index, enable=isOnline(dev))
 
                 # update dict of checked recorders with new list indices
                 if dev in checked:
@@ -710,7 +715,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """ Update one device (row) in the list.
 
             :param dev: The device being updated.
-            :param enabled:
+            :param enabled: Use `False` to force a device to appear disabled.
         """
 
         if dev not in self.indicesByRecorder:
@@ -721,27 +726,18 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         if self.showWarnings:
             self.setItemIcon(index, dev)
 
-        try:
-            status = self.recorderStatus[dev][1][0]
-        except (KeyError, IndexError) as err:
-            logger.debug(f'recorder status error: {err!r}')
-            status = 0
+        # try:
+        #     status = self.recorderStatus[dev][1][0]
+        # except (KeyError, IndexError) as err:
+        #     logger.debug(f'recorder status error: {err!r}')
+        #     status = 0
 
         lockId = dev.command.lockId[1]
         locked = lockId and any(lockId)
         mine = lockId == dev.command.hostId
         anothers = locked and not mine
-        enabled = (enabled and status not in (DeviceStatusCode.RESET_PENDING,
-                                              DeviceStatusCode.START_PENDING,
-                                              DeviceStatusCode.STOP_PENDING,
-                                              DeviceStatusCode.UPLOADING,
-                                              DeviceStatusCode.OFFLINE,
-                                              DeviceStatusCode.RECORDING_OFFLINE,
-                                              DeviceStatusCode.TRIGGING_OFFLINE)
-                   and not anothers)
-        sleeping = status in (DeviceStatusCode.SLEEPING,
-                              DeviceStatusCode.RECORDING_PERIODIC,
-                              DeviceStatusCode.TRIGGERING_PERIODIC)
+        enabled = (enabled and isOnline(dev) and not anothers)
+        sleeping = isSleeping(dev)
 
         # enable or disable the row
         # excludes button panel - do that explicitly
@@ -764,8 +760,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if sleeping:
                 # Sleeping/periodically online devices not disabled, but
                 # drawn in gray as if they were (so checkbox still accessible)
-                self.list.SetItemTextColour(index, STATUS_COLORS[100])
+                self.list.SetItemTextColour(index, STATUS_DISPLAY[100][1])
                 self.list.SetItemFont(index, self.sleepingListFont)
+            elif isGateway(dev):
+                # DCB/HDS Gateway device; highlight it.
+                self.list.SetItemFont(index, self.boldListFont)
             self.itemDataMap[index][i] = val or ''
 
         checked = self.list.GetCheckedItemCount()
@@ -787,7 +786,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             return
 
         try:
-            logger.debug('starting updateList')
             self.updatingDisplay.set()
             # logger.debug('Updating display')
             for dev in self.recorders:
@@ -1003,7 +1001,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnUpdateTimerTick(self, _evt: Optional[wx.TimerEvent] = None):
         """ Handle the device-scanning timer ticking.
         """
-        logger.debug('>>> entering updateTimer tick handler')
+        # logger.debug('>>> entering updateTimer tick handler')
         now = time()
 
         drivesChanged = deviceChanged(recordersOnly=False)  # XXX: remove this?
@@ -1041,10 +1039,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         if self.updateCount == 0:
             # First update; resize to fit list contents
             logger.debug('first update, fitting list to width')
+            # noinspection PyUnresolvedReferences
             self.SetSize((self.listWidth + (self.GetDialogBorder() * 4), -1))
 
         self.updateCount += 1
-        logger.debug('<<< exiting updateTimer tick handler')
+        # logger.debug('<<< exiting updateTimer tick handler')
 
 
     def OnColClick(self, evt):
@@ -1185,11 +1184,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.startUpdater()
 
         else:
+            if self.connector:
+                self.connector.updateCallback = None
             self.stopUpdater()
             if self.tooltipFrame:
                 self.tooltipFrame.timer.Stop()
                 self.tooltipFrame.Hide()
-            # if self.connector:
+            # if self.ownConnector:
             #     self.connector.disconnect()
 
         evt.Skip()

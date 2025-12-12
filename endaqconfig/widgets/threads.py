@@ -13,6 +13,9 @@ from endaq.device.command_interfaces import SerialCommandInterface
 from endaq.device.response_codes import DeviceStatusCode
 
 import logging
+
+# from paho.mqtt.reasoncodes import ReasonCode
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -20,8 +23,7 @@ if TYPE_CHECKING:
     from .device_dialog import DeviceSelectionDialog
 
 
-# XXX: REMOVE
-from .debug_lock import DebugRLock
+# from .debug_lock import DebugRLock
 
 
 # ===========================================================================
@@ -53,10 +55,11 @@ class DeviceScanThread(threading.Thread):
         self.paused = threading.Event()  # Set to pause the scanning
         self.stop = threading.Event()  # Set to kill the thread
         self.mqttUpdated = threading.Event()  # Set when the set of MQTT devices changes
-        # self.updating = threading.RLock()  # XXX: RESTORE
-        self.updating = DebugRLock("DeviceScanThread")  # XXX: REMOVE & RESTORE PREV. LINE
         self.updateThreads: Dict[Recorder, "DeviceCommandThread"] = {}
         self.updateCancelled = threading.Event()
+
+        self.updating = threading.RLock()
+        # self.updating = DebugRLock("DeviceScanThread")
 
         self.lastScan: float = 0.0
         self.lastMqttGet: float = 0.0  # last time parent.connector.getDevices() called
@@ -69,7 +72,7 @@ class DeviceScanThread(threading.Thread):
                          daemon=True)
 
         self.mqttUpdated.set()
-        logger.debug(f'Created {self.name}')
+        # logger.debug(f'Created {self.name}')
 
 
     def onUpdate(self, update: dict):
@@ -121,7 +124,9 @@ class DeviceScanThread(threading.Thread):
             logger.debug('Collecting MQTT devices...')
             try:
                 self.parent.connector.exclude = {d.serialInt for d in localdevs}
-                mqttDevices = set(self.parent.connector.getDevices(offline=True, callback=self.stopped))
+                mqttDevices = set(self.parent.connector.getDevices(offline=True,
+                                                                   managerTimeout=0,
+                                                                   callback=self.stopped))
                 with self.updating:
                     self.mqttDevices = mqttDevices
                     self.lastMqttGet = now
@@ -148,9 +153,16 @@ class DeviceScanThread(threading.Thread):
 
         with self.updating:
             logger.debug('Starting updateDeviceStatus threads')
+            # XXX: Skip update for disconnected or timed out devices!
             for dev in self.devices:
+                if not isOnline(dev):
+                    continue
+                elif isSleeping(dev):
+                    continue
+
                 if dev not in self.updateThreads:
                     currentThreads[dev] = DeviceCommandThread(dev, updateDeviceStatus, dev, callback=self.stopped)
+
             self.updateThreads = currentThreads
 
 
@@ -308,3 +320,47 @@ def getDeviceStatus(device: Recorder) \
         bat = tuple(bat.values())
     return (bat, cmd.status[1:], device.path, cmd.lockId[1],
             device.command.available, bool(device._calibration))
+
+
+# XXX: Not sure this is the right place for these functions
+def isOnline(device: Recorder) -> bool:
+    """ Is the device in an 'online' state? Note that local USB devices are
+        inherently online.
+    """
+    if device.isVirtual:
+        return False
+    elif not device.isRemote:
+        return True
+
+    # TODO: Also exclude timed out devices?
+    status = device.command.status[1]
+    if status is not None and 300 <= status < 500:
+        # Codes 400-499 are 'offline' variants of positive codes 0-99
+        return False
+    return status not in (DeviceStatusCode.ERR_DISCONNECTED,
+                          DeviceStatusCode.OFFLINE,
+                          DeviceStatusCode.RESET_PENDING,
+                          DeviceStatusCode.START_PENDING,
+                          DeviceStatusCode.STOP_PENDING,
+                          DeviceStatusCode.UPLOADING,
+                          None)
+
+
+def isSleeping(device: Recorder) -> bool:
+    """ Is the device in a 'sleeping' state?
+    """
+    status = device.command.status[1]
+    if status is not None and 200 <= status < 400:
+        # Codes 300-399 are 'periodic' variants of positive codes 0-99
+        return True
+    return status in (DeviceStatusCode.SLEEPING,
+                      DeviceStatusCode.WAKING)
+
+
+def isGateway(device: Recorder) -> bool:
+    """ Is the device a HDS Gateway box?
+    """
+    # Gateway-ness determined by bits in the "recorder's" `RecorderTypeUID`.
+    # See its use in `endaq.device.mqtt.manager.MQTTDeviceManager`.
+    devtype = device.getInfo('RecorderTypeUID', 0)
+    return bool(devtype & 0b11100000000000000000000000000000)
