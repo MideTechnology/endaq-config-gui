@@ -556,6 +556,10 @@ class ConfigDialog(SC.SizedDialog):
     def OnCancel(self, evt: wx.Event):
         """ Handle dialog cancel, prompting the user to save any changes.
         """
+        if wx.GetKeyState(wx.WXK_CONTROL) and wx.GetKeyState(wx.WXK_SHIFT):
+            evt.Skip()
+            return
+
         if self.configChanged():
             q = self.showError("Save configuration changes before exiting?\n\n"
                                '"No" will discard changes.',
