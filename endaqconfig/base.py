@@ -384,6 +384,20 @@ class ConfigBase(object):
             return self.label
 
 
+    def parseElementAttribute(self, el):
+        key = value = None
+        for child in el:
+            if child.name == 'AttributeName':
+                key = child.value
+            elif child.name.endswith('Attribute'):
+                value = child.value
+        if key is not None and value is not None:
+            logger.debug(f'Read attribute in {self.element}: {key=!r}, {value=!r}')
+            self.elementAttributes[key] = value
+        else:
+            logger.error(f'Bad attribute in {self.element}: {key=!r}, {value=!r}')
+
+
     def __init__(self, element, root):
         """ Constructor. Instantiates a `ConfigBase` and parses parameters out
             of the supplied EBML element.
@@ -404,6 +418,8 @@ class ConfigBase(object):
 
         self.valueType = self.DEFAULT_TYPE
         self.exclude = []
+
+        self.elementAttributes = {}
 
         for el in self.element.value:
             if el.name == "IsAdvancedFeature":
@@ -426,6 +442,9 @@ class ConfigBase(object):
             if el.name in args:
                 # Known element name (verbatim): set attribute
                 setattr(self, args[el.name], el.value)
+
+            elif el.name == 'Attribute':
+                self.parseElementAttribute(el)
             else:
                 # Match wildcards and set attribute
                 for k, v in args.items():

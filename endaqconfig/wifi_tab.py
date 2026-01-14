@@ -29,9 +29,11 @@ AUTH_TYPES = ("None", "WPA", "WPA2", "Unknown")
 DEFAULT_AUTH = 1
 
 CONNECTION_STATUS_TO_STR = {
-    0: "",
-    1: "Trying to connect",
-    2: "Connected",
+    0x00: "",
+    0x01: "Trying to connect to {SSID}",
+    0x02: "Connected to {SSID}",
+    0x10: "In AP mode as {SSID}",
+    0x30: "In AP+4G mode as {SSID}",
 }
 
 # ===============================================================================
@@ -298,17 +300,71 @@ class WiFiSelectionTab(Tab):
         """ Build the user interface, populating the Tab.
             Separated from `__init__()` for the sake of subclassing.
         """
+        self.showAPMode = (self.elementAttributes.get('AP', False)
+                           or self.elementAttributes.get('AP4G', False))
+
         self.scanThread = None
-
-        sizer = wx.BoxSizer(wx.VERTICAL)
-
         self.loadImages()
 
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        self.SetSizer(sizer)
+
+        mode = 'station'
+        ssid = apn = ''
+
+        if self.showAPMode:
+            try:
+                result = self.device.command.queryWifi(timeout=5)
+                if result.get('WiFiConnectionStatus', 0) & 0x10:
+                    mode = 'ap'
+                    ssid = result.get('SSID', '')
+                    apn = result.get('APN', '')
+            except (DeviceError, TimeoutError) as err:
+                logger.error(f'Initial QueryWiFi failed: {err!r}')
+
+            self.apModeCheck = wx.RadioButton(self, -1, "Run Gateway as Access Point")
+            boldfont = self.apModeCheck.GetFont().Bold()
+            self.apModeCheck.SetFont(boldfont)
+
+            self.apPanel = self.addAPMode(self)
+            sizer.Add(self.apModeCheck, 0, wx.EXPAND | wx.ALL, 4)
+            sizer.Add(self.apPanel, 0, wx.EXPAND | wx.WEST, 12)
+            self.ApNameField.SetValue(ssid)
+            self.Ap4gNameField.SetValue(apn)
+
+            sizer.AddSpacer(24)
+            self.stationModeCheck = wx.RadioButton(self, -1, "Connect to Wi-Fi")
+            self.stationModeCheck.SetFont(boldfont)
+
+            self.stationPanel = self.addWifiScan(self)
+            sizer.Add(self.stationModeCheck, 0, wx.EXPAND | wx.ALL, 4)
+            sizer.Add(self.stationPanel, 0, wx.EXPAND | wx.WEST, 12)
+
+            self.apModeCheck.Bind(wx.EVT_RADIOBUTTON, self.OnWiFiModeChange)
+            self.stationModeCheck.Bind(wx.EVT_RADIOBUTTON, self.OnWiFiModeChange)
+
+        else:
+            self.stationPanel = self.addWifiScan(self)
+            sizer.Add(self.stationPanel, 1, wx.EXPAND)
+
+        self.setMode(mode)
+        self.getInfo()
+
+
+    def addWifiScan(self, parent):
+        """ Add the subpanel for selecting an AP.
+
+        :param parent: Parent panel.
+        :return: The Wi-Fi scan panel.
+        """
+        listPanel = wx.Panel(parent, name="WifiScanPanel")
+
         # Set up the AP list
-        self.list = self.WifiListCtrl(self, -1,
+        self.list = self.WifiListCtrl(listPanel, -1,
                                       style=(wx.LC_REPORT | wx.BORDER_SUNKEN | wx.LC_SORT_ASCENDING |
                                              wx.LC_VRULES | wx.LC_HRULES | wx.LC_SINGLE_SEL))
         # self.list.EnableCheckBoxes()
+        sizer = wx.BoxSizer(wx.VERTICAL)
         sizer.Add(self.list, 1, wx.EXPAND | wx.ALL, 8)
 
         self.list.setResizeColumn(0)
@@ -328,26 +384,23 @@ class WiFiSelectionTab(Tab):
         self.boldFont = self.listFont.Bold()
         self.italicFont = self.listFont.Italic()
         self.struckFont = self.listFont.Strikethrough()
-        #         self.notFoundColor = wx.Colour(127,127,127)
+        # self.notFoundColor = wx.Colour(127,127,127)
 
         # Rescan button (and footnote text)
         scansizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.addButton = wx.Button(self, -1, "Add...")
-        self.rescan = wx.Button(self, -1, "Rescan")
+        self.addButton = wx.Button(listPanel, -1, "Add...")
+        self.rescan = wx.Button(listPanel, -1, "Rescan")
 
         scansizer.Add(self.addButton, 0, wx.EAST | wx.SHAPED, 8)
-
         scansizer.AddStretchSpacer()
-
         scansizer.Add(self.rescan, 0, wx.EAST | wx.SHAPED, 8)
-
         sizer.Add(scansizer, 0, wx.EXPAND | wx.EAST)
 
         # Password field components
         pwsizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.pwCheck = wx.CheckBox(self, -1, "Change Password to Selected AP:")
+        self.pwCheck = wx.CheckBox(listPanel, -1, "Change Password to Selected AP:")
         self.pwCheck.Enable(False)
-        self.pwField = wx.TextCtrl(self, -1, style=wx.TE_PASSWORD | wx.TE_PROCESS_ENTER)
+        self.pwField = wx.TextCtrl(listPanel, -1, style=wx.TE_PASSWORD | wx.TE_PROCESS_ENTER, name="pwField")
         self.pwField.Enable(False)
 
         pwstyle = wx.RESERVE_SPACE_EVEN_IF_HIDDEN
@@ -356,11 +409,11 @@ class WiFiSelectionTab(Tab):
         sizer.Add(pwsizer, 0, wx.EXPAND | wx.ALL, 8)
 
         # For future use
-        self.forgetCheck = wx.CheckBox(self, -1, "Forget this AP on exit")
+        self.forgetCheck = wx.CheckBox(listPanel, -1, "Forget this AP on exit")
         sizer.Add(self.forgetCheck, 0, wx.EXPAND | wx.WEST | wx.SOUTH, 8)
 
-        self.currentConnectionLabel = wx.StaticText(self, -1, "")
-        self.applyButton = wx.Button(self, -1, "Apply Wi-Fi Changes")
+        self.currentConnectionLabel = wx.StaticText(listPanel, -1, "")
+        self.applyButton = wx.Button(listPanel, -1, "Apply Wi-Fi Changes")
 
         connection_and_apply_sizer = wx.BoxSizer(wx.HORIZONTAL)
         connection_and_apply_sizer.AddMany(
@@ -369,7 +422,7 @@ class WiFiSelectionTab(Tab):
 
         sizer.Add(connection_and_apply_sizer, 0, wx.EXPAND)
 
-        self.SetSizer(sizer)
+        listPanel.SetSizer(sizer)
 
         # For doing per-item tool tips in the list
         self.listToolTips = []
@@ -405,21 +458,107 @@ class WiFiSelectionTab(Tab):
         self.Bind(wx.EVT_CLOSE, self.OnClose)
         self.Bind(EVT_CLOSING_TEMP, self.OnClose)
 
-        self.getInfo()
+        return listPanel
+
+
+    def addAPMode(self, parent):
+        """ Add the subpanel for configuring a gateway as an access point.
+
+        :param parent: Parent panel.
+        :return: The AP configuration panel.
+        """
+        panel = wx.Panel(parent, -1, name="ApModePanel")
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        panel.SetSizer(sizer)
+
+        labelWidth = panel.GetTextExtent("Password: ")[0]
+
+        def labeledField(label, pw=False, name=wx.StaticTextNameStr):
+            style = (wx.TE_PASSWORD if pw else 0) | wx.TE_PROCESS_ENTER
+            rowsizer = wx.BoxSizer(wx.HORIZONTAL)
+            lbl = wx.StaticText(panel, -1, label, size=(labelWidth, -1), style=wx.ALIGN_CENTER_VERTICAL)
+            txt = wx.TextCtrl(panel, -1, style=style, name=name)
+            rowsizer.Add(lbl, 0, wx.EXPAND | wx.NORTH, 4)
+            rowsizer.Add(txt, 1, wx.EXPAND)
+            return  rowsizer, txt
+
+        row1sizer, self.ApNameField = labeledField("SSID:", name="ApNameField")
+        sizer.Add(row1sizer, 0, wx.EXPAND | wx.ALL, 4)
+        row2sizer, self.ApPwField = labeledField("Password:", pw=True, name="ApPwField")
+        sizer.Add(row2sizer, 0, wx.EXPAND | wx.ALL, 4)
+
+        sizer.AddSpacer(4)
+        self.ap4gCheck = wx.CheckBox(panel, -1, label="Connect to 4G wireless data")
+        sizer.Add(self.ap4gCheck, 0, wx.EXPAND | wx.ALL, 4)
+
+        row3sizer, self.Ap4gNameField = labeledField("APN:", name="Ap4gNameField")
+        sizer.Add(row3sizer, 0, wx.EXPAND | wx.WEST | wx.EAST, 12)
+        row4sizer, self.Ap4gPwField = labeledField("Password:", pw=True, name="Ap4gPwField")
+        sizer.AddSpacer(8)
+        sizer.Add(row4sizer, 0, wx.EXPAND | wx.WEST | wx.EAST, 12)
+
+        self.apApplyButton = wx.Button(panel, -1, label="Apply AP Changes")
+        apply_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        apply_sizer.AddStretchSpacer()
+        apply_sizer.Add(self.apApplyButton, 0, wx.SOUTH | wx.EAST, 8)
+        sizer.AddSpacer(8)
+        sizer.Add(apply_sizer, 0, wx.EXPAND)
+
+        self.apApplyButton.Bind(wx.EVT_BUTTON, self.OnAPApplyButton)
+
+        return panel
+
+
+    def setMode(self, mode):
+        if not self.showAPMode:
+            self.stationModeCheck.SetValue(True)
+            self.stationPanel.Enable(True)
+        elif mode == 'ap':
+            if self.scanThread:
+                self.scanThread.cancel.set()
+            self.apModeCheck.SetValue(True)
+            self.apPanel.Enable(True)
+            self.stationModeCheck.SetValue(False)
+            self.stationPanel.Enable(False)
+        else:
+            if not self.scanThread or not self.scanThread.is_alive():
+                self.scanThread = WiFiScanThread(self)
+                self.scanThread.start()
+            self.stationModeCheck.SetValue(True)
+            self.stationPanel.Enable(True)
+            self.apModeCheck.SetValue(False)
+            self.apPanel.Enable(False)
+
+
+    def OnWiFiModeChange(self, event):
+        """ Handle the Wi-Fi mode changing via radio buttons.
+        """
+        obj = event.GetEventObject()
+        if obj == self.apModeCheck:
+            self.setMode('ap')
+        else:
+            self.setMode('station')
+
+
+    def OnAPApplyButton(self, event):
+        ...
 
 
     def OnConnectionCheck(self, evt):
+        """ Handle an update of the Wi-Fi connection status.
+        """
         result = evt.result
-
-        text_to_display = CONNECTION_STATUS_TO_STR[result['WiFiConnectionStatus']]
+        status = result.get('WiFiConnectionStatus', 0)
+        text_to_display = CONNECTION_STATUS_TO_STR.get(status, '').format(**result)
         is_connected = result['WiFiConnectionStatus'] == 2
 
-        for j in range(self.list.GetItemCount()):
-            label = u'\u2713' if is_connected and self.list.GetItemText(j, col=0) == result['SSID'] else '-'
-
-            self.list.SetItem(j, column=2, label=label)
-
         self.currentConnectionLabel.SetLabel(text_to_display)  # I'm not sure if this is doing anything
+
+        if self.stationPanel.IsEnabled():
+            for j in range(self.list.GetItemCount()):
+                label = u'\u2713' if is_connected and self.list.GetItemText(j, col=0) == result['SSID'] else '-'
+
+                self.list.SetItem(j, column=2, label=label)
 
 
     def makeToolTip(self, ap):

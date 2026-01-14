@@ -11,5 +11,5 @@ Usage: `python -m ui_tester [--path <RECORDER PATH] <CONFIG.UI>`
 
     options:
         -h, --help            show this help message and exit
-        -p PATH, --path PATH  Path to a base fake recorder directory. Defaults to C:\Users\dstokes\workspace\endaq-config-gui\ui_tester\_W5-D40_STM32_FwRev3.1.8
+        -p PATH, --path PATH  Path to a base fake recorder directory. Defaults to ``endaq-config-gui/ui_tester/_W5-D40_STM32_FwRev3.1.8/``
 """
