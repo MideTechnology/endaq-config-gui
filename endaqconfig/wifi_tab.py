@@ -256,9 +256,6 @@ class WiFiSelectionTab(Tab):
     """
     COLUMNS = ("Wi-Fi Network", "Security", "Connected")
 
-    # 'Constant' value for the label, read from CONFIG_UI for 'normal' tabs
-    label = "Wi-Fi"
-
     # FUTURE: Once multiple saved passwords is a thing, this will be provided
     # in the CONFIG_UI data.
     storeMultiplePasswords = False
@@ -282,8 +279,13 @@ class WiFiSelectionTab(Tab):
         self.info = []
         self.parent = kwargs['root']
         self.device = kwargs['root'].device
+        self.mode = 'station'
+        self.ssid = self.apn = ''  # AP mode: the gateway's reported SSID and APN
+        self.apChanged = False
 
         super(WiFiSelectionTab, self).__init__(*args, **kwargs)
+        if not getattr(self, 'label'):
+            self.label = 'Wi-Fi'
 
         self.networkStatusThread = ContinousNetworkStatusChecker(self)
         self.networkStatusThread.start()
@@ -300,8 +302,8 @@ class WiFiSelectionTab(Tab):
         """ Build the user interface, populating the Tab.
             Separated from `__init__()` for the sake of subclassing.
         """
-        self.showAPMode = (self.elementAttributes.get('AP', False)
-                           or self.elementAttributes.get('AP4G', False))
+        self.showAPMode = self.elementAttributes.get('AP', False)
+        self.show4GMode = self.elementAttributes.get('4G', False)
 
         self.scanThread = None
         self.loadImages()
@@ -310,15 +312,14 @@ class WiFiSelectionTab(Tab):
         self.SetSizer(sizer)
 
         mode = 'station'
-        ssid = apn = ''
 
         if self.showAPMode:
             try:
                 result = self.device.command.queryWifi(timeout=5)
                 if result.get('WiFiConnectionStatus', 0) & 0x10:
                     mode = 'ap'
-                    ssid = result.get('SSID', '')
-                    apn = result.get('APN', '')
+                    self.ssid = result.get('SSID', '')
+                    self.apn = result.get('APN', '')
             except (DeviceError, TimeoutError) as err:
                 logger.error(f'Initial QueryWiFi failed: {err!r}')
 
@@ -329,8 +330,9 @@ class WiFiSelectionTab(Tab):
             self.apPanel = self.addAPMode(self)
             sizer.Add(self.apModeCheck, 0, wx.EXPAND | wx.ALL, 4)
             sizer.Add(self.apPanel, 0, wx.EXPAND | wx.WEST, 12)
-            self.ApNameField.SetValue(ssid)
-            self.Ap4gNameField.SetValue(apn)
+            # self.ApNameField.SetValue(self.ssid)
+            # self.Ap4gNameField.SetValue(self.apn)
+            # self.ap4gCheck.SetValue(bool(self.apn))
 
             sizer.AddSpacer(24)
             self.stationModeCheck = wx.RadioButton(self, -1, "Connect to Wi-Fi")
@@ -338,14 +340,30 @@ class WiFiSelectionTab(Tab):
 
             self.stationPanel = self.addWifiScan(self)
             sizer.Add(self.stationModeCheck, 0, wx.EXPAND | wx.ALL, 4)
-            sizer.Add(self.stationPanel, 0, wx.EXPAND | wx.WEST, 12)
+            sizer.Add(self.stationPanel, 1, wx.EXPAND | wx.WEST, 12)
+            sizer.AddSpacer(24)
 
             self.apModeCheck.Bind(wx.EVT_RADIOBUTTON, self.OnWiFiModeChange)
             self.stationModeCheck.Bind(wx.EVT_RADIOBUTTON, self.OnWiFiModeChange)
 
         else:
+            self.apModeCheck = None
+            self.stationModeCheck = None
+
             self.stationPanel = self.addWifiScan(self)
             sizer.Add(self.stationPanel, 1, wx.EXPAND)
+
+        self.currentConnectionLabel = wx.StaticText(self, -1, "")
+        self.applyButton = wx.Button(self, -1, "Apply Wi-Fi Changes")
+
+        connection_and_apply_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        connection_and_apply_sizer.AddMany(
+                ((self.currentConnectionLabel, 1, wx.EXPAND | wx.ALL, 8),
+                 (self.applyButton, 0, wx.SOUTH | wx.EAST, 8)))
+
+        sizer.Add(connection_and_apply_sizer, 0, wx.EXPAND)
+
+        self.applyButton.Bind(wx.EVT_BUTTON, self.OnApplyButton)
 
         self.setMode(mode)
         self.getInfo()
@@ -354,8 +372,10 @@ class WiFiSelectionTab(Tab):
     def addWifiScan(self, parent):
         """ Add the subpanel for selecting an AP.
 
-        :param parent: Parent panel.
-        :return: The Wi-Fi scan panel.
+            Note: It is expected for this to always be called (it sets variables, etc.)
+
+            :param parent: Parent panel.
+            :return: The Wi-Fi scan panel.
         """
         listPanel = wx.Panel(parent, name="WifiScanPanel")
 
@@ -412,16 +432,6 @@ class WiFiSelectionTab(Tab):
         self.forgetCheck = wx.CheckBox(listPanel, -1, "Forget this AP on exit")
         sizer.Add(self.forgetCheck, 0, wx.EXPAND | wx.WEST | wx.SOUTH, 8)
 
-        self.currentConnectionLabel = wx.StaticText(listPanel, -1, "")
-        self.applyButton = wx.Button(listPanel, -1, "Apply Wi-Fi Changes")
-
-        connection_and_apply_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        connection_and_apply_sizer.AddMany(
-                ((self.currentConnectionLabel, 1, wx.EXPAND | wx.ALL, 8),
-                 (self.applyButton, 0, wx.SOUTH | wx.EAST, 8)))
-
-        sizer.Add(connection_and_apply_sizer, 0, wx.EXPAND)
-
         listPanel.SetSizer(sizer)
 
         # For doing per-item tool tips in the list
@@ -443,7 +453,6 @@ class WiFiSelectionTab(Tab):
         self.pwField.Bind(wx.EVT_SET_FOCUS, self.OnPasswordFocus)
         self.pwField.Bind(wx.EVT_TEXT_ENTER, self.OnApplyButton)
         self.pwField.Bind(wx.EVT_TEXT, self.OnPasswordText)
-        self.applyButton.Bind(wx.EVT_BUTTON, self.OnApplyButton)
 
         # FUTURE: For use with multiple AP memory
         if self.booleanAuth:
@@ -463,9 +472,11 @@ class WiFiSelectionTab(Tab):
 
     def addAPMode(self, parent):
         """ Add the subpanel for configuring a gateway as an access point.
+            Note: This will not be called if the CONFIG.UI doesn't indicate
+            the device/gateway supports AP mode.
 
-        :param parent: Parent panel.
-        :return: The AP configuration panel.
+            :param parent: Parent panel.
+            :return: The AP configuration panel.
         """
         panel = wx.Panel(parent, -1, name="ApModePanel")
         sizer = wx.BoxSizer(wx.VERTICAL)
@@ -480,38 +491,47 @@ class WiFiSelectionTab(Tab):
             txt = wx.TextCtrl(panel, -1, style=style, name=name)
             rowsizer.Add(lbl, 0, wx.EXPAND | wx.NORTH, 4)
             rowsizer.Add(txt, 1, wx.EXPAND)
-            return  rowsizer, txt
+            return  rowsizer, lbl, txt
 
-        row1sizer, self.ApNameField = labeledField("SSID:", name="ApNameField")
+        row1sizer, _, self.ApNameField = labeledField("SSID:", name="ApNameField")
         sizer.Add(row1sizer, 0, wx.EXPAND | wx.ALL, 4)
-        row2sizer, self.ApPwField = labeledField("Password:", pw=True, name="ApPwField")
+        row2sizer, _, self.ApPwField = labeledField("Password:", pw=True, name="ApPwField")
         sizer.Add(row2sizer, 0, wx.EXPAND | wx.ALL, 4)
+
+        self.ApNameField.Bind(wx.EVT_TEXT, self.OnAPModeText)
+        self.ApPwField.Bind(wx.EVT_TEXT, self.OnAPModeText)
 
         sizer.AddSpacer(4)
         self.ap4gCheck = wx.CheckBox(panel, -1, label="Connect to 4G wireless data")
         sizer.Add(self.ap4gCheck, 0, wx.EXPAND | wx.ALL, 4)
 
-        row3sizer, self.Ap4gNameField = labeledField("APN:", name="Ap4gNameField")
+        row3sizer, ap4gNameLbl, self.Ap4gNameField = labeledField("APN:", name="Ap4gNameField")
         sizer.Add(row3sizer, 0, wx.EXPAND | wx.WEST | wx.EAST, 12)
-        row4sizer, self.Ap4gPwField = labeledField("Password:", pw=True, name="Ap4gPwField")
+        row4sizer, ap4gPwLabel, self.Ap4gPwField = labeledField("Password:", pw=True, name="Ap4gPwField")
         sizer.AddSpacer(8)
         sizer.Add(row4sizer, 0, wx.EXPAND | wx.WEST | wx.EAST, 12)
 
-        self.apApplyButton = wx.Button(panel, -1, label="Apply AP Changes")
-        apply_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        apply_sizer.AddStretchSpacer()
-        apply_sizer.Add(self.apApplyButton, 0, wx.SOUTH | wx.EAST, 8)
-        sizer.AddSpacer(8)
-        sizer.Add(apply_sizer, 0, wx.EXPAND)
+        self.Ap4gNameField.Bind(wx.EVT_TEXT, self.OnAPModeText)
+        self.Ap4gPwField.Bind(wx.EVT_TEXT, self.OnAPModeText)
 
-        self.apApplyButton.Bind(wx.EVT_BUTTON, self.OnAPApplyButton)
+        self.ApNameField.SetValue(self.ssid)
+        self.Ap4gNameField.SetValue(self.apn)
+        self.ap4gCheck.SetValue(bool(self.apn))
+
+        self.ap4gCheck.Show(self.show4GMode)
+        self.Ap4gNameField.Show(self.show4GMode)
+        self.Ap4gPwField.Show(self.show4GMode)
+        ap4gNameLbl.Show(self.show4GMode)
+        ap4gPwLabel.Show(self.show4GMode)
 
         return panel
 
 
     def setMode(self, mode):
+        self.mode = mode
         if not self.showAPMode:
-            self.stationModeCheck.SetValue(True)
+            if self.stationModeCheck:
+                self.stationModeCheck.SetValue(True)
             self.stationPanel.Enable(True)
         elif mode == 'ap':
             if self.scanThread:
@@ -530,6 +550,12 @@ class WiFiSelectionTab(Tab):
             self.apPanel.Enable(False)
 
 
+    def stationPanelEnable(self, enable=True):
+        self.stationPanel.Enable(enable)
+        for c in self.stationPanel.GetChildren():
+            c.Enable(enable)
+
+
     def OnWiFiModeChange(self, event):
         """ Handle the Wi-Fi mode changing via radio buttons.
         """
@@ -540,12 +566,9 @@ class WiFiSelectionTab(Tab):
             self.setMode('station')
 
 
-    def OnAPApplyButton(self, event):
-        ...
-
-
     def OnConnectionCheck(self, evt):
-        """ Handle an update of the Wi-Fi connection status.
+        """ Handle an update of the Wi-Fi connection status. Event posted by
+            the `ContinuousNetworkStatusCheck` thread.
         """
         result = evt.result
         status = result.get('WiFiConnectionStatus', 0)
@@ -557,8 +580,10 @@ class WiFiSelectionTab(Tab):
         if self.stationPanel.IsEnabled():
             for j in range(self.list.GetItemCount()):
                 label = u'\u2713' if is_connected and self.list.GetItemText(j, col=0) == result['SSID'] else '-'
-
                 self.list.SetItem(j, column=2, label=label)
+
+        if self.show4GMode:
+            self.ap4gCheck.SetValue(bool(status & 0x20))
 
 
     def makeToolTip(self, ap):
@@ -612,18 +637,20 @@ class WiFiSelectionTab(Tab):
         """ Get Wi-Fi information from the device. Starts the asynchronous
             device-reading thread.
         """
-        if self.scanThread and self.scanThread.is_alive():
-            return
+        if self.mode == 'station':
+            if self.scanThread and self.scanThread.is_alive():
+                return
 
-        self.list.Enable(False)
-        self.addButton.Enable(False)
-        self.pwCheck.Enable(False)
-        self.pwField.Enable(False)
-        self.forgetCheck.Enable(False)
-        self.rescan.SetLabelText("Scanning...")
-        self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
-        self.scanThread = WiFiScanThread(self)
-        self.scanThread.start()
+            self.list.Enable(False)
+            self.addButton.Enable(False)
+            self.pwCheck.Enable(False)
+            self.pwField.Enable(False)
+            self.forgetCheck.Enable(False)
+            self.rescan.SetLabelText("Scanning...")
+            self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
+
+            self.scanThread = WiFiScanThread(self)
+            self.scanThread.start()
 
 
     def populate(self):
@@ -709,20 +736,23 @@ class WiFiSelectionTab(Tab):
         """
         enable = False
 
-        # Check for changes of selected AP
-        if self.selected != self.firstSelected:
-            enable = True
-        elif self.info[self.firstSelected]['SSID'] in self.passwords:
-            enable = True
+        if self.mode == 'station':
+            # Check for changes of selected AP
+            # FUTURE: Do checks to other APs for multiple AP configuration
+            if self.selected != self.firstSelected:
+                enable = True
+            elif self.info[self.firstSelected]['SSID'] in self.passwords:
+                enable = True
 
-        # FUTURE: Do checks to other APs for multiple AP configuration
+        else:
+            enable = bool(self.apChanged
+                          or self.ApNameField.GetValue() != self.ssid
+                          or self.Ap4gNameField.GetValue() != self.apn
+                          or self.ApPwField.GetValue().strip()
+                          or self.Ap4gPwField.GetValue().strip())
+            self.apChanged = False
 
-        try:
-            self.applyButton.Enable(enable)
-        except RuntimeError:
-            # Dialog closed?
-            pass
-
+        self.applyButton.Enable(enable)
         return enable
 
 
@@ -731,8 +761,10 @@ class WiFiSelectionTab(Tab):
         """
         try:
             logger.debug('Shutting down Wi-Fi scan and status threads')
-            self.scanThread.cancel.set()
-            self.networkStatusThread.cancel.set()
+            if self.scanThread:
+                self.scanThread.cancel.set()
+            if self.networkStatusThread:
+                self.networkStatusThread.cancel.set()
             while ((self.scanThread and self.scanThread.is_alive()) or
                    (self.networkStatusThread and self.networkStatusThread.is_alive())):
                 pass
@@ -896,6 +928,13 @@ class WiFiSelectionTab(Tab):
         evt.Skip()
 
 
+    def OnAPModeText(self, evt):
+        """ Handle typing in one of the AP mode fields.
+        """
+        self.apChanged = True
+        self.updateApplyButton()
+
+
     def OnListMouseMotion(self, evt):
         """ Handle mouse movement, updating the tool tips, etc.
         """
@@ -964,6 +1003,12 @@ class WiFiSelectionTab(Tab):
     def save(self):
         """ Save Wi-Fi configuration data to the device.
         """
+        if self.mode == 'station':
+            return self.saveStationMode()
+        return self.saveAPMode()
+
+
+    def saveStationMode(self):
         data = []
 
         # `updateApplyButton()` also returns whether changes have been made.
@@ -988,16 +1033,38 @@ class WiFiSelectionTab(Tab):
 
         # FUTURE: Any SSIDs in self.deleted should be deleted here.
 
+        return self.setWifi(data)
+
+
+    def saveAPMode(self):
+        ...
+        return True
+
+
+    def setWifi(self, data):
+        """ Call `Recorder.command.setWifi()` command and handle any errors.
+        """
         try:
             self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
             self.applyButton.Enable(False)
             self.device.command.setWifi(data)
+        except TimeoutError:
+            wx.MessageBox(
+                    message="Timed out when attempting to set device Wi-Fi (communicating with device). Wi-Fi was not set.",
+                    caption="Wi-Fi Configuration Error",
+                    style=wx.OK,
+                    parent=self)
+            return False
         except IOError:
             logger.warning("An IOError occured while setting the Wi-Fi. "
                            "This is usually because the device was unplugged part of the way through")
-        except DeviceTimeout:
+        except DeviceError as E:
+            if len(E.args) > 1 and E.args[1]:
+                msg = f'\n{E.args[1]}'
+            else:
+                msg = ''
             wx.MessageBox(
-                    message="Timed out when attempting to set device Wi-Fi (communicating with device). Wi-Fi was not set.",
+                    message=f"An error occured while setting the Wi-Fi.{msg}\nWi-Fi was not set.",
                     caption="Wi-Fi Configuration Error",
                     style=wx.OK,
                     parent=self)

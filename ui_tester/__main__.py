@@ -11,8 +11,10 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--path', default=os.path.abspath(FAKE_RECORDER),
                         help='Path to a base fake recorder directory. '
                              f'Defaults to {os.path.abspath(FAKE_RECORDER)}')
+    parser.add_argument('-a', '--ap', action='store_true',
+                        help='Respond to queryWiFi() as if in AP mode.')
     args = parser.parse_args()
     configUi = None if args.configUi == 'default' else args.configUi
 
     print('To reload the CONFIG.UI, hold Ctrl+Shift and click Cancel.')
-    testConfigUi(configUi, path=args.path)
+    testConfigUi(configUi, path=args.path, ap=args.ap)
