@@ -23,10 +23,27 @@ from .controls import getStatusDisplay
 
 logger = logging.getLogger(__name__)
 
+
+#===============================================================================
+#
+#===============================================================================
+
+def getClipboardText():
+    """ Retrieve text from the clipboard.
+    """
+    if not wx.TheClipboard.IsOpened():
+        wx.TheClipboard.Open()
+
+    obj = wx.TextDataObject()
+    if wx.TheClipboard.GetData(obj):
+        return obj.GetText()
+
+    return ""
+
+
 #===============================================================================
 # Custom widgets
 #===============================================================================
-
 
 class DateTimeCtrl(wx.Panel):
     """ A dual date/time combination widget. Not sure why wxPython doesn't
@@ -116,17 +133,82 @@ class TimeValidator(wx.Validator):
     def OnChar(self, evt):
         key = evt.GetKeyCode()
 
-        if key < wx.WXK_SPACE or key == wx.WXK_DELETE or key > 255:
+        if key < wx.WXK_SPACE or key > 255 or key == wx.WXK_DELETE:
+            evt.Skip()
+
+        elif chr(key) in self.validCharacters:
+            evt.Skip()
+
+
+class TextValidator(wx.Validator):
+    """ Generic Validator for TextField and ASCIIField text widgets.
+    """
+
+    VALID_KEYS = (wx.WXK_LEFT, wx.WXK_UP, wx.WXK_RIGHT, wx.WXK_DOWN,
+                  wx.WXK_HOME, wx.WXK_END, wx.WXK_PAGEUP, wx.WXK_PAGEDOWN,
+                  wx.WXK_INSERT, wx.WXK_DELETE)
+
+
+    def __init__(self, validator, maxLen=None):
+        """ Instantiate a text field validator.
+
+            :keyword validator: A function that validates the string.
+        """
+        self.maxLen = maxLen
+        self.isValid = validator
+        wx.Validator.__init__(self)
+        self.Bind(wx.EVT_CHAR, self.OnChar)
+        self.Bind(wx.EVT_TEXT_PASTE, self.OnPaste)
+
+
+    def Clone(self):
+        """ Required in wx.PyValidator subclasses. """
+        return TextValidator(self.isValid, self.maxLen)
+
+
+    def TransferToWindow(self):
+        """ Required in wx.PyValidator subclasses. """
+        return True
+
+
+    def TransferFromWindow(self):
+        """ Required in wx.PyValidator subclasses. """
+        return True
+
+
+    def Validate(self, win):
+        txt = self.GetWindow().GetValue()
+        return self.isValid(txt)
+
+
+    def OnChar(self, evt):
+        """ Validate a character that has been typed.
+        """
+        key = evt.GetKeyCode()
+
+        if key < wx.WXK_SPACE or key in self.VALID_KEYS:
             evt.Skip()
             return
 
-        if chr(key) in self.validCharacters:
+        val = self.GetWindow().GetValue()
+        if self.isValid(chr(key)) and len(val) < self.maxLen:
             evt.Skip()
             return
+        elif not wx.Validator.IsSilent():
+            wx.Bell()
 
-#         if not wx.Validator_IsSilent():
-#             wx.Bell()
         return
+
+
+    def OnPaste(self, evt):
+        """ Validate text pasted into the field.
+        """
+        txt = getClipboardText()
+        current = self.GetWindow().GetValue()
+        if self.isValid(current + txt):
+            evt.Skip()
+        elif not wx.Validator.IsSilent():
+            wx.Bell()
 
 
 # ===========================================================================

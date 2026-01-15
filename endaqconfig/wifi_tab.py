@@ -1001,7 +1001,8 @@ class WiFiSelectionTab(Tab):
 
 
     def save(self):
-        """ Save Wi-Fi configuration data to the device.
+        """ Save Wi-Fi configuration data to the device. Implemented in all
+            tabs/fields.
         """
         if self.mode == 'station':
             return self.saveStationMode()
@@ -1009,6 +1010,9 @@ class WiFiSelectionTab(Tab):
 
 
     def saveStationMode(self):
+        """ Apply Wi-Fi 'station' mode changes.
+        """
+        # TODO: Validate SSID/Password? May not be needed.
         data = []
 
         # `updateApplyButton()` also returns whether changes have been made.
@@ -1037,8 +1041,17 @@ class WiFiSelectionTab(Tab):
 
 
     def saveAPMode(self):
-        ...
-        return True
+        """ Apply Wi-Fi 'ap' mode changes.
+        """
+        # TODO: Validate SSID/Password/APN/SIMPin
+        data = {'SSID': self.ApNameField.GetValue(),
+                'Password': self.ApPwField.GetValue()}
+
+        if self.ap4gCheck.GetValue():
+            data['AP4G'] = {'APN': self.Ap4gNameField.GetValue(),
+                            'SIMPin': self.Ap4gPwField.GetValue()}
+
+        return self.setWifi({'APMode': data})
 
 
     def setWifi(self, data):
@@ -1050,7 +1063,7 @@ class WiFiSelectionTab(Tab):
             self.device.command.setWifi(data)
         except TimeoutError:
             wx.MessageBox(
-                    message="Timed out when attempting to set device Wi-Fi (communicating with device). Wi-Fi was not set.",
+                    message="Timed out when attempting to set device Wi-Fi (communicating with device).\nWi-Fi was not set.",
                     caption="Wi-Fi Configuration Error",
                     style=wx.OK,
                     parent=self)
@@ -1071,7 +1084,8 @@ class WiFiSelectionTab(Tab):
             return False
         except Exception as E:
             wx.MessageBox(
-                    "An unexpected %s occurred when attempting to set the Wi-Fi network." % type(E).__name__,
+                    f"An unexpected {type(E).__name__} occurred when attempting to set the Wi-Fi network.\n"
+                    "Wi-Fi was not set.",
                     caption="Wi-Fi Configuration Error",
                     style=wx.OK | wx.ICON_ERROR,
                     parent=self)
