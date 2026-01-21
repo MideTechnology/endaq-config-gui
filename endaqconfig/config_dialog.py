@@ -210,7 +210,7 @@ class ConfigDialog(SC.SizedDialog):
         self.setClockCheck.Enable(hasattr(self.device, 'setTime'))
 
         self.SetAffirmativeId(wx.ID_OK)
-        self.Bind(wx.EVT_BUTTON, self.OnOK, id=wx.ID_OK)
+        # self.Bind(wx.EVT_BUTTON, self.OnOK, id=wx.ID_OK)
         self.Bind(wx.EVT_BUTTON, self.OnCancel, id=wx.ID_CANCEL)
 
         # Restore the following if/when import and export are fixed.
@@ -472,6 +472,14 @@ class ConfigDialog(SC.SizedDialog):
     def OnOK(self, evt: wx.Event):
         """ Handle dialog OK, saving changes.
         """
+        evt.Skip()
+
+
+    def shutdown(self, parent: Optional[wx.Window] = None) -> bool:
+        """ Handle post-OK dialog shutdown.
+        """
+        parent = parent or self
+
         # Try to ensure Wi-Fi threads have stopped. Redundant in most cases, but
         # needed in some error conditions.
         for t in self.tabs:
@@ -488,7 +496,7 @@ class ConfigDialog(SC.SizedDialog):
 
             if not self.saveOnOk:
                 self.updateConfigData()
-                evt.Skip()
+                # evt.Skip()
                 return
 
             self.saveConfigData()
@@ -504,6 +512,7 @@ class ConfigDialog(SC.SizedDialog):
                                   "recording device to reset in order to take effect.\n"
                                   "Reset recorder now?",
                                   "Configure Device",
+                                  parent=parent,
                                   style=(wx.YES_NO | wx.YES_DEFAULT
                                          | wx.ICON_QUESTION))
                 if q == wx.YES:
@@ -531,7 +540,7 @@ class ConfigDialog(SC.SizedDialog):
                     msg += " (error code {})".format(err.errno)
 
             self.showError(msg, "Configuration Error")
-            evt.Skip()
+            # evt.Skip()
             return
 
         except Exception as err:
@@ -543,14 +552,14 @@ class ConfigDialog(SC.SizedDialog):
             if self.showAdvanced:
                 msg += str(err).capitalize()
 
-            self.showError(msg, "Configuration Error")
-            evt.Skip()
+            self.showError(msg, "Configuration Error", parent=parent)
+            # evt.Skip()
             return
 
         finally:
             wx.SetCursor(wx.NullCursor)
 
-        evt.Skip()
+        # evt.Skip()
 
 
     def OnCancel(self, evt: wx.Event):
@@ -582,14 +591,15 @@ class ConfigDialog(SC.SizedDialog):
                   msg: str,
                   caption: str,
                   style: int = wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR,
-                  err: Optional[Exception] = None):
+                  err: Optional[Exception] = None,
+                  parent: Optional[wx.Window] = None):
         """ Show an error message. Wraps the standard message box to add some
             debugging stuff.
         """
         if not msg.endswith(('.', '!', '?')):
             msg += "."
 
-        q = wx.MessageBox(msg, caption, style=style, parent=self)
+        q = wx.MessageBox(msg, caption, style=style, parent=parent or self)
         if wx.GetKeyState(wx.WXK_CONTROL) and wx.GetKeyState(wx.WXK_SHIFT):
             raise
         if err is not None:
@@ -679,7 +689,10 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
                           showAdvanced=showAdvanced,
                           wifi=showWifi,
                           icon=icon, debug=debug) as dlg:
-            dlg.ShowModal()
+            q = dlg.ShowModal()
+            if q == wx.ID_OK:
+                dlg.shutdown()
+
             result = dlg.configData
             setTime = dlg.setClockCheck.GetValue()
             useUtc = dlg.useUtc

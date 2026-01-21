@@ -16,6 +16,7 @@ from .base import Tab
 from .base import logger, registerTab
 from .widgets import icons
 from .widgets.events import *
+from .widgets.shared import TextValidator
 
 from endaq.device import DeviceError, DeviceTimeout
 from endaq.device.response_codes import DeviceStatusCode
@@ -25,6 +26,7 @@ from endaq.device.response_codes import DeviceStatusCode
 #
 # ===============================================================================
 
+# Authorization types, used if security isn't a Boolean
 AUTH_TYPES = ("None", "WPA", "WPA2", "Unknown")
 DEFAULT_AUTH = 1
 
@@ -198,6 +200,7 @@ class AddWifiDialog(SC.SizedDialog):
         self.pwField = wx.TextCtrl(pane, -1, "", style=wx.TE_PASSWORD)
         self.pwField.SetSizerProps(expand=True, valign='center')
         self.pwField.Enable(pwFieldEnabled)
+        self.pwField.SetValidator(TextValidator(maxLen=63))
 
         # add dialog buttons
         self.SetButtonSizer(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL))
@@ -205,7 +208,7 @@ class AddWifiDialog(SC.SizedDialog):
         # a little trick to make sure that you can't resize the dialog to
         # less screen space than the controls need
         self.Fit()
-        size = self.GetSize() + wx.Size(60, 0)
+        size = self.GetSize() + wx.Size(60, 0)  # ignore the linter; wx.Size.__add__ *does* exist
         self.SetSize(size)
         self.SetMinSize(size)
         self.ssidField.SetFocus()
@@ -330,9 +333,6 @@ class WiFiSelectionTab(Tab):
             self.apPanel = self.addAPMode(self)
             sizer.Add(self.apModeCheck, 0, wx.EXPAND | wx.ALL, 4)
             sizer.Add(self.apPanel, 0, wx.EXPAND | wx.WEST, 12)
-            # self.ApNameField.SetValue(self.ssid)
-            # self.Ap4gNameField.SetValue(self.apn)
-            # self.ap4gCheck.SetValue(bool(self.apn))
 
             sizer.AddSpacer(24)
             self.stationModeCheck = wx.RadioButton(self, -1, "Connect to Wi-Fi")
@@ -353,12 +353,16 @@ class WiFiSelectionTab(Tab):
             self.stationPanel = self.addWifiScan(self)
             sizer.Add(self.stationPanel, 1, wx.EXPAND)
 
+        line = wx.StaticLine(self, -1)
+        sizer.Add(line, 0, wx.EXPAND | wx.ALL, 8)
+        self.SetSizer(sizer)
+
         self.currentConnectionLabel = wx.StaticText(self, -1, "")
         self.applyButton = wx.Button(self, -1, "Apply Wi-Fi Changes")
 
         connection_and_apply_sizer = wx.BoxSizer(wx.HORIZONTAL)
         connection_and_apply_sizer.AddMany(
-                ((self.currentConnectionLabel, 1, wx.EXPAND | wx.ALL, 8),
+                ((self.currentConnectionLabel, 1, wx.EXPAND | wx.WEST, 8),
                  (self.applyButton, 0, wx.SOUTH | wx.EAST, 8)))
 
         sizer.Add(connection_and_apply_sizer, 0, wx.EXPAND)
@@ -489,6 +493,7 @@ class WiFiSelectionTab(Tab):
             rowsizer = wx.BoxSizer(wx.HORIZONTAL)
             lbl = wx.StaticText(panel, -1, label, size=(labelWidth, -1), style=wx.ALIGN_CENTER_VERTICAL)
             txt = wx.TextCtrl(panel, -1, style=style, name=name)
+            txt.Bind(wx.EVT_KILL_FOCUS, self.OnExitField)
             rowsizer.Add(lbl, 0, wx.EXPAND | wx.NORTH, 4)
             rowsizer.Add(txt, 1, wx.EXPAND)
             return  rowsizer, lbl, txt
@@ -497,6 +502,9 @@ class WiFiSelectionTab(Tab):
         sizer.Add(row1sizer, 0, wx.EXPAND | wx.ALL, 4)
         row2sizer, _, self.ApPwField = labeledField("Password:", pw=True, name="ApPwField")
         sizer.Add(row2sizer, 0, wx.EXPAND | wx.ALL, 4)
+
+        self.ApNameField.SetValidator(TextValidator(minLen=1, maxLen=64))
+        self.ApPwField.SetValidator(TextValidator(maxLen=64))
 
         self.ApNameField.Bind(wx.EVT_TEXT, self.OnAPModeText)
         self.ApPwField.Bind(wx.EVT_TEXT, self.OnAPModeText)
@@ -510,6 +518,9 @@ class WiFiSelectionTab(Tab):
         row4sizer, ap4gPwLabel, self.Ap4gPwField = labeledField("Password:", pw=True, name="Ap4gPwField")
         sizer.AddSpacer(8)
         sizer.Add(row4sizer, 0, wx.EXPAND | wx.WEST | wx.EAST, 12)
+
+        self.Ap4gNameField.SetValidator(TextValidator(minLen=1, maxLen=64))
+        self.Ap4gPwField.SetValidator(TextValidator(maxLen=64))
 
         self.Ap4gNameField.Bind(wx.EVT_TEXT, self.OnAPModeText)
         self.Ap4gPwField.Bind(wx.EVT_TEXT, self.OnAPModeText)
@@ -525,6 +536,15 @@ class WiFiSelectionTab(Tab):
         ap4gPwLabel.Show(self.show4GMode)
 
         return panel
+
+
+    def OnExitField(self, evt):
+        try:
+            validator = evt.GetEventObject().GetValidator()
+            if validator:
+                validator.Validate(validator.GetWindow())
+        finally:
+            evt.Skip()
 
 
     def setMode(self, mode):
@@ -637,10 +657,10 @@ class WiFiSelectionTab(Tab):
         """ Get Wi-Fi information from the device. Starts the asynchronous
             device-reading thread.
         """
-        if self.mode == 'station':
-            if self.scanThread and self.scanThread.is_alive():
-                return
+        if self.scanThread and self.scanThread.is_alive():
+            return
 
+        if self.mode == 'station':
             self.list.Enable(False)
             self.addButton.Enable(False)
             self.pwCheck.Enable(False)
@@ -649,8 +669,8 @@ class WiFiSelectionTab(Tab):
             self.rescan.SetLabelText("Scanning...")
             self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
 
-            self.scanThread = WiFiScanThread(self)
-            self.scanThread.start()
+        self.scanThread = WiFiScanThread(self)
+        self.scanThread.start()
 
 
     def populate(self):

@@ -149,21 +149,33 @@ class TextValidator(wx.Validator):
                   wx.WXK_INSERT, wx.WXK_DELETE)
 
 
-    def __init__(self, validator, maxLen=None):
-        """ Instantiate a text field validator.
+    def __init__(self, validChar=None, validator=None, minLen=0, maxLen=float('inf')):
+        """ Instantiate a text field validator. It does basic validation of
+            min/max length, and uses supplied functions to validate contents.
 
-            :keyword validator: A function that validates the string.
+            :param validChar: A function that validates each character as entered.
+            :param validator: A function that validates the entire string.
+            :param minLen: Minimum length of the string.
+            :param maxLen: Maximum length of the string.
         """
+        self.minLen = minLen
         self.maxLen = maxLen
-        self.isValid = validator
+        self.isValidChar = validChar or (lambda x: True)
+        self.isValidString = validator or (lambda x: True)
+
         wx.Validator.__init__(self)
         self.Bind(wx.EVT_CHAR, self.OnChar)
         self.Bind(wx.EVT_TEXT_PASTE, self.OnPaste)
 
 
+    def GetWindow(self) -> wx.TextCtrl:
+        return super().GetWindow()
+
+
     def Clone(self):
         """ Required in wx.PyValidator subclasses. """
-        return TextValidator(self.isValid, self.maxLen)
+        return TextValidator(self.isValidChar, self.isValidString,
+                             self.minLen, self.maxLen)
 
 
     def TransferToWindow(self):
@@ -177,8 +189,11 @@ class TextValidator(wx.Validator):
 
 
     def Validate(self, win):
-        txt = self.GetWindow().GetValue()
-        return self.isValid(txt)
+        logger.debug(f"Validator for {win} called")
+        txt = win.GetValue()
+        if self.minLen >= len(txt) > self.maxLen:
+            return False
+        return self.isValidString(txt)
 
 
     def OnChar(self, evt):
@@ -191,7 +206,7 @@ class TextValidator(wx.Validator):
             return
 
         val = self.GetWindow().GetValue()
-        if self.isValid(chr(key)) and len(val) < self.maxLen:
+        if self.isValidChar(chr(key)) and len(val) < self.maxLen:
             evt.Skip()
             return
         elif not wx.Validator.IsSilent():
@@ -205,7 +220,8 @@ class TextValidator(wx.Validator):
         """
         txt = getClipboardText()
         current = self.GetWindow().GetValue()
-        if self.isValid(current + txt):
+        new = current + txt
+        if self.isValidString(new):
             evt.Skip()
         elif not wx.Validator.IsSilent():
             wx.Bell()

@@ -761,7 +761,7 @@ class TextField(ConfigWidget):
     def addField(self):
         """ Class-specific method for adding the appropriate type of widget.
         """
-        validator = TextValidator(self.isValid, self.maxLength)
+        validator = TextValidator(self.isValid, maxLen=self.maxLength)
         if self.textLines > 1:
             self.field = wx.TextCtrl(self, -1, str(self.default or ''),
                                      style=wx.TE_MULTILINE | wx.TE_PROCESS_ENTER,
