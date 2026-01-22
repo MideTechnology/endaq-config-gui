@@ -147,6 +147,7 @@ class ConfigDialog(SC.SizedDialog):
 
         self.configData = {}
         self.origConfigData = {}
+        self.unknownConfigData = {}  # config.cfg items not in CONFIG.UI
 
         self.configItems = {}
         self.configValues = base.ConfigContainer(self)
@@ -275,7 +276,8 @@ class ConfigDialog(SC.SizedDialog):
             try:
                 self.configItems[k].setConfigValue(v)
             except KeyError:
-                logger.info(f"Item {hex(k)} in config file not in UI, probably okay.")
+                # logger.debug(f"Item {hex(k)} in config file not in UI, probably okay.")
+                self.unknownConfigData[k] = v
             except AttributeError as err:
                 logger.warning("Unexpected {} in ConfigDialog.applyConfigData(): {}"
                                .format(type(err).__name__, err))
@@ -305,6 +307,7 @@ class ConfigDialog(SC.SizedDialog):
         """
         self.configData.clear()
         self.configData.update(self.configValues.toDict())
+        self.configData.update(self.unknownConfigData)
 
 
     def updateDeviceConfig(self):
@@ -360,8 +363,14 @@ class ConfigDialog(SC.SizedDialog):
         """
         self.updateConfigData()
 
-        oldKeys = sorted(self.origConfigData.keys())
-        newKeys = sorted(self.configData.keys())
+        def notDefault(d):
+            """ Get IDs of items in config.cfg that are known and not default. """
+            return set(k for k, v in d.items()
+                       if k in self.configItems
+                       and self.configValues[k] != self.configItems[k].default)
+
+        oldKeys = notDefault(self.origConfigData)
+        newKeys = notDefault(self.configData)
 
         if oldKeys != newKeys:
             return True
@@ -563,23 +572,18 @@ class ConfigDialog(SC.SizedDialog):
 
 
     def OnCancel(self, evt: wx.Event):
-        """ Handle dialog cancel, prompting the user to save any changes.
+        """ Handle dialog cancel, prompting the user to discard any changes.
         """
         if wx.GetKeyState(wx.WXK_CONTROL) and wx.GetKeyState(wx.WXK_SHIFT):
             evt.Skip()
             return
 
         if self.configChanged():
-            q = self.showError("Save configuration changes before exiting?\n\n"
-                               '"No" will discard changes.',
+            q = self.showError("Discard changes?\n\n"
+                               'Some configuration changes may not have been applied.',
                                "Configure Device",
-                               style=(wx.YES_NO | wx.CANCEL | wx.CANCEL_DEFAULT
-                                      | wx.ICON_QUESTION))
-            if q == wx.CANCEL:
-                return
-            elif q == wx.YES:
-                self.saveConfigData()
-                evt.Skip()
+                               style=(wx.YES_NO | wx.NO_DEFAULT | wx.ICON_INFORMATION))
+            if q == wx.NO:
                 return
 
         # If cancelled, the returned configuration data is `None`

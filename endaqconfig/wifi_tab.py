@@ -16,7 +16,7 @@ from .base import Tab
 from .base import logger, registerTab
 from .widgets import icons
 from .widgets.events import *
-from .widgets.shared import TextValidator
+from .widgets.shared import TextValidator, FieldValidationError
 
 from endaq.device import DeviceError, DeviceTimeout
 from endaq.device.response_codes import DeviceStatusCode
@@ -180,7 +180,8 @@ class AddWifiDialog(SC.SizedDialog):
         pane.SetSizerType("form")
 
         wx.StaticText(pane, -1, "SSID (Name):").SetSizerProps(valign='center')
-        self.ssidField = wx.TextCtrl(pane, -1, "")
+        self.ssidField = wx.TextCtrl(pane, -1, "",
+                                     validator=TextValidator(minLen=1, maxLen=63))
         self.ssidField.SetSizerProps(expand=True, valign='center')
 
         wx.StaticText(pane, -1, "Security:").SetSizerProps(valign='center')
@@ -197,10 +198,10 @@ class AddWifiDialog(SC.SizedDialog):
         self.authField.SetSizerProps(expand=True, valign='center')
 
         wx.StaticText(pane, -1, "Password:").SetSizerProps(valign='center')
-        self.pwField = wx.TextCtrl(pane, -1, "", style=wx.TE_PASSWORD)
+        self.pwField = wx.TextCtrl(pane, -1, "", style=wx.TE_PASSWORD,
+                                   validator=TextValidator( maxLen=63))
         self.pwField.SetSizerProps(expand=True, valign='center')
         self.pwField.Enable(pwFieldEnabled)
-        self.pwField.SetValidator(TextValidator(maxLen=63))
 
         # add dialog buttons
         self.SetButtonSizer(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL))
@@ -285,6 +286,7 @@ class WiFiSelectionTab(Tab):
         self.mode = 'station'
         self.ssid = self.apn = ''  # AP mode: the gateway's reported SSID and APN
         self.apChanged = False
+        self.initialized = False  # Prevents premature update call triggered by EVT_TEXT
 
         super(WiFiSelectionTab, self).__init__(*args, **kwargs)
         if not getattr(self, 'label'):
@@ -306,7 +308,8 @@ class WiFiSelectionTab(Tab):
             Separated from `__init__()` for the sake of subclassing.
         """
         self.showAPMode = self.elementAttributes.get('AP', False)
-        self.show4GMode = self.elementAttributes.get('4G', False)
+        # self.show4GMode = self.elementAttributes.get('4G', False)
+        self.show4GMode = False
 
         self.scanThread = None
         self.loadImages()
@@ -488,39 +491,50 @@ class WiFiSelectionTab(Tab):
 
         labelWidth = panel.GetTextExtent("Password: ")[0]
 
-        def labeledField(label, pw=False, name=wx.StaticTextNameStr):
+        def labeledField(label, pw=False, tt=None, name=wx.StaticTextNameStr,
+                         val=wx.DefaultValidator, handler=None):
             style = (wx.TE_PASSWORD if pw else 0) | wx.TE_PROCESS_ENTER
             rowsizer = wx.BoxSizer(wx.HORIZONTAL)
-            lbl = wx.StaticText(panel, -1, label, size=(labelWidth, -1), style=wx.ALIGN_CENTER_VERTICAL)
-            txt = wx.TextCtrl(panel, -1, style=style, name=name)
+            lbl = wx.StaticText(panel, -1, label, size=(labelWidth, -1),
+                                style=wx.ALIGN_CENTER_VERTICAL)
+            txt = wx.TextCtrl(panel, -1, style=style, name=name, validator=val)
+            if tt:
+                lbl.SetToolTip(tt)
+                txt.SetToolTip(tt)
+            if handler:
+                txt.Bind(wx.EVT_TEXT, handler)
             txt.Bind(wx.EVT_KILL_FOCUS, self.OnExitField)
             rowsizer.Add(lbl, 0, wx.EXPAND | wx.NORTH, 4)
             rowsizer.Add(txt, 1, wx.EXPAND)
             return  rowsizer, lbl, txt
 
-        row1sizer, _, self.ApNameField = labeledField("SSID:", name="ApNameField")
+        row1sizer, _, self.ApNameField = labeledField("SSID:",
+                                                      name="ApNameField",
+                                                      tt="The name of the Gateway's Wi-Fi access point",
+                                                      val=TextValidator(validator=self.isUniqueSSID, minLen=1, maxLen=63),
+                                                      handler=self.OnAPModeText)
         sizer.Add(row1sizer, 0, wx.EXPAND | wx.ALL, 4)
-        row2sizer, _, self.ApPwField = labeledField("Password:", pw=True, name="ApPwField")
+        row2sizer, _, self.ApPwField = labeledField("Password:", pw=True,
+                                                    name="ApPwField",
+                                                    tt="The Gateway AP password",
+                                                    val=TextValidator(maxLen=63),
+                                                    handler=self.OnAPModeText)
         sizer.Add(row2sizer, 0, wx.EXPAND | wx.ALL, 4)
-
-        self.ApNameField.SetValidator(TextValidator(minLen=1, maxLen=64))
-        self.ApPwField.SetValidator(TextValidator(maxLen=64))
-
-        self.ApNameField.Bind(wx.EVT_TEXT, self.OnAPModeText)
-        self.ApPwField.Bind(wx.EVT_TEXT, self.OnAPModeText)
 
         sizer.AddSpacer(4)
         self.ap4gCheck = wx.CheckBox(panel, -1, label="Connect to 4G wireless data")
         sizer.Add(self.ap4gCheck, 0, wx.EXPAND | wx.ALL, 4)
 
-        row3sizer, ap4gNameLbl, self.Ap4gNameField = labeledField("APN:", name="Ap4gNameField")
+        row3sizer, ap4gNameLbl, self.Ap4gNameField = labeledField("APN:",
+                                                                  name="Ap4gNameField",
+                                                                  val=TextValidator(minLen=1, maxLen=63),
+                                                                  handler=self.OnAPModeText)
         sizer.Add(row3sizer, 0, wx.EXPAND | wx.WEST | wx.EAST, 12)
-        row4sizer, ap4gPwLabel, self.Ap4gPwField = labeledField("Password:", pw=True, name="Ap4gPwField")
+        row4sizer, ap4gPwLabel, self.Ap4gPwField = labeledField("Password:", pw=True, name="Ap4gPwField",
+                                                                tt="The cellular data access PIN",
+                                                                val=TextValidator(maxLen=63))
         sizer.AddSpacer(8)
         sizer.Add(row4sizer, 0, wx.EXPAND | wx.WEST | wx.EAST, 12)
-
-        self.Ap4gNameField.SetValidator(TextValidator(minLen=1, maxLen=64))
-        self.Ap4gPwField.SetValidator(TextValidator(maxLen=64))
 
         self.Ap4gNameField.Bind(wx.EVT_TEXT, self.OnAPModeText)
         self.Ap4gPwField.Bind(wx.EVT_TEXT, self.OnAPModeText)
@@ -538,16 +552,22 @@ class WiFiSelectionTab(Tab):
         return panel
 
 
-    def OnExitField(self, evt):
-        try:
-            validator = evt.GetEventObject().GetValidator()
-            if validator:
-                validator.Validate(validator.GetWindow())
-        finally:
-            evt.Skip()
+    def isUniqueSSID(self, ssid: str) -> bool:
+        """ Check if an SSID is not already online.
+            :raises FieldValidationError: if ssid is already online
+        """
+        if ssid == self.ssid:
+            return True
+        if ssid in (ap.get('SSID') for ap in self.info):
+            raise FieldValidationError(f"'{ssid}' aready exists! Choose a unique SSID.")
+        return True
 
 
-    def setMode(self, mode):
+    def setMode(self, mode: str):
+        """ Change the Gateway's Wi-Fi mode.
+
+            :param mode: ``"station"``, ``"ap"``, or ``"ap4g"``
+        """
         self.mode = mode
         if not self.showAPMode:
             if self.stationModeCheck:
@@ -570,16 +590,21 @@ class WiFiSelectionTab(Tab):
             self.apPanel.Enable(False)
 
 
-    def stationPanelEnable(self, enable=True):
-        self.stationPanel.Enable(enable)
-        for c in self.stationPanel.GetChildren():
-            c.Enable(enable)
+    def OnExitField(self, evt):
+        """ Handler for leaving a text field; does validation.
+        """
+        try:
+            validator = evt.GetEventObject().GetValidator()
+            if validator:
+                validator.Validate(validator.GetWindow())
+        finally:
+            evt.Skip()
 
 
-    def OnWiFiModeChange(self, event):
+    def OnWiFiModeChange(self, evt):
         """ Handle the Wi-Fi mode changing via radio buttons.
         """
-        obj = event.GetEventObject()
+        obj = evt.GetEventObject()
         if obj == self.apModeCheck:
             self.setMode('ap')
         else:
@@ -747,6 +772,7 @@ class WiFiSelectionTab(Tab):
 
         self.list.SortItems(lambda a, b: 2 * int(a > b) - 1)
 
+        self.initialized = True
         self.updateApplyButton()
 
 
@@ -838,7 +864,7 @@ class WiFiSelectionTab(Tab):
 
 
     def OnAddButton(self, evt):
-        """ Handle 'Add' button press.
+        """ Handle 'Add' button press (adds an unadvertised AP).
         """
         dlg = AddWifiDialog(self, -1, booleanAuth=self.booleanAuth)
         if dlg.ShowModal() != wx.ID_OK:
@@ -948,9 +974,12 @@ class WiFiSelectionTab(Tab):
         evt.Skip()
 
 
-    def OnAPModeText(self, evt):
+    def OnAPModeText(self, _evt):
         """ Handle typing in one of the AP mode fields.
         """
+        if not self.initialized:
+            return
+
         self.apChanged = True
         self.updateApplyButton()
 
@@ -1032,7 +1061,6 @@ class WiFiSelectionTab(Tab):
     def saveStationMode(self):
         """ Apply Wi-Fi 'station' mode changes.
         """
-        # TODO: Validate SSID/Password? May not be needed.
         data = []
 
         # `updateApplyButton()` also returns whether changes have been made.
@@ -1063,7 +1091,6 @@ class WiFiSelectionTab(Tab):
     def saveAPMode(self):
         """ Apply Wi-Fi 'ap' mode changes.
         """
-        # TODO: Validate SSID/Password/APN/SIMPin
         data = {'SSID': self.ApNameField.GetValue(),
                 'Password': self.ApPwField.GetValue()}
 

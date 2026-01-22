@@ -201,12 +201,14 @@ class ConfigBase(object):
             "ExcludeID": "exclude",
             "DisplayFormat": "displayFormat",
             "ValueFormat": "valueFormat",
+            "MinLength": "minLength",
             "MaxLength": "maxLength",
             "*Min": "min",
             "*Max": "max",
             "*Value": "default",
             "*Gain": "gain",
-            "*Offset": "offset"
+            "*Offset": "offset",
+            "Validator": "validator"
             }
 
     # Class-specific element/attribute mapping. Subclasses can use this for
@@ -732,6 +734,7 @@ class TextField(ConfigWidget):
     DEFAULT_TYPE = "TextValue"
 
     # String of valid characters. 'None' means all are valid.
+    # All characters are permitted in UTF-8 fields.
     VALID_CHARS = None
 
 
@@ -747,12 +750,11 @@ class TextField(ConfigWidget):
 
     def isValid(self, s):
         """ Filter for characters valid in the text field. Used by the field's
-            Validator. It just checks the string contents vs. `VALID_CHARS` and
-            its length vs. `maxLength`.
+            Validator. It just checks the string contents vs. `VALID_CHARS`.
+            Length checks are handled by the `TextValidator`.
+
+            :param s: The string/character to validate.
         """
-        # All characters are permitted in UTF-8 fields.
-        if self.maxLength is not None and len(s) > self.maxLength:
-            return False
         if self.VALID_CHARS is None:
             return True
         return all(c in self.VALID_CHARS for c in s)
@@ -761,18 +763,19 @@ class TextField(ConfigWidget):
     def addField(self):
         """ Class-specific method for adding the appropriate type of widget.
         """
-        validator = TextValidator(self.isValid, maxLen=self.maxLength)
+        validator = TextValidator(self.isValid, minLen=self.minLength, maxLen=self.maxLength)
         if self.textLines > 1:
             self.field = wx.TextCtrl(self, -1, str(self.default or ''),
                                      style=wx.TE_MULTILINE | wx.TE_PROCESS_ENTER,
                                      validator=validator)
-            # XXX: This is supposed to set multi-line field height, doesn't work
+            # NOTE: This is supposed to set multi-line field height, doesn't work
             s = self.field.GetSize()[1]
             self.field.SetSize(-1, s * self.textLines)
         else:
             self.field = wx.TextCtrl(self, -1, str(self.default or ''),
                                      validator=validator)
 
+        self.field.Bind(wx.EVT_KILL_FOCUS, self.OnExitField)
         self.sizer.Add(self.field, 4, wx.EXPAND)
         return self.field
 
@@ -792,6 +795,17 @@ class TextField(ConfigWidget):
         else:
             self.field.Enable(enabled)
         wx.Panel.Enable(self, enabled)
+
+
+    def OnExitField(self, evt):
+        """ Handler for leaving a text field; does validation.
+        """
+        try:
+            validator = evt.GetEventObject().GetValidator()
+            if validator:
+                validator.Validate(validator.GetWindow())
+        finally:
+            evt.Skip()
 
 
 # ===============================================================================

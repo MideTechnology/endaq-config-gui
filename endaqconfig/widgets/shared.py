@@ -114,30 +114,8 @@ def wx_DateTime_FromTimeT(timet):
 # Field validators
 #===============================================================================
 
-class TimeValidator(wx.Validator):
-    """
-    """
-    validCharacters = "-.0123456789"
-
-    def __init__(self):
-        super(TimeValidator, self).__init__()
-        self.Bind(wx.EVT_CHAR, self.OnChar)
-
-    def Clone(self):
-        return TimeValidator()
-
-    def Validate(self, win):
-        val = self.GetWindow().GetValue()
-        return all((c in self.validCharacters for c in val))
-
-    def OnChar(self, evt):
-        key = evt.GetKeyCode()
-
-        if key < wx.WXK_SPACE or key > 255 or key == wx.WXK_DELETE:
-            evt.Skip()
-
-        elif chr(key) in self.validCharacters:
-            evt.Skip()
+class FieldValidationError(Exception):
+    """ Raised when a validator fails. """
 
 
 class TextValidator(wx.Validator):
@@ -158,10 +136,14 @@ class TextValidator(wx.Validator):
             :param minLen: Minimum length of the string.
             :param maxLen: Maximum length of the string.
         """
-        self.minLen = minLen
-        self.maxLen = maxLen
+        self.minLen = minLen or 0
+        self.maxLen = maxLen or float('inf')
         self.isValidChar = validChar or (lambda x: True)
         self.isValidString = validator or (lambda x: True)
+
+        self.tooltip = None  # Field's original tooltip, gets message appended if validation fails
+        self.colorValid = wx.SystemSettings.GetColour(wx.SYS_COLOUR_WINDOW)
+        self.colorInvalid = wx.Colour("pink")
 
         wx.Validator.__init__(self)
         self.Bind(wx.EVT_CHAR, self.OnChar)
@@ -169,6 +151,7 @@ class TextValidator(wx.Validator):
 
 
     def GetWindow(self) -> wx.TextCtrl:
+        # This just exists to set the return type hint for the sake of the linter.
         return super().GetWindow()
 
 
@@ -189,11 +172,36 @@ class TextValidator(wx.Validator):
 
 
     def Validate(self, win):
-        logger.debug(f"Validator for {win} called")
+        """ Perform validation. Changes the field background color and adds a
+            message to the tooltip if invalid.
+        """
+        if not win.IsEnabled():
+            return True
+
         txt = win.GetValue()
-        if self.minLen >= len(txt) > self.maxLen:
-            return False
-        return self.isValidString(txt)
+        msg = ''
+
+        # if self.minLen >= len(txt) > self.maxLen:
+        if not self.minLen <= len(txt) <= self.maxLen:
+            if self.maxLen == float('inf'):
+                msg = f'⚠ Length must be at least {self.minLen} characters!'
+            elif self.minLen == 0:
+                msg = f'⚠ Length must be shorter than {self.minLen} characters!'
+            else:
+                msg = f'⚠ Length must be between {self.minLen} and {self.maxLen} characters!'
+            valid = False
+        else:
+            try:
+                valid = self.isValidString(txt)
+            except FieldValidationError as e:
+                valid = False
+                msg = f'⚠ {e}'
+
+        tooltip = (win.GetToolTipText() or '').partition('⚠')[0].strip()
+        win.SetToolTip(f'{tooltip}\n\n{msg}'.strip())
+        win.SetBackgroundColour(self.colorValid if valid else self.colorInvalid)
+        win.Refresh()
+        return valid
 
 
     def OnChar(self, evt):
