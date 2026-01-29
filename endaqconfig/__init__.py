@@ -11,7 +11,8 @@ import sys
 import logging
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+# logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 # logging.basicConfig(format="%(asctime)s %(levelname)s: %(message)s")
 logging.basicConfig(format="%(asctime)s %(threadName)s %(filename)s %(funcName)s %(levelname)s: %(message)s")
 
