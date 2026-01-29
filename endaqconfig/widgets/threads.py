@@ -114,14 +114,14 @@ class DeviceScanThread(threading.Thread):
         self.lastScan = now = time()
         devices = set()
 
-        logger.debug('Collecting USB devices...')
+        # logger.debug('Collecting USB devices...')
         localdevs = getDevices()
         devices.update(localdevs)
 
         connected = self.parent.connector and self.parent.connector.client.is_connected()
 
         if connected and (self.mqttUpdated.is_set() or now - self.lastMqttGet > 30):
-            logger.debug('Collecting MQTT devices...')
+            # logger.debug('Collecting MQTT devices...')
             try:
                 self.parent.connector.exclude = {d.serialInt for d in localdevs}
                 mqttDevices = set(self.parent.connector.getDevices(offline=True,
@@ -152,7 +152,7 @@ class DeviceScanThread(threading.Thread):
             self.devices = devices
 
         with self.updating:
-            logger.debug('Starting updateDeviceStatus threads')
+            # logger.debug('Starting updateDeviceStatus threads')
             # XXX: Skip update for disconnected or timed out devices!
             for dev in self.devices:
                 if not isOnline(dev):
@@ -161,7 +161,8 @@ class DeviceScanThread(threading.Thread):
                     continue
 
                 if dev not in self.updateThreads:
-                    currentThreads[dev] = DeviceCommandThread(dev, updateDeviceStatus, dev, callback=self.stopped)
+                    currentThreads[dev] = DeviceCommandThread(dev, updateDeviceStatus,
+                                                              dev, callback=self.stopped)
 
             self.updateThreads = currentThreads
 

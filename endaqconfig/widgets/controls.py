@@ -4,7 +4,7 @@ Device control buttons and column population/content formatting.
 import logging
 import os.path
 from time import time
-from typing import Union
+from typing import Optional, Union
 
 import wx
 from wx.lib.agw import ultimatelistctrl as ULC
@@ -101,7 +101,7 @@ class NewControlButtons(wx.Panel):
     BG_NORMAL = None  # Taken from widget's defaults
     FG_NORMAL = None
 
-    ICONS = None  # class variable, a list of icons, set on first use
+    ICONS: Optional[list] = None  # class variable, a list of icons, set on first use
 
 
     def __init__(self, root, parent, device, index, column,

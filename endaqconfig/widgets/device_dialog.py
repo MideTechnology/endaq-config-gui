@@ -511,6 +511,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             # Mounted as a drive
             return self.ICON_CONNECTION_MSD
 
+        # TODO: Special-case icon for Gateway
         try:
             # This is a primitive mechanism based on the `ConfigInterface`
             # subclass name. Also, all but USB are currently hypothetical.
@@ -992,6 +993,17 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         if self.scanThread and self.scanThread.is_alive():
             self.scanThread.onUpdate(data)
+
+
+    def onMqttConnect(self, client, userdata, disconnect_flags, reason_code, properties):
+        # TODO: Implement onMqttConnect (if needed)
+        logger.debug('Called DeviceDialog.onMqttConnect')
+
+
+    def onMqttDisconnect(self, client, userdata, disconnect_flags, reason_code, properties):
+        # TODO: Remove MQTT devices from display
+        logger.debug(f'Called DeviceDialog.onMqttDisconnect, {reason_code.is_failure=}')
+
 
 
     # =======================================================================
