@@ -529,7 +529,7 @@ def populateStatusColumn(dev: Recorder,
                 code, msg = DeviceStatusCode.STOP_PENDING, ''
             elif 'Reset' in cmd:
                 code, msg = DeviceStatusCode.RESET_PENDING, ''
-            elif 'FlashPackage' or 'SecureUpdateAll' in cmd:
+            elif 'FlashPackage' in cmd or 'SecureUpdateAll' in cmd:
                 # An update command. No DeviceStatusCode for 'upload pending'
                 # but there is one in STATUS_TEXT. Replace if one gets
                 # added to the DeviceStatusCode enum.

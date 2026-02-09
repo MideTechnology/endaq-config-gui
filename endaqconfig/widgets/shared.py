@@ -484,8 +484,8 @@ class BrokerField(wx.Panel):
         sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.brokerText = wx.StaticText(self, -1, "Broker:")
         sizer.Add(self.brokerText, 0, wx.ALL, 4)
-        self.list = wx.ComboBox(self, style=wx.CB_DROPDOWN | wx.TE_PROCESS_ENTER)
-        sizer.Add(self.list, 4, wx.EXPAND)
+        self.brokerList = wx.ComboBox(self, style=wx.CB_DROPDOWN | wx.TE_PROCESS_ENTER)
+        sizer.Add(self.brokerList, 4, wx.EXPAND)
         self.brokerScanBtn = wx.Button(self, -1, "Rescan")
         sizer.Add(self.brokerScanBtn, 1, wx.EXPAND)
         self.SetSizer(sizer)
@@ -494,19 +494,19 @@ class BrokerField(wx.Panel):
         self.names = []  # Broker names (sorted keys of `brokers`)
         self.tooltip = ''
 
-        self.defaultColors = (self.list.GetBackgroundColour(),
-                              self.list.GetForegroundColour())
+        self.defaultColors = (self.brokerList.GetBackgroundColour(),
+                              self.brokerList.GetForegroundColour())
 
         self.updateList()
         if self.selectedName and self.selectedName not in self.brokers:
-            self.list.SetValue(self.selectedName)
+            self.brokerList.SetValue(self.selectedName)
             self.validateSelection()
         else:
             self.selectedName = self.GetString()
 
         self.Bind(wx.EVT_BUTTON, self.OnBrokerScan, self.brokerScanBtn)
-        self.Bind(wx.EVT_COMBOBOX, self.OnBrokerSelection, self.list)
-        self.Bind(wx.EVT_TEXT_ENTER, self.OnBrokerListEntered, self.list)
+        self.Bind(wx.EVT_COMBOBOX, self.OnBrokerSelection, self.brokerList)
+        self.Bind(wx.EVT_TEXT_ENTER, self.OnBrokerListEntered, self.brokerList)
 
 
     def updateList(self):
@@ -514,7 +514,7 @@ class BrokerField(wx.Panel):
         """
         try:
             self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
-            self.list.Enable(False)
+            self.brokerList.Enable(False)
             self.brokerScanBtn.Enable(False)
 
             self.selectedName = self.GetString()
@@ -525,17 +525,17 @@ class BrokerField(wx.Panel):
             if self.names and not self.selectedName:
                 self.selectedName = self.names[0]
 
-            self.list.SetItems(self.names)
+            self.brokerList.SetItems(self.names)
             if self.selectedName in self.names:
-                self.list.SetSelection(self.names.index(self.selectedName))
+                self.brokerList.SetSelection(self.names.index(self.selectedName))
                 self._setSelectedToolTip()
             else:
-                self.list.SetValue(self.selectedName)
+                self.brokerList.SetValue(self.selectedName)
                 self.validateSelection()
 
         finally:
             self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-            self.list.Enable(True)
+            self.brokerList.Enable(True)
             self.brokerScanBtn.Enable(True)
 
 
@@ -543,8 +543,8 @@ class BrokerField(wx.Panel):
         """ Convenience method to set the list back/fore colors.
         """
         bg, fg = color
-        self.list.SetBackgroundColour(bg or self.defaultColors[0])
-        self.list.SetForegroundColour(fg or self.defaultColors[1])
+        self.brokerList.SetBackgroundColour(bg or self.defaultColors[0])
+        self.brokerList.SetForegroundColour(fg or self.defaultColors[1])
 
 
     def _setSelectedToolTip(self):
@@ -552,16 +552,16 @@ class BrokerField(wx.Panel):
         """
         selected = self.GetString()
         if not selected:
-            self.list.SetToolTip('')
+            self.brokerList.SetToolTip('')
             return
 
         info = self.brokers.get(selected)
         if not info:
             logger.error(f'No broker info for {info!r} (should not happen!)')
-            self.list.SetToolTip('')
+            self.brokerList.SetToolTip('')
             return
 
-        self.list.SetToolTip("{name}.{serviceType}\nIP {host[0]} port {port}".format(**info))
+        self.brokerList.SetToolTip("{name}.{serviceType}\nIP {host[0]} port {port}".format(**info))
 
 
     def validateSelection(self) -> bool:
@@ -579,28 +579,28 @@ class BrokerField(wx.Panel):
             ip, port = parseIP(txt, check=False)
         except ValueError:
             self._setListColor(self.BAD_COLOR)
-            self.list.SetToolTip('Invalid IP address')
+            self.brokerList.SetToolTip('Invalid IP address')
             return False
 
         if self.verify:
             try:
                 self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
-                self.list.Enable(False)
+                self.brokerList.Enable(False)
                 self.brokerScanBtn.Enable(False)
                 parseIP(txt, check=False)
             except ValueError:
                 self._setListColor(self.BAD_COLOR)
-                self.list.SetToolTip('Could not connect to address')
+                self.brokerList.SetToolTip('Could not connect to address')
                 return False
             finally:
                 self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-                self.list.Enable(True)
+                self.brokerList.Enable(True)
                 self.brokerScanBtn.Enable(True)
 
         if ip.lower() == 'localhost':
             ip = getMyIP()
 
-        self.list.SetToolTip(f'IP {ip} port {port}')
+        self.brokerList.SetToolTip(f'IP {ip} port {port}')
         self._setListColor(self.defaultColors)
         return True
 
@@ -626,7 +626,7 @@ class BrokerField(wx.Panel):
     def OnBrokerSelection(self, _evt):
         """ Handle broker selection.
         """
-        txt = self.list.GetValue()
+        txt = self.brokerList.GetValue()
         current = self.GetString()
         if self.selectedName != current:
             self.postSelectionEvent()
@@ -641,7 +641,7 @@ class BrokerField(wx.Panel):
         """
         name = self.GetString()
         if not name:
-            self.list.SetValue(self.selectedName)
+            self.brokerList.SetValue(self.selectedName)
         else:
             self.selectedName = name
             if self.validateSelection():
@@ -671,7 +671,7 @@ class BrokerField(wx.Panel):
     def GetString(self) -> str:
         """ Get the currently selected broker name/IP.
         """
-        return self.list.GetValue().strip()
+        return self.brokerList.GetValue().strip()
 
 
     def IsValid(self) -> bool:
