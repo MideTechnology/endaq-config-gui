@@ -125,7 +125,7 @@ class DeviceScanThread(threading.Thread):
             try:
                 self.parent.connector.exclude = {d.serialInt for d in localdevs}
                 mqttDevices = set(self.parent.connector.getDevices(offline=True,
-                                                                   managerTimeout=0,
+                                                                   managerTimeout=300,
                                                                    callback=self.stopped))
                 with self.updating:
                     self.mqttDevices = mqttDevices
@@ -133,7 +133,8 @@ class DeviceScanThread(threading.Thread):
             except TimeoutError:
                 logger.debug('timed out getting MQTT devices')
 
-        logger.debug('Got MQTT devices.')
+            logger.debug('Got MQTT devices.')
+
         self.mqttUpdated.clear()
         devices.update(self.mqttDevices)
 
@@ -153,7 +154,7 @@ class DeviceScanThread(threading.Thread):
 
         with self.updating:
             # logger.debug('Starting updateDeviceStatus threads')
-            # XXX: Skip update for disconnected or timed out devices!
+            # XXX: Skip update for timed out devices?
             for dev in self.devices:
                 if not isOnline(dev):
                     continue
@@ -323,7 +324,6 @@ def getDeviceStatus(device: Recorder) \
             device.command.available, bool(device._calibration))
 
 
-# XXX: Not sure this is the right place for these functions
 def isOnline(device: Recorder) -> bool:
     """ Is the device in an 'online' state? Note that local USB devices are
         inherently online.

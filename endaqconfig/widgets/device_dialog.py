@@ -222,6 +222,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.scanThread: DeviceScanThread = None
 
         self.updatingDisplay = threading.Event()  # Set while updating, so other calls skip.
+        self.menuOpen = threading.Event()
 
         self.recorders: List[Recorder] = []  # The currently-displayed recorders.
         self.recorderStatus: Dict[Recorder, Tuple] = {}  # Recorder status, battery state, and path, keyed by `Recorder`
@@ -1075,7 +1076,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         if self.updatingDisplay.is_set():
             return
 
-        logger.debug('>>> entering updateTimer tick handler')
+        # logger.debug('>>> entering updateTimer tick handler')
         now = time()
         # self.isUpdating.set()
 
@@ -1195,12 +1196,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             This determines the list item under the mouse and shows the
             appropriate tool tip, if any
         """
-        if not self.recordersByIndex or not self.tooltipFrame:
+        if not self.recordersByIndex or not self.tooltipFrame or self.menuOpen.is_set():
             evt.Skip()
             return
 
-        # Part of workaround for broken ULC tooltips. It can probably be removed
-        # if/when ULC tooltips get fixed.
         self.tooltipFrame.timer.Stop()
         self.tooltipFrame.Hide()
 
@@ -1225,18 +1224,22 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         index, _ = self.list.HitTest(evt.GetPosition())
         if index != wx.NOT_FOUND:
-            self.tooltipFrame.timer.Stop()
-            self.tooltipFrame.Hide()
             try:
-                device = self.recordersByIndex[index]
-            except IndexError:
-                logger.error(f'OnListRightClick: No Recorder at index {index}, '
-                             f'list coordinates {evt.GetPosition()}!')
-                return
+                self.menuOpen.set()
+                self.tooltipFrame.timer.Stop()
+                self.tooltipFrame.Hide()
+                try:
+                    device = self.recordersByIndex[index]
+                except IndexError:
+                    logger.error(f'OnListRightClick: No Recorder at index {index}, '
+                                 f'list coordinates {evt.GetPosition()}!')
+                    return
 
-            menu = ListContextMenu(self, device, self.list, index)
-            self.PopupMenu(menu)
-            menu.Destroy()
+                menu = ListContextMenu(self, device, self.list, index)
+                self.PopupMenu(menu)
+                menu.Destroy()
+            finally:
+                self.menuOpen.clear()
 
         evt.Skip()
 
@@ -1266,8 +1269,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         else:
             if self.connector:
                 self.connector.updateCallback = None
-                if self.ownConnector:
-                    self.connector.disconnect()
+                # if self.ownConnector:
+                #     self.connector.disconnect()
             self.stopUpdater()
             if self.tooltipFrame:
                 self.tooltipFrame.timer.Stop()
@@ -1282,58 +1285,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         devices = [(rec, rec.setTime, (), {'callback': None})
                    for rec in self.recordersByIndex.values()]
         self.startThreads('set the clock', devices)
-
-
-    def _OnSetClocks(self, _evt=None):
-        """ Set all clocks. Used as an event handler.
-            XXX: OLD VERSION
-        """
-        self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
-        self.enableButtons(False)
-
-        try:
-            self.updateTimer.Stop()
-
-            deadline = time() + 5
-            threads = [DeviceCommandThread(rec, rec.setTime)
-                       for rec in self.recordersByIndex.values()]
-
-            while any(t.is_alive() for t in threads):
-                if time() > deadline:
-                    break
-                sleep(0.05)
-
-            fails = []
-            for t in threads:
-                rec = t.device
-                name = f"{rec.productName} SN:{rec.serial}"
-                if t.failed.is_set():
-                    logger.error(f"Error setting clock on {rec}: {t.failure!r}")
-                    fails.append(name)
-                elif not t.completed.is_set():
-                    logger.error(f"Timed out setting clock on {rec}")
-                    fails.append(f"{name} (timed out)")
-
-            if fails:
-                if len(fails) > 1:
-                    names = "\u2022 " + ('\n\u2022 '.join(fails))
-                    msg = ("Could not set recorder clocks.\n\n"
-                           "Errors prevented the clocks being set on these recorders:\n\n"
-                           f"{names}")
-                else:
-                    msg = ("Could not set recorder clock.\n\n"
-                           "An error prevented the clock from being set on "
-                           f"recorder {fails[0]}.")
-
-                wx.MessageBox(msg, "Device Error", parent=self,
-                              style=wx.OK | wx.ICON_ERROR)
-
-        finally:
-            self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-            self.enableButtons(True)
-
-            if self.autoUpdate:
-                self.updateTimer.Start(self.autoUpdate)
 
 
     def OnStartRecording(self,
