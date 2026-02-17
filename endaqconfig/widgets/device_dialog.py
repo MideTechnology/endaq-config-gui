@@ -54,6 +54,8 @@ DEV_WARN_DAYS = datetime.timedelta(days=182)
 # XXX: REMOVE
 # from .debug_lock import DebugRLock
 
+DEFAULT_BROKER = "DRS Test Broker"  # TODO: REMOVE/CHANGE
+
 
 # ===========================================================================
 #
@@ -173,7 +175,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # Clear cached devices
         RECORDERS.clear()
 
-        self.autoUpdate: Union[int, bool] = kwargs.pop('autoUpdate', 500)
+        self.autoUpdate: Union[int, bool] = kwargs.pop('autoUpdate', 1000)
         self.scanInterval: Union[int, bool] = kwargs.pop('scanInterval', 4000)
         self.hideClock: bool = kwargs.pop('hideClock', False)
         self.hideRecord: bool = kwargs.pop('hideRecord', True)
@@ -193,7 +195,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.ownConnector = self.connector is not None
         self.oldUpdateCallback = None
 
-        defaultBroker: Optional[str] = kwargs.pop('broker', None)
+        defaultBroker: Optional[str] = kwargs.pop('broker', DEFAULT_BROKER)
         okText = kwargs.pop('okText', "Configure")
         okHelp = kwargs.pop('okHelp', 'Configure the selected device')
         cancelText = kwargs.pop('cancelText', "Close")
@@ -447,8 +449,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.list.AssignImageList(self.loadIcons(), wx.IMAGE_LIST_SMALL)
         self.list.SetSizerProps(expand=True, proportion=1)
-        self.sleepingListFont = self.list.GetFont().Italic()
-        self.boldListFont = self.list.GetFont().Bold()
+        self.defaultColor = self.list.GetForegroundColour()
+        self.defaultFont = self.list.GetFont()
+        self.sleepingListFont = self.defaultFont.Italic()
+        self.boldListFont = self.defaultFont.Bold()
 
         self.Bind(wx.EVT_LIST_ITEM_SELECTED, self.OnItemSelected, self.list)
         self.Bind(wx.EVT_LIST_ITEM_DESELECTED, self.OnItemDeselected, self.list)
@@ -637,16 +641,21 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.minWidths.append(width + 4)
 
 
-    def populateList(self):
+    def populateList(self, skip: bool = True):
         """ Find recorders and add them to the list.
+
+            :param skip: If `True` and `updatingDisplay` is set, return
+                immediately. If `False`, ignore `updatingDisplay`.
         """
-        if self.updatingDisplay.is_set():
-            # Prevent simultaneous updates by just bailing if one's already going
+        # Bail (not block) if an update is already being handled
+        # (e.g., called from a different thread)
+        if skip and self.updatingDisplay.is_set():
             return
+        else:
+            self.updatingDisplay.set()
 
         try:
             logger.debug('populating list')
-            self.updatingDisplay.set()
             self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
 
             # Get checked devices (may have different list indices)
@@ -709,7 +718,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         finally:
             self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-            self.updatingDisplay.clear()
+            if skip:
+                self.updatingDisplay.clear()
             logger.debug('populating list complete')
 
 
@@ -759,47 +769,57 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                     logger.error(f'Could not get button panel for index {index}')
             else:
                 val = col.formatter(dev, index, i, self)
+
+            font = self.defaultFont
+            color = self.defaultColor
+
             if sleeping:
                 # Sleeping/periodically online devices not disabled, but
                 # drawn in gray as if they were (so checkbox still accessible)
-                self.list.SetItemTextColour(index, STATUS_DISPLAY[100][1])
-                self.list.SetItemFont(index, self.sleepingListFont)
+                color = STATUS_DISPLAY[100][1]
+                font = self.sleepingListFont
             elif isGateway(dev):
                 # DCB/HDS Gateway device; highlight it.
-                self.list.SetItemFont(index, self.boldListFont)
+                font = self.boldListFont
+
+            self.list.SetItemTextColour(index, color)
+            self.list.SetItemFont(index, font)
             self.itemDataMap[index][i] = val or ''
 
-        checked = self.list.GetCheckedItemCount()
-        self.multiStreamBtn.Enable(checked > 0)
-        self.multiStartBtn.Enable(checked > 0)
-        self.multiStopBtn.Enable(checked > 0)
 
-
-    def updateList(self):
+    def updateList(self, skip: bool = True):
         """ Update the statuses in the displayed list of devices. Called in
             response to a message from the device scanning thread if no
             devices have been added or removed.
 
             :see: OnDeviceListUpdate()
+
+            :param skip: If `True` and `updatingDisplay` is set, return
+                immediately. If `False`, ignore `updatingDisplay`.
         """
-        # Bail if an update is already being handled
+        # Bail (not block) if an update is already being handled
         # (e.g., called from a different thread)
-        if self.updatingDisplay.is_set():
-            return
-
-        try:
+        if not (skip and self.updatingDisplay.is_set()):
             self.updatingDisplay.set()
-            # logger.debug('Updating display')
-            for dev in self.recorders:
-                try:
-                    self.updateRow(dev)
-                except IndexError:
-                    # Possible error in row population, or race condition
-                    logger.debug(f'IndexError updating row for device {dev.serial}')
 
-        finally:
-            logger.debug('exiting updateList')
-            self.updatingDisplay.clear()
+            try:
+                # logger.debug('entered updateList')
+                for dev in self.recorders:
+                    try:
+                        self.updateRow(dev)
+                    except IndexError:
+                        # Possible error in row population, or race condition
+                        logger.debug(f'IndexError updating row for device {dev.serial}')
+
+            finally:
+                # logger.debug('exiting updateList')
+                if skip:
+                    self.updatingDisplay.clear()
+
+        checked = self.list.GetCheckedItemCount() > 0
+        self.multiStreamBtn.Enable(checked)
+        self.multiStartBtn.Enable(checked)
+        self.multiStopBtn.Enable(checked)
 
 
     def getSelected(self) -> Optional[Recorder]:
@@ -1070,61 +1090,77 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     # wxPython Event handling
     # =======================================================================
 
-    def OnUpdateTimerTick(self, _evt: Optional[wx.TimerEvent] = None):
-        """ Handle the device-scanning timer ticking.
-        """
-        if self.updatingDisplay.is_set():
-            return
-
-        # logger.debug('>>> entering updateTimer tick handler')
+    def _updateTimeouts(self):
         now = time()
-        # self.isUpdating.set()
-
-        # XXX: Sporadic lag here?
-        drivesChanged = deviceChanged(recordersOnly=False)
-        # logger.debug(f'=== 0: in updateTimer tick handler after {time() - now:.4f} seconds')
-
-        # XXX: Sporadic lag here?
         for dev in self.scanThread.getDevices():
             self.recorderTimeouts[dev] = (
                 now + self.MQTT_TIMEOUT if isinstance(dev._command, MQTTCommandInterface)
                 else now + self.SERIAL_TIMEOUT
             )
-
-        # logger.debug(f'=== 1: in updateTimer tick handler after {time() - now:.4f} seconds')
-        wx.Yield()
-
-        # XXX: Rarer sporadic lag here, shorter than first
         self.recorderTimeouts = {k: v for k, v in self.recorderTimeouts.items() if now < v}
-        new = list(self.recorderTimeouts)
-        foundChanged = set(new) != set(self.recorders)
-        self.recorders = new
 
-        # logger.debug(f'=== 2: in updateTimer tick handler after {time() - now:.4f} seconds')
 
-        newStatus = {dev: getDeviceStatus(dev) for dev in self.recorders}
-        statusChanged = newStatus != self.recorderStatus or now - self.lastUpdate > 10
-        self.recorderStatus = newStatus
+    def OnUpdateTimerTick(self, _evt: Optional[wx.TimerEvent] = None):
+        """ Handle the device-scanning timer ticking.
 
-        if foundChanged:
-            # Repopulate list
-            logger.debug(f'scan {self.updateCount}: (re-)building list')
-            self.populateList()
+            todo: move most of the work where lags occur into `DeviceScanThread.scan()`?
+        """
+        # A lag in this method longer than the update interval can result in
+        # this getting called multiple times. Don't block, just bail.
+        if self.updatingDisplay.is_set():
+            logger.debug('Bailing from DeviceDialog.OnUpdateTimerTick - updatingDisplay is set')
+            return
 
-        elif drivesChanged or statusChanged:
-            # update list
-            logger.debug(f'scan {self.updateCount}: updating list')
-            self.lastUpdate = now
-            self.updateList()
+        try:
+            # logger.debug('>>> entering updateTimer tick handler')
+            self.SetCursor(wx.Cursor(wx.CURSOR_ARROWWAIT))
+            now = time()
+            self.updatingDisplay.set()
 
-        if self.updateCount == 0:
-            # First update; resize to fit list contents
-            logger.debug('first update, fitting list to width')
-            # noinspection PyUnresolvedReferences
-            self.SetSize((self.listWidth + (self.GetDialogBorder() * 4), -1))
+            # XXX: Sporadic lag here?
+            drivesChanged = deviceChanged(recordersOnly=False)
+            # logger.debug(f'=== 0: in updateTimer tick handler after {time() - now:.4f} seconds (post deviceChanged)')
+
+            wx.Yield()
+
+            # XXX: Sporadic lag here?
+            self._updateTimeouts()
+            # logger.debug(f'=== 1: in updateTimer tick handler after {time() - now:.4f} seconds (post scanThread.getDevices)')
+
+            wx.Yield()
+
+            # XXX: Rarer sporadic lag here, shorter than first
+            new = list(self.recorderTimeouts)
+            foundChanged = set(new) != set(self.recorders)
+            self.recorders = new
+            # logger.debug(f'=== 2: in updateTimer tick handler after {time() - now:.4f} seconds (post timeout filter)')
+
+            newStatus = {dev: getDeviceStatus(dev) for dev in self.recorders}
+            statusChanged = newStatus != self.recorderStatus or now - self.lastUpdate > 10
+            self.recorderStatus = newStatus
+
+            if foundChanged:
+                # Repopulate list
+                logger.debug(f'scan {self.updateCount}: (re-)building list')
+                self.populateList(skip=False)
+
+            elif drivesChanged or statusChanged:
+                # update list
+                logger.debug(f'scan {self.updateCount}: updating list')
+                self.lastUpdate = now
+                self.updateList(skip=False)
+
+            if self.updateCount == 0:
+                # First update; resize to fit list contents
+                logger.debug('first update, fitting list to width')
+                # noinspection PyUnresolvedReferences
+                self.SetSize((self.listWidth + (self.GetDialogBorder() * 4), -1))
+        finally:
+            self.updatingDisplay.clear()
+            self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
 
         self.updateCount += 1
-        # logger.debug(f'<<< exiting updateTimer tick handler after {time() - now:.4f} seconds')
+        logger.debug(f'<<< exiting updateTimer tick handler after {time() - now:.4f} seconds')
 
 
     def OnColClick(self, evt):
@@ -1143,7 +1179,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         if not recorder:
             logger.error(f'Could not get selected recorder with index {self.selected}!')
             self.okButton.Enable(False)
-        if recorder.canRecord:
+        elif recorder.canRecord:
             self.recordButton.SetToolTip(self.RECORD_ENABLED)
             self.recordButton.Enable(True)
         else:

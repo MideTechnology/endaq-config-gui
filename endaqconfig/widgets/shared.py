@@ -517,7 +517,7 @@ class BrokerField(wx.Panel):
             self.brokerList.Enable(False)
             self.brokerScanBtn.Enable(False)
 
-            self.selectedName = self.GetString()
+            # self.selectedName = self.GetString()
 
             self.brokers = {b['name']: b for b in findBrokers(None, **self.scanKwargs)}
             self.names = sorted(self.brokers)
