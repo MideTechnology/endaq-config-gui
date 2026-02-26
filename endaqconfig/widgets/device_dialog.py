@@ -175,7 +175,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # Clear cached devices
         RECORDERS.clear()
 
-        self.autoUpdate: Union[int, bool] = kwargs.pop('autoUpdate', 1000)
+        self.autoUpdate: Union[int, bool] = kwargs.pop('autoUpdate', 500)
         self.scanInterval: Union[int, bool] = kwargs.pop('scanInterval', 4000)
         self.hideClock: bool = kwargs.pop('hideClock', False)
         self.hideRecord: bool = kwargs.pop('hideRecord', True)
@@ -647,13 +647,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             :param skip: If `True` and `updatingDisplay` is set, return
                 immediately. If `False`, ignore `updatingDisplay`.
         """
-        # Bail (not block) if an update is already being handled
-        # (e.g., called from a different thread)
-        if skip and self.updatingDisplay.is_set():
-            return
-        else:
-            self.updatingDisplay.set()
-
         try:
             logger.debug('populating list')
             self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
@@ -718,8 +711,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         finally:
             self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-            if skip:
-                self.updatingDisplay.clear()
             logger.debug('populating list complete')
 
 
@@ -799,22 +790,17 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         # Bail (not block) if an update is already being handled
         # (e.g., called from a different thread)
-        if not (skip and self.updatingDisplay.is_set()):
-            self.updatingDisplay.set()
+        if skip and self.updatingDisplay.is_set():
+            logger.debug('Bailing on updateList - updatingDisplay is set')
+            return
 
+        # logger.debug('entered updateList')
+        for dev in self.recorders:
             try:
-                # logger.debug('entered updateList')
-                for dev in self.recorders:
-                    try:
-                        self.updateRow(dev)
-                    except IndexError:
-                        # Possible error in row population, or race condition
-                        logger.debug(f'IndexError updating row for device {dev.serial}')
-
-            finally:
-                # logger.debug('exiting updateList')
-                if skip:
-                    self.updatingDisplay.clear()
+                self.updateRow(dev)
+            except IndexError:
+                # Possible error in row population, or race condition
+                logger.debug(f'IndexError updating row for device {dev.serial}')
 
         checked = self.list.GetCheckedItemCount() > 0
         self.multiStreamBtn.Enable(checked)
@@ -858,7 +844,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         self.updateTimer.Stop()
         self.updateCancelled.set()
-        self.updatingDisplay.set()
 
         if self.scanThreadRunning():
             self.scanThread.stop.set()
@@ -1009,49 +994,49 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 with `endaq.device.mqtt.discovery.findBrokers()` or
                 `endaq.device.mqtt.discovery.getBroker()`.
         """
-        logger.debug(f'selected broker: {broker}')
+        try:
+            logger.debug(f'selected broker: {broker}')
+            self.pauseUpdater()
+            self.updatingDisplay.set()
 
-        if broker == self.brokerInfo:
-            return
+            if broker == self.brokerInfo:
+                return
 
-        oldConnector = self.connector
-        if oldConnector:
-            self.stopUpdater()  # XXX: Intended to clear list when changing brokres; not sure if it helps
-            if self.ownConnector:
+            oldConnector = self.connector
+            if oldConnector and self.ownConnector:
                 oldConnector.disconnect()
 
-        if broker is not None:
-            try:
-                newcon = MQTTConnector(broker['host'], broker['port'], name=broker['name'],
-                                       updateCallback=self.onMqttUpdate)
-                self.ownConnector = True
-                newcon.connect()
-                self.connector = newcon
+            if broker is not None:
+                try:
+                    newcon = MQTTConnector(broker['host'], broker['port'], name=broker['name'],
+                                           updateCallback=self.onMqttUpdate)
+                    self.ownConnector = True
+                    newcon.connect()
+                    self.connector = newcon
 
-            except Exception:
-                if oldConnector:
-                    self.connector = oldConnector
-                    self.connector.connect()
-                raise
-        else:
-            self.connector = None
+                except Exception:
+                    if oldConnector:
+                        self.connector = oldConnector
+                        self.connector.connect()
+                    raise
+            else:
+                self.connector = None
 
-        self.brokerInfo = broker
+            self.brokerInfo = broker
 
-        self.recorders = []
-        self.recorderStatus.clear()
-        self.recorderTimeouts.clear()
-        self.recordersByIndex.clear()
-        self.indicesByRecorder.clear()
+            self.recorders = []
+            self.recorderStatus.clear()
+            self.recorderTimeouts.clear()
+            self.recordersByIndex.clear()
+            self.indicesByRecorder.clear()
 
-        RECORDERS.clear()
+            RECORDERS.clear()
 
-        # XXX: Intended to clear list when changing brokers; see above
-        if oldConnector != self.connector:
+            wx.CallAfter(self.populateList)
+
+        finally:
+            self.updatingDisplay.clear()
             self.startUpdater()
-
-        wx.CallAfter(self.populateList)
-        # wx.CallAfter(self.OnUpdateTimerTick)
 
 
     # =======================================================================
@@ -1097,6 +1082,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 now + self.MQTT_TIMEOUT if isinstance(dev._command, MQTTCommandInterface)
                 else now + self.SERIAL_TIMEOUT
             )
+            wx.Yield()
         self.recorderTimeouts = {k: v for k, v in self.recorderTimeouts.items() if now < v}
 
 
@@ -1113,36 +1099,33 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         try:
             # logger.debug('>>> entering updateTimer tick handler')
-            self.SetCursor(wx.Cursor(wx.CURSOR_ARROWWAIT))
             now = time()
             self.updatingDisplay.set()
 
-            # XXX: Sporadic lag here?
             drivesChanged = deviceChanged(recordersOnly=False)
             # logger.debug(f'=== 0: in updateTimer tick handler after {time() - now:.4f} seconds (post deviceChanged)')
 
             wx.Yield()
 
-            # XXX: Sporadic lag here?
             self._updateTimeouts()
             # logger.debug(f'=== 1: in updateTimer tick handler after {time() - now:.4f} seconds (post scanThread.getDevices)')
 
             wx.Yield()
 
-            # XXX: Rarer sporadic lag here, shorter than first
             new = list(self.recorderTimeouts)
             foundChanged = set(new) != set(self.recorders)
             self.recorders = new
             # logger.debug(f'=== 2: in updateTimer tick handler after {time() - now:.4f} seconds (post timeout filter)')
 
-            newStatus = {dev: getDeviceStatus(dev) for dev in self.recorders}
+            newStatus = self.scanThread.getDeviceStatuses()
             statusChanged = newStatus != self.recorderStatus or now - self.lastUpdate > 10
             self.recorderStatus = newStatus
+            # logger.debug(f'=== 3: in updateTimer tick handler after {time() - now:.4f} seconds (post getDeviceStatus)')
 
             if foundChanged:
                 # Repopulate list
                 logger.debug(f'scan {self.updateCount}: (re-)building list')
-                self.populateList(skip=False)
+                self.populateList()
 
             elif drivesChanged or statusChanged:
                 # update list
@@ -1157,10 +1140,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 self.SetSize((self.listWidth + (self.GetDialogBorder() * 4), -1))
         finally:
             self.updatingDisplay.clear()
-            self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
 
         self.updateCount += 1
-        logger.debug(f'<<< exiting updateTimer tick handler after {time() - now:.4f} seconds')
+        # logger.debug(f'<<< exiting updateTimer tick handler after {time() - now:.4f} seconds')
 
 
     def OnColClick(self, evt):
@@ -1476,7 +1458,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.brokerList.updateList()
         else:
             self.setBroker(None)
-        self.populateList()
 
 
     def OnBrokerSelected(self, evt):

@@ -14,8 +14,6 @@ from endaq.device.response_codes import DeviceStatusCode
 
 import logging
 
-# from paho.mqtt.reasoncodes import ReasonCode
-
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -66,6 +64,8 @@ class DeviceScanThread(threading.Thread):
         self.mqttDevices = set()  # Last found MQTT devices
         self.lastMqttSerials = set()  # Serial numbers of known MQTT devices
         self.devices = set()  # All found devices, USB and MQTT
+
+        self.deviceStatus: dict[Recorder, tuple] = {}
 
         DeviceScanThread._INDEX += 1
         super().__init__(name=f'{type(self).__name__}-{DeviceScanThread._INDEX}',
@@ -172,12 +172,12 @@ class DeviceScanThread(threading.Thread):
         """ Main loop.
         """
         logger.debug(f'Starting main loop of {self.name}')
-        try:
-            while not self.stop.is_set():
-                if self.paused.is_set():
-                    sleep(0.1)
-                    continue
+        while not self.stop.is_set():
+            if self.paused.is_set():
+                sleep(0.1)
+                continue
 
+            try:
                 now = time()
                 if (not self.interval
                         or now - self.lastScan > self.interval
@@ -185,17 +185,26 @@ class DeviceScanThread(threading.Thread):
                     self.scan()
 
                 if not self.interval:
-                    return
+                    # One-off scan
+                    break
 
-                sleep(1)
-        finally:
-            logger.debug(f'Exiting main loop of {self.name}')
+            except Exception as err:
+                logger.error(f'Error in DeviceScanThread loop: {err!r}',
+                             stack_info=True)
+
+            sleep(1)
+        logger.debug(f'Exiting main loop of {self.name}')
 
 
     def getDevices(self) -> List[Recorder]:
         """ Get a list of all active devices.
         """
-        return sorted(self.devices, key=lambda x: x.serialInt)
+        devs = self.devices.copy()
+        return sorted(devs, key=lambda x: x.serialInt)
+
+
+    def getDeviceStatuses(self):
+        return {dev: getDeviceStatus(dev) for dev in self.devices.copy()}
 
 
 # ===========================================================================
@@ -320,8 +329,9 @@ def getDeviceStatus(device: Recorder) \
     bat = cmd._battery[1]
     if isinstance(bat, dict):
         bat = tuple(bat.values())
-    return (bat, cmd.status[1:], device.path, cmd.lockId[1],
-            device.command.available, bool(device._calibration))
+    # NOTE: cmd.available occasionally lags severely
+    return (bat, cmd.status[1:], device.path, cmd.lockId[1], #cmd.available,
+            bool(device._calibration))
 
 
 def isOnline(device: Recorder) -> bool:
