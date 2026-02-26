@@ -19,7 +19,8 @@ from wx.lib.agw import ultimatelistctrl as ULC
 import wx.lib.filebrowsebutton as FBB
 
 from endaq.device import (Recorder, RECORDERS, UnsupportedFeature,
-                          CommandError, DeviceError, deviceChanged)
+                          CommandError, DeviceError, deviceChanged,
+                          _module_busy)
 from endaq.device.base import os_specific
 # from endaq.device.response_codes import DeviceStatusCode
 from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface, MQTTConnector
@@ -175,7 +176,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # Clear cached devices
         RECORDERS.clear()
 
-        self.autoUpdate: Union[int, bool] = kwargs.pop('autoUpdate', 500)
+        self.autoUpdate: Union[int, bool] = kwargs.pop('autoUpdate', 750)
         self.scanInterval: Union[int, bool] = kwargs.pop('scanInterval', 4000)
         self.hideClock: bool = kwargs.pop('hideClock', False)
         self.hideRecord: bool = kwargs.pop('hideRecord', True)
@@ -987,6 +988,24 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.startThreads('start streaming', streamers)
 
 
+    def clearRecorderCache(self):
+        try:
+            self.pauseUpdater()
+            if self.scanThreadRunning():
+                self.scanThread.clearCache()
+            with _module_busy:
+                del self.recorders[:]
+                self.recorders = [dev for dev in self.recorders
+                                  if not isinstance(dev._command, MQTTCommandInterface)]
+                self.recordersByIndex.clear()
+                self.indicesByRecorder.clear()
+                self.recorderStatus.clear()
+                self.recorderTimeouts.clear()
+                # RECORDERS.clear()
+        finally:
+            self.startUpdater()
+
+
     def setBroker(self, broker: Optional[dict]):
         """ Set the broker to use.
 
@@ -998,9 +1017,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             logger.debug(f'selected broker: {broker}')
             self.pauseUpdater()
             self.updatingDisplay.set()
-
-            if broker == self.brokerInfo:
-                return
 
             oldConnector = self.connector
             if oldConnector and self.ownConnector:
@@ -1023,20 +1039,15 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 self.connector = None
 
             self.brokerInfo = broker
-
-            self.recorders = []
-            self.recorderStatus.clear()
-            self.recorderTimeouts.clear()
-            self.recordersByIndex.clear()
-            self.indicesByRecorder.clear()
-
-            RECORDERS.clear()
-
-            wx.CallAfter(self.populateList)
+            self.clearRecorderCache()
+            self.recorders = [dev for dev in self.recorders
+                              if not isinstance(dev._command, MQTTCommandInterface)]
 
         finally:
             self.updatingDisplay.clear()
             self.startUpdater()
+
+        wx.CallAfter(self.populateList)
 
 
     # =======================================================================
@@ -1057,6 +1068,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """ Callback function executed when the `MQTTConnector` receives
             a state update from the Device Manager.
         """
+        logger.debug(f'onMqttUpdate({data!r}, {connector!r})')
         if self.scanThreadRunning() and connector == self.connector:
             self.scanThread.onUpdate(data)
 
@@ -1098,29 +1110,29 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             return
 
         try:
-            # logger.debug('>>> entering updateTimer tick handler')
+            logger.debug('>>> entering updateTimer tick handler')
             now = time()
             self.updatingDisplay.set()
 
             drivesChanged = deviceChanged(recordersOnly=False)
-            # logger.debug(f'=== 0: in updateTimer tick handler after {time() - now:.4f} seconds (post deviceChanged)')
+            logger.debug(f'=== 0: in updateTimer tick handler after {time() - now:.4f} seconds (post deviceChanged)')
 
-            wx.Yield()
+            # wx.Yield()
 
             self._updateTimeouts()
-            # logger.debug(f'=== 1: in updateTimer tick handler after {time() - now:.4f} seconds (post scanThread.getDevices)')
+            logger.debug(f'=== 1: in updateTimer tick handler after {time() - now:.4f} seconds (post scanThread.getDevices)')
 
-            wx.Yield()
+            # wx.Yield()
 
             new = list(self.recorderTimeouts)
             foundChanged = set(new) != set(self.recorders)
             self.recorders = new
-            # logger.debug(f'=== 2: in updateTimer tick handler after {time() - now:.4f} seconds (post timeout filter)')
+            logger.debug(f'=== 2: in updateTimer tick handler after {time() - now:.4f} seconds (post timeout filter)')
 
             newStatus = self.scanThread.getDeviceStatuses()
             statusChanged = newStatus != self.recorderStatus or now - self.lastUpdate > 10
             self.recorderStatus = newStatus
-            # logger.debug(f'=== 3: in updateTimer tick handler after {time() - now:.4f} seconds (post getDeviceStatus)')
+            logger.debug(f'=== 3: in updateTimer tick handler after {time() - now:.4f} seconds (post getDeviceStatus)')
 
             if foundChanged:
                 # Repopulate list
@@ -1142,7 +1154,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.updatingDisplay.clear()
 
         self.updateCount += 1
-        # logger.debug(f'<<< exiting updateTimer tick handler after {time() - now:.4f} seconds')
+        logger.debug(f'<<< exiting updateTimer tick handler after {time() - now:.4f} seconds')
 
 
     def OnColClick(self, evt):
@@ -1153,6 +1165,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnItemSelected(self, evt):
         """ Handle list item (row) selection.
         """
+        logger.debug('OnItemSelected')
         self.selected = self.list.GetItemData(evt.Index)
         if self.listMsgs[self.selected] is not None:
             self.infoText.SetLabel(self.listMsgs[self.selected])
@@ -1456,6 +1469,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.brokerList.Show(checked)
         if checked:
             self.brokerList.updateList()
+            self.brokerList.postSelectionEvent()
         else:
             self.setBroker(None)
 
@@ -1464,6 +1478,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """ Handle an MQTT broker selection.
         """
         info = evt.broker
+        logger.debug(f'OnSetBrokerSelected() -> {info}')
         if not info:
             logger.debug("No broker info in selection event, bad broker address?")
             return

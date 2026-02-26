@@ -75,6 +75,13 @@ class DeviceScanThread(threading.Thread):
         # logger.debug(f'Created {self.name}')
 
 
+    def clearCache(self):
+        self.deviceStatus.clear()
+        self.mqttDevices.clear()
+        self.lastMqttSerials.clear()
+        self.devices.clear()
+
+
     def onUpdate(self, update: dict):
         """
         Called by the `MQTTConnector` when an update arrives. The parent
@@ -155,7 +162,7 @@ class DeviceScanThread(threading.Thread):
         with self.updating:
             # logger.debug('Starting updateDeviceStatus threads')
             # XXX: Skip update for timed out devices?
-            for dev in self.devices:
+            for dev in self.devices.copy():
                 if not isOnline(dev):
                     continue
                 elif isSleeping(dev):
@@ -188,9 +195,8 @@ class DeviceScanThread(threading.Thread):
                     # One-off scan
                     break
 
-            except Exception as err:
-                logger.error(f'Error in DeviceScanThread loop: {err!r}',
-                             stack_info=True)
+            except Exception:
+                logger.exception('Error in DeviceScanThread loop, continuing')
 
             sleep(1)
         logger.debug(f'Exiting main loop of {self.name}')

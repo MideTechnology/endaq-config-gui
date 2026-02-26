@@ -370,7 +370,7 @@ class DeviceToolTip(wx.Frame):
         return self.Show(False)
 
 
-    def OnUpdateTimerTick(self, evt):
+    def OnUpdateTimerTick(self, _evt):
         """ Update the tooltip content when the timer expires.
         """
         # logger.debug('DeviceToolTip.OnUpdateTimerTick')
@@ -438,6 +438,249 @@ def parseIP(val: str,
 #
 # ===========================================================================
 
+# class _BrokerField(wx.Panel):
+#     """
+#     A widget for selecting an MQTT broker, either from advertising or
+#     a manually-entered IP address.
+#
+#     """
+#
+#     # Background/foreground color of selection field if the broker
+#     # name/address is invalid. `None` means that color doesn't change.
+#     BAD_COLOR = (wx.Colour(255, 200, 200), None)
+#
+#
+#     def __init__(self, *args, **kwargs):
+#         """
+#         A widget for selecting an MQTT broker, either from advertising or
+#         a manually-entered IP address. Takes standard `wx.Panel` arguments,
+#         plus:
+#
+#         :keyword selectedName: The default broker name/address
+#         :keyword validate: If `True`, check that manually-entered IP addresses
+#             are correctly formed.
+#         :keyword verify: If `True`, test connecting the selected broker.
+#         :keyword verifyTimeout: The time to wait before declaring verification failed.
+#         :keyword scantime: The minimum time (in seconds) to scan for brokers. If
+#             any brokers are discovered in this time, they will be returned.
+#         :keyword timeout: The maximum time (in seconds) to scan for brokers, if
+#             none were found in `scantime`.
+#         :keyword callback: A function to call repeatedly while scanning. If the
+#             callback returns `True`, the wait for a response will be cancelled.
+#             The callback function should require no arguments.
+#         """
+#         self.selectedName = kwargs.pop('default', None)
+#         self.validate = kwargs.pop('validate', True)
+#         self.verify = kwargs.pop('verify', False)
+#         self.verifyTimeout = kwargs.pop('verifyTimeout', 0.25)
+#
+#         self.scanKwargs = {}
+#         for k in ('scanTime', 'timeout', 'callback'):
+#             if k in kwargs:
+#                 self.scanKwargs[k] = kwargs.pop(k)
+#
+#         super().__init__(*args, **kwargs)
+#
+#         sizer = wx.BoxSizer(wx.HORIZONTAL)
+#         self.brokerText = wx.StaticText(self, -1, "Broker:")
+#         sizer.Add(self.brokerText, 0, wx.ALL, 4)
+#         self.brokerList = wx.ComboBox(self, style=wx.CB_DROPDOWN | wx.TE_PROCESS_ENTER)
+#         sizer.Add(self.brokerList, 4, wx.EXPAND)
+#         self.brokerScanBtn = wx.Button(self, -1, "Rescan")
+#         sizer.Add(self.brokerScanBtn, 1, wx.EXPAND)
+#         self.SetSizer(sizer)
+#
+#         self.brokers = {}  # Broker info dicts keyed by broker name
+#         self.names = []  # Broker names (sorted keys of `brokers`)
+#         self.tooltip = ''
+#
+#         self.defaultColors = (self.brokerList.GetBackgroundColour(),
+#                               self.brokerList.GetForegroundColour())
+#
+#         self.updateList()
+#         if self.selectedName and self.selectedName not in self.brokers:
+#             self.brokerList.SetValue(self.selectedName)
+#             self.validateSelection()
+#         else:
+#             self.selectedName = self.GetString()
+#
+#         self.Bind(wx.EVT_BUTTON, self.OnBrokerScan, self.brokerScanBtn)
+#         self.Bind(wx.EVT_COMBOBOX, self.OnBrokerSelection, self.brokerList)
+#         self.Bind(wx.EVT_TEXT_ENTER, self.OnBrokerListEntered, self.brokerList)
+#
+#
+#     def updateList(self):
+#         """ Scan for mDNS advertised brokers and update the display.
+#         """
+#         try:
+#             self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
+#             self.brokerList.Enable(False)
+#             self.brokerScanBtn.Enable(False)
+#
+#             # self.selectedName = self.GetString()
+#
+#             self.brokers = {b['name']: b for b in findBrokers(None, **self.scanKwargs)}
+#             self.names = sorted(self.brokers)
+#
+#             if self.names and not self.selectedName:
+#                 self.selectedName = self.names[0]
+#
+#             self.brokerList.SetItems(self.names)
+#             if self.selectedName in self.brokers:
+#                 self.brokerList.SetSelection(self.names.index(self.selectedName))
+#                 self._setSelectedToolTip()
+#             else:
+#                 self.brokerList.SetValue(self.selectedName)
+#                 self.validateSelection()
+#
+#         finally:
+#             self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+#             self.brokerList.Enable(True)
+#             self.brokerScanBtn.Enable(True)
+#
+#
+#     def _setListColor(self, color):
+#         """ Convenience method to set the list back/fore colors.
+#         """
+#         bg, fg = color
+#         self.brokerList.SetBackgroundColour(bg or self.defaultColors[0])
+#         self.brokerList.SetForegroundColour(fg or self.defaultColors[1])
+#
+#
+#     def _setSelectedToolTip(self):
+#         """ Update the list tooktip for the currently selected broker name.
+#         """
+#         selected = self.GetString()
+#         if not selected:
+#             self.brokerList.SetToolTip('')
+#             return
+#
+#         info = self.brokers.get(selected)
+#         if not info:
+#             logger.error(f'No broker info for {info!r} (should not happen!)')
+#             self.brokerList.SetToolTip('')
+#             return
+#
+#         self.brokerList.SetToolTip("{name}.{serviceType}\nIP {host[0]} port {port}".format(**info))
+#
+#
+#     def validateSelection(self) -> bool:
+#         """ Check that the currently selected (or typed) broker IP address
+#             is valid and update the tooltip. Bad values are indicated by
+#             the list background color.
+#
+#             :return: True if valid, False otherwise.
+#         """
+#         if not self.validate:
+#             return True
+#
+#         txt = self.GetString()
+#         try:
+#             ip, port = parseIP(txt, check=False)
+#         except ValueError:
+#             self._setListColor(self.BAD_COLOR)
+#             self.brokerList.SetToolTip('Invalid IP address')
+#             return False
+#
+#         if self.verify:
+#             try:
+#                 self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
+#                 self.brokerList.Enable(False)
+#                 self.brokerScanBtn.Enable(False)
+#                 parseIP(txt, check=False)
+#             except ValueError:
+#                 self._setListColor(self.BAD_COLOR)
+#                 self.brokerList.SetToolTip('Could not connect to address')
+#                 return False
+#             finally:
+#                 self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+#                 self.brokerList.Enable(True)
+#                 self.brokerScanBtn.Enable(True)
+#
+#         if ip.lower() == 'localhost':
+#             ip = getMyIP()
+#
+#         self.brokerList.SetToolTip(f'IP {ip} port {port}')
+#         self._setListColor(self.defaultColors)
+#         return True
+#
+#
+#     def postSelectionEvent(self):
+#         """ Post a broker selection event to the main window.
+#         """
+#         logger.debug('Posting broker change')
+#
+#         # TODO: Make sure this works when called through enDAQ Lab, etc.
+#         dest = wx.GetActiveWindow()
+#         wx.PostEvent(dest, EvtBrokerUpdate(broker=self.GetValue()))
+#
+#
+#     def OnBrokerScan(self, _evt):
+#         """ Handle the 'Rescan' button event.
+#         """
+#         logger.debug('OnBrokerScan')
+#         self.selectedName = self.GetString()
+#         self.updateList()
+#
+#
+#     def OnBrokerSelection(self, _evt):
+#         """ Handle broker selection.
+#         """
+#         txt = self.brokerList.GetValue()
+#         current = self.GetString()
+#         if self.selectedName != current:
+#             self.postSelectionEvent()
+#             self.selectedName = current
+#             self._setSelectedToolTip()
+#         else:
+#             logger.debug('Same broker selected, not posting event')
+#
+#
+#     def OnBrokerListEntered(self, _evt):
+#         """ Handle 'enter' being pressed in the list text field.
+#         """
+#         name = self.GetString()
+#         if not name:
+#             self.brokerList.SetValue(self.selectedName)
+#         else:
+#             self.selectedName = name
+#             if self.validateSelection():
+#                 self.postSelectionEvent()
+#
+#
+#     def GetValue(self) -> Dict[str, Any]:
+#         """ Get the info dictionary for the selected broker.
+#         """
+#         selected = self.GetString()
+#         if selected in self.brokers:
+#             return self.brokers.get(selected)
+#         else:
+#             try:
+#                 ip, port = parseIP(self.selectedName, check=False)
+#                 if ip.lower() == 'localhost':
+#                     ip = getMyIP()
+#                 return {'name': selected,
+#                         'serviceType': '_endaq._tcp.local.',
+#                         'host': [ip],
+#                         'port': port,
+#                         'properties': {}}
+#             except ValueError:
+#                 return None
+#
+#
+#     def GetString(self) -> str:
+#         """ Get the currently selected broker name/IP.
+#         """
+#         return self.brokerList.GetValue().strip()
+#
+#
+#     def IsValid(self) -> bool:
+#         """ Is the currently-selected broker name/address valid?
+#         """
+#         broker = self.GetValue()
+#         return bool(broker)
+
+
 class BrokerField(wx.Panel):
     """
     A widget for selecting an MQTT broker, either from advertising or
@@ -448,6 +691,9 @@ class BrokerField(wx.Panel):
     # Background/foreground color of selection field if the broker
     # name/address is invalid. `None` means that color doesn't change.
     BAD_COLOR = (wx.Colour(255, 200, 200), None)
+
+    ID_USER_BROKER = wx.NewIdRef()
+    ID_ADD_BROKER = wx.NewIdRef()
 
 
     def __init__(self, *args, **kwargs):
@@ -474,6 +720,11 @@ class BrokerField(wx.Panel):
         self.verify = kwargs.pop('verify', False)
         self.verifyTimeout = kwargs.pop('verifyTimeout', 0.25)
 
+        try:
+            self.userIp = parseIP(self.selectedName, check=False)
+        except ValueError:
+            self.userIp = None
+
         self.scanKwargs = {}
         for k in ('scanTime', 'timeout', 'callback'):
             if k in kwargs:
@@ -481,32 +732,43 @@ class BrokerField(wx.Panel):
 
         super().__init__(*args, **kwargs)
 
+        # Supposedly, only Windows and GTK support text justification in buttons.
+        # Only add left padding if text aligned left.
+        self._justified = any(x in wx.PlatformInfo for x in ('__WXMSW__', '__WXGTK__'))
+
         sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.brokerText = wx.StaticText(self, -1, "Broker:")
         sizer.Add(self.brokerText, 0, wx.ALL, 4)
-        self.brokerList = wx.ComboBox(self, style=wx.CB_DROPDOWN | wx.TE_PROCESS_ENTER)
-        sizer.Add(self.brokerList, 4, wx.EXPAND)
+        self.brokerBtn = wx.Button(self, label='', style=wx.BU_LEFT)
+        sizer.Add(self.brokerBtn, 4, wx.EXPAND)
         self.brokerScanBtn = wx.Button(self, -1, "Rescan")
         sizer.Add(self.brokerScanBtn, 1, wx.EXPAND)
         self.SetSizer(sizer)
 
-        self.brokers = {}  # Broker info dicts keyed by broker name
-        self.names = []  # Broker names (sorted keys of `brokers`)
-        self.tooltip = ''
+        self.brokers: dict[str, dict] = {}  # Broker info dicts keyed by broker name
+        self.names: list[str] = []  # Broker names (sorted keys of `brokers`)
+        self.tooltip: str = ''
 
-        self.defaultColors = (self.brokerList.GetBackgroundColour(),
-                              self.brokerList.GetForegroundColour())
+        self.brokersByItemID = {}
+        self.itemIDsByBroker = {}
+
+        self.defaultColors = (self.brokerBtn.GetBackgroundColour(),
+                              self.brokerBtn.GetForegroundColour())
 
         self.updateList()
-        if self.selectedName and self.selectedName not in self.brokers:
-            self.brokerList.SetValue(self.selectedName)
-            self.validateSelection()
-        else:
-            self.selectedName = self.GetString()
 
         self.Bind(wx.EVT_BUTTON, self.OnBrokerScan, self.brokerScanBtn)
-        self.Bind(wx.EVT_COMBOBOX, self.OnBrokerSelection, self.brokerList)
-        self.Bind(wx.EVT_TEXT_ENTER, self.OnBrokerListEntered, self.brokerList)
+        self.Bind(wx.EVT_BUTTON, self.OnBrokerClick, self.brokerBtn)
+        self.Bind(wx.EVT_MENU, self.OnBrokerSelection)
+
+
+    def setSelectedName(self, name):
+        if self.names and not name:
+            name = self.names[0]
+        self.selectedName = name
+        prefix = '   ' if self._justified else ''
+        self.brokerBtn.SetLabel(f'{prefix}{self.selectedName}')
+        self._setSelectedToolTip()
 
 
     def updateList(self):
@@ -514,37 +776,20 @@ class BrokerField(wx.Panel):
         """
         try:
             self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
-            self.brokerList.Enable(False)
+            self.brokerBtn.Enable(False)
             self.brokerScanBtn.Enable(False)
 
-            # self.selectedName = self.GetString()
+            name = self.GetString()
 
             self.brokers = {b['name']: b for b in findBrokers(None, **self.scanKwargs)}
             self.names = sorted(self.brokers)
 
-            if self.names and not self.selectedName:
-                self.selectedName = self.names[0]
-
-            self.brokerList.SetItems(self.names)
-            if self.selectedName in self.names:
-                self.brokerList.SetSelection(self.names.index(self.selectedName))
-                self._setSelectedToolTip()
-            else:
-                self.brokerList.SetValue(self.selectedName)
-                self.validateSelection()
+            self.setSelectedName(name)
 
         finally:
             self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-            self.brokerList.Enable(True)
+            self.brokerBtn.Enable(True)
             self.brokerScanBtn.Enable(True)
-
-
-    def _setListColor(self, color):
-        """ Convenience method to set the list back/fore colors.
-        """
-        bg, fg = color
-        self.brokerList.SetBackgroundColour(bg or self.defaultColors[0])
-        self.brokerList.SetForegroundColour(fg or self.defaultColors[1])
 
 
     def _setSelectedToolTip(self):
@@ -552,57 +797,16 @@ class BrokerField(wx.Panel):
         """
         selected = self.GetString()
         if not selected:
-            self.brokerList.SetToolTip('')
+            self.brokerBtn.SetToolTip('')
             return
 
         info = self.brokers.get(selected)
         if not info:
             logger.error(f'No broker info for {info!r} (should not happen!)')
-            self.brokerList.SetToolTip('')
+            self.brokerBtn.SetToolTip('')
             return
 
-        self.brokerList.SetToolTip("{name}.{serviceType}\nIP {host[0]} port {port}".format(**info))
-
-
-    def validateSelection(self) -> bool:
-        """ Check that the currently selected (or typed) broker IP address
-            is valid and update the tooltip. Bad values are indicated by
-            the list background color.
-
-            :return: True if valid, False otherwise.
-        """
-        if not self.validate:
-            return True
-
-        txt = self.GetString()
-        try:
-            ip, port = parseIP(txt, check=False)
-        except ValueError:
-            self._setListColor(self.BAD_COLOR)
-            self.brokerList.SetToolTip('Invalid IP address')
-            return False
-
-        if self.verify:
-            try:
-                self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
-                self.brokerList.Enable(False)
-                self.brokerScanBtn.Enable(False)
-                parseIP(txt, check=False)
-            except ValueError:
-                self._setListColor(self.BAD_COLOR)
-                self.brokerList.SetToolTip('Could not connect to address')
-                return False
-            finally:
-                self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-                self.brokerList.Enable(True)
-                self.brokerScanBtn.Enable(True)
-
-        if ip.lower() == 'localhost':
-            ip = getMyIP()
-
-        self.brokerList.SetToolTip(f'IP {ip} port {port}')
-        self._setListColor(self.defaultColors)
-        return True
+        self.brokerBtn.SetToolTip("{name}.{serviceType}\nIP {host[0]} port {port}".format(**info))
 
 
     def postSelectionEvent(self):
@@ -623,28 +827,31 @@ class BrokerField(wx.Panel):
         self.updateList()
 
 
-    def OnBrokerSelection(self, _evt):
+    def OnBrokerClick(self, _evt):
+        """ Handle clicking of broker field. """
+        menu = wx.Menu()
+        self.itemIDsByBroker.clear()
+        for broker in self.names:
+            mid = self.itemIDsByBroker.get(broker, -1)
+            item = menu.AppendRadioItem(mid, broker)
+            item.Check(broker == self.selectedName)
+            self.brokersByItemID[item.GetId()] = broker
+            self.itemIDsByBroker[broker] = item.GetId()
+
+        # menu.AppendSeparator()
+        # menu.AppendRadioItem(self.ID_USER_BROKER, 'IP Address:')
+        self.PopupMenu(menu)
+        menu.Destroy()
+
+
+    def OnBrokerSelection(self, evt):
         """ Handle broker selection.
         """
-        txt = self.brokerList.GetValue()
-        current = self.GetString()
-        if self.selectedName != current:
-            self.postSelectionEvent()
-            self.selectedName = current
-            self._setSelectedToolTip()
-        else:
-            logger.debug('Same broker selected, not posting event')
-
-
-    def OnBrokerListEntered(self, _evt):
-        """ Handle 'enter' being pressed in the list text field.
-        """
-        name = self.GetString()
-        if not name:
-            self.brokerList.SetValue(self.selectedName)
-        else:
-            self.selectedName = name
-            if self.validateSelection():
+        mid = evt.GetId()
+        if mid in self.brokersByItemID:
+            txt = self.brokersByItemID[mid]
+            if txt != self.selectedName:
+                self.setSelectedName(txt)
                 self.postSelectionEvent()
 
 
@@ -671,7 +878,7 @@ class BrokerField(wx.Panel):
     def GetString(self) -> str:
         """ Get the currently selected broker name/IP.
         """
-        return self.brokerList.GetValue().strip()
+        return self.selectedName
 
 
     def IsValid(self) -> bool:
