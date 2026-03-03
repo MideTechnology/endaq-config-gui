@@ -14,6 +14,7 @@ from endaq.device import CommandError, UnsupportedFeature, Recorder
 from endaq.device.command_interfaces import SerialCommandInterface
 
 from . import battery_icons
+from . import icons
 from .events import EvtConfig, EvtRecord, EvtStream, EvtLockDevice, EvtBlink
 from ..common import deviceString
 from .threads import isOnline
@@ -147,10 +148,12 @@ class NewControlButtons(wx.Panel):
         """
         if cls.ICONS is None:
 
-            filename = os.path.join(os.path.dirname(__file__), 'control_buttons.png')
-            img = wx.Image(filename, wx.BITMAP_TYPE_PNG)
+            # filename = os.path.join(os.path.dirname(__file__), 'control_buttons.png')
+            # img = wx.Image(filename, wx.BITMAP_TYPE_PNG)
 
-            numIcons = 7
+            img = icons.control_buttons.GetImage()
+
+            numIcons = 8
             size = img.GetWidth() // numIcons
             cls.ICONS = []
             for col in range(numIcons):
@@ -166,7 +169,7 @@ class NewControlButtons(wx.Panel):
         """
         self._loadImages()
         (self.configIcons, self.recordIcons, self.stopIcons, self.streamIcons,
-         self.streamingIcons, self.lockIcons, self.lockedIcons) = self.ICONS
+         self.streamingIcons, self.lockIcons, self.lockedIcons, self.blinkIcons) = self.ICONS
 
         size = self.configIcons[0].GetSize()
         style = wx.NO_BORDER | wx.BU_EXACTFIT
@@ -346,7 +349,7 @@ class ListContextMenu(wx.Menu):
         self.AppendSeparator()
         lock = self._addMI(f"Lock {devstr}", self.OnLock, icons[6][0])
         self.AppendSeparator()
-        blink = self._addMI("Blink Recorder LEDs", self.OnBlink)
+        blink = self._addMI("Blink Recorder LEDs", self.OnBlink, icons[7][0])
 
         locked, mine = self.device.command.isLocked()
         anothers = locked and not mine

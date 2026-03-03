@@ -57,7 +57,6 @@ class DeviceScanThread(threading.Thread):
         self.updateCancelled = threading.Event()
 
         self.updating = threading.RLock()
-        # self.updating = DebugRLock("DeviceScanThread")
 
         self.lastScan: float = 0.0
         self.lastMqttGet: float = 0.0  # last time parent.connector.getDevices() called
@@ -76,6 +75,8 @@ class DeviceScanThread(threading.Thread):
 
 
     def clearCache(self):
+        """ Clear cached recorders and related data.
+        """
         self.deviceStatus.clear()
         self.mqttDevices.clear()
         self.lastMqttSerials.clear()

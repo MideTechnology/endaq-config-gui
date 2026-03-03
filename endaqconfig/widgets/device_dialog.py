@@ -32,7 +32,7 @@ from .controls import (_attribFormatter, populateStatusColumn, populateButtonCol
                        STATUS_DISPLAY)
 from .events import (EvtRecord, EVT_RECORD, EVT_BROKER_UPDATE,
                      EVT_STREAM, EVT_CONFIG, EVT_LOCK_DEVICE, EVT_BLINK)
-from .threads import (DeviceScanThread, DeviceCommandThread, getDeviceStatus,
+from .threads import (DeviceScanThread, DeviceCommandThread,
                       isOnline, isSleeping, isGateway)
 from .shared import DeviceToolTip, BrokerField
 
@@ -51,9 +51,6 @@ SPACE_WARN_MB = SPACE_MIN_MB * 4
 # warning is displayed.
 CAL_WARN_DAYS = datetime.timedelta(days=120)
 DEV_WARN_DAYS = datetime.timedelta(days=182)
-
-# XXX: REMOVE
-# from .debug_lock import DebugRLock
 
 DEFAULT_BROKER = "DRS Test Broker"  # TODO: REMOVE/CHANGE
 
@@ -215,30 +212,25 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         sc.SizedDialog.__init__(self, *args, **kwargs)
 
-        if icon or icon is None:
-            icon = icon or icons.icon.GetIcon()
-            self.SetIcon(icon)
+        icon = icon or icons.icon.GetIcon()
+        self.SetIcon(icon)
 
         self.updateTimer = wx.Timer(self)
-        self.updateCount = 0
+        self.updateCount: int = 0
         self.updateCancelled = threading.Event()  # Use as callback for getBatteryStatus/ping commands
-        self.scanThread: DeviceScanThread = None
+        self.scanThread: Optional[DeviceScanThread] = None
 
         self.updatingDisplay = threading.Event()  # Set while updating, so other calls skip.
-        self.menuOpen = threading.Event()
+        self.menuOpen = threading.Event()  # Set while context menu open, preventing list updates.
 
         self.recorders: List[Recorder] = []  # The currently-displayed recorders.
         self.recorderStatus: Dict[Recorder, Tuple] = {}  # Recorder status, battery state, and path, keyed by `Recorder`
         self.recorderTimeouts: Dict[Recorder, float] = {}  # Time to remove a recorder from `recorderStatus` if not in `getDevices()`
         self.recordersByIndex: Dict[int, Recorder] = {}  # `Recorder` instances keyed by list index.
         self.indicesByRecorder: Dict[Recorder, int] = {}  # List index keyed by `Recorder`
-
-        # self.updatingRecorders = threading.RLock()  # To avoid simultaneous dict changes
-        # self.updatingRecorders = DebugRLock('updatingRecorders')  # XXX: REMOVE & RESTORE PREV. LINE
-
         self.checkedRecorders: set[Recorder] = set()  # Checked items/recorders (to keep checks after list updates)
 
-        self.brokerInfo = None  # Selected MQTT broker's mDNS info
+        self.brokerInfo: Optional[dict] = None  # Selected MQTT broker's mDNS info
 
         # TODO: Better column collection (assemble piecemeal based on parameters)
         cols = self.ADVANCED_COLUMNS if self.showAdvanced else self.COLUMNS
@@ -642,11 +634,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.minWidths.append(width + 4)
 
 
-    def populateList(self, skip: bool = True):
+    def populateList(self):
         """ Find recorders and add them to the list.
-
-            :param skip: If `True` and `updatingDisplay` is set, return
-                immediately. If `False`, ignore `updatingDisplay`.
         """
         try:
             logger.debug('populating list')
@@ -989,12 +978,14 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     def clearRecorderCache(self):
+        """ Clear cached recorder information and remove remote recorders
+            from the caches.
+        """
         try:
             self.pauseUpdater()
             if self.scanThreadRunning():
                 self.scanThread.clearCache()
             with _module_busy:
-                del self.recorders[:]
                 self.recorders = [dev for dev in self.recorders
                                   if not isinstance(dev._command, MQTTCommandInterface)]
                 self.recordersByIndex.clear()
@@ -1064,7 +1055,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 and not self.scanThreadRunning())
 
 
-    def onMqttUpdate(self, data, connector=None):
+    def onMqttUpdate(self, data, connector: Optional[MQTTConnector] = None):
         """ Callback function executed when the `MQTTConnector` receives
             a state update from the Device Manager.
         """
@@ -1073,11 +1064,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.scanThread.onUpdate(data)
 
 
+    # noinspection PyUnusedLocal
     def onMqttConnect(self, client, userdata, disconnect_flags, reason_code, properties):
         # TODO: Implement onMqttConnect (if needed)
         logger.debug('Called DeviceDialog.onMqttConnect')
 
 
+    # noinspection PyUnusedLocal
     def onMqttDisconnect(self, client, userdata, disconnect_flags, reason_code, properties):
         # TODO: Remove MQTT devices from display
         logger.debug(f'Called DeviceDialog.onMqttDisconnect, {reason_code.is_failure=}')
@@ -1110,29 +1103,29 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             return
 
         try:
-            logger.debug('>>> entering updateTimer tick handler')
+            # logger.debug('>>> entering updateTimer tick handler')
             now = time()
             self.updatingDisplay.set()
 
             drivesChanged = deviceChanged(recordersOnly=False)
-            logger.debug(f'=== 0: in updateTimer tick handler after {time() - now:.4f} seconds (post deviceChanged)')
+            # logger.debug(f'=== 0: in updateTimer tick handler after {time() - now:.4f} seconds (post deviceChanged)')
 
             # wx.Yield()
 
             self._updateTimeouts()
-            logger.debug(f'=== 1: in updateTimer tick handler after {time() - now:.4f} seconds (post scanThread.getDevices)')
+            # logger.debug(f'=== 1: in updateTimer tick handler after {time() - now:.4f} seconds (post scanThread.getDevices)')
 
             # wx.Yield()
 
             new = list(self.recorderTimeouts)
             foundChanged = set(new) != set(self.recorders)
             self.recorders = new
-            logger.debug(f'=== 2: in updateTimer tick handler after {time() - now:.4f} seconds (post timeout filter)')
+            # logger.debug(f'=== 2: in updateTimer tick handler after {time() - now:.4f} seconds (post timeout filter)')
 
             newStatus = self.scanThread.getDeviceStatuses()
             statusChanged = newStatus != self.recorderStatus or now - self.lastUpdate > 10
             self.recorderStatus = newStatus
-            logger.debug(f'=== 3: in updateTimer tick handler after {time() - now:.4f} seconds (post getDeviceStatus)')
+            # logger.debug(f'=== 3: in updateTimer tick handler after {time() - now:.4f} seconds (post getDeviceStatus)')
 
             if foundChanged:
                 # Repopulate list
@@ -1154,7 +1147,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.updatingDisplay.clear()
 
         self.updateCount += 1
-        logger.debug(f'<<< exiting updateTimer tick handler after {time() - now:.4f} seconds')
+        # logger.debug(f'<<< exiting updateTimer tick handler after {time() - now:.4f} seconds')
 
 
     def OnColClick(self, evt):

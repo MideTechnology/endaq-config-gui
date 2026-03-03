@@ -82,12 +82,12 @@ class DateTimeCtrl(wx.Panel):
         self.timeCtrl.ChangeValue(value)
 
 
-    def GetValue(self):
+    def GetValue(self) -> wx.DateTime:
         """ Get the value as a `wx.DateTime` object.
 
             :rtype: `wx.DateTime`
         """
-        t = self.timeCtrl.GetValue(as_wxDateTime=True)
+        t: wx.DateTime = self.timeCtrl.GetValue(as_wxDateTime=True)
         dt = self.dateCtrl.GetValue()
         dt.SetHour(t.GetHour())
         dt.SetMinute(t.GetMinute())
@@ -95,15 +95,14 @@ class DateTimeCtrl(wx.Panel):
         return dt
 
 
-# XXX: REMOVE THIS ONCE `wx.DateTime.FromTimeT()` IS FIXED!
-#  Issue: https://github.com/wxWidgets/Phoenix/issues/1910
-#  Issue closed, but fixed version not yet released as of 2021-04-12.
-def wx_DateTime_FromTimeT(timet):
-    """ Construct a DateTime from a C time_t value, the number of seconds since the epoch.
-        THIS IS A WORKAROUND HACK, TO BE REMOVED LATER!
+def wx_DateTime_FromTimeT(timet: int | float) -> wx.DateTime:
+    """ Construct a DateTime from a C time_t value, the number of seconds
+        since the epoch.
+
+        This was originally a workaround for a wxPython bug; it's
+        reportedly fixed, but this hack isn't too bad.
 
         :param timet: Epoch timestamp (int or float)
-        :rtype: `wx.DateTime`
     """
     dt = wx.DateTime.Now()
     dt.ParseISOCombined(datetime.fromtimestamp(timet).isoformat())
