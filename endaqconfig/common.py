@@ -94,3 +94,20 @@ def deviceString(device):
         return f'{device.productName} "{device.name}" ({device.serial})'
     else:
         return f"{device.productName} ({device.serial})"
+
+
+#===============================================================================
+#
+#===============================================================================
+
+def getClipboardText():
+    """ Retrieve text from the clipboard.
+    """
+    if not wx.TheClipboard.IsOpened():
+        wx.TheClipboard.Open()
+
+    obj = wx.TextDataObject()
+    if wx.TheClipboard.GetData(obj):
+        return obj.GetText()
+
+    return ""

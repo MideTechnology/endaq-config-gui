@@ -35,7 +35,8 @@ import wx.lib.filebrowsebutton as FB
 import wx.lib.scrolledpanel as SP
 
 from .common import getUtcOffset, isCompiled
-from .widgets.shared import DateTimeCtrl, wx_DateTime_FromTimeT, TextValidator
+from .validators import TextValidator
+from .widgets.shared import DateTimeCtrl, wx_DateTime_FromTimeT
 
 # ===============================================================================
 # --- Utility functions
