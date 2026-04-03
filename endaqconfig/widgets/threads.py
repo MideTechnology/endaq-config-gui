@@ -3,6 +3,7 @@ Threads used by the Device Dialog, for display updating and sending
 simple commands to devices in the background.
 """
 
+from functools import partial
 import threading
 from time import sleep, time
 from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
@@ -13,13 +14,15 @@ from endaq.device.command_interfaces import SerialCommandInterface
 from endaq.device.response_codes import DeviceStatusCode
 
 import logging
-
 logger = logging.getLogger(__name__)
+
+import wx
 
 if TYPE_CHECKING:
     # noinspection PyUnusedImports
     from .device_dialog import DeviceSelectionDialog
 
+from . import events
 
 # from .debug_lock import DebugRLock
 
@@ -382,3 +385,61 @@ def isGateway(device: Recorder) -> bool:
     # See its use in `endaq.device.mqtt.manager.MQTTDeviceManager`.
     devtype = device.getInfo('RecorderTypeUID', 0)
     return bool(devtype & 0b11100000000000000000000000000000)
+
+
+# ===========================================================================
+#
+# ===========================================================================
+
+class BrokerConnectThread(threading.Thread):
+    """
+    Mechanism to connect to a broker. Auto-starts on instantiation.
+
+    Posts events to its 'parent' (usually a `BrokerDialog`, but will be the
+    root `DeviceSelectionDialog` when it opens with "Show remote devices"
+    checked).
+    """
+
+    def __init__(self, parent: wx.Window, brokerInfo: Dict[str, Any]):
+        """ Mechanism to connect to a broker. Auto-starts on instantiation.
+
+            :param parent: The parent dialog.
+            :param brokerInfo: The info about the selected broker (e.g., from
+                `endaq.device.mqtt.discovery.findBrokers()`).
+        """
+        self.parent = parent
+        self.info = brokerInfo
+        self.stop = threading.Event()  # Set to kill the thread
+
+        super().__init__(daemon=True)
+        self.name = f'BrokerConnect{self.name}'
+
+        self.start()
+
+
+    def run(self):
+        onConnect = partial(postCallbackEvent, events.EvtMQTTConnected)
+        onDisconnect = partial(postCallbackEvent, events.EvtMQTTDisconnected)
+        # XXX: IMPLEMENT!
+        ...
+
+
+
+def postCallbackEvent(eventType, target, *args):
+    """ Post an event in response to an MQTT connect or disconnect callback.
+        Meant to be set as `MQTTConnector.onConnect` or `MQTTConnector.onDisconnect`
+        after using `partial` to set the `eventType` and `target`. Other
+        arguments (the MQTT client callback arguments) are sent in the
+        posted event.
+
+        :param eventType: The MQTT event class to post (e.g.,
+            `events.EvtMQTTConnected` or `events.EvtMQTTDisconnected`)
+        :param target: The dialog to which to post the event.
+    """
+    try:
+        wx.PostEvent(target, eventType(args=args))
+    except RuntimeError as evt:
+        # Possibly called while changing windows or cleaning up,
+        # which is (probably) okay.
+        logger.debug(f'Ignoring failure posting {eventType.__name__} to {target}: {evt}')
+        pass

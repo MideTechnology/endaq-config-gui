@@ -1,17 +1,16 @@
-from typing import Optional
+from typing import Any, Optional
 
 import wx
 import wx.lib.sized_controls as sc
 
 from endaq.device.mqtt.discovery import findBrokers
-from endaq.device.mqtt.mqtt_interface import MQTTConnector
+from endaq.device.mqtt.mqtt_interface import MQTTConnector, CommunicationError
 
 from endaqconfig.widgets.shared import parseIP
-
+from endaqconfig.widgets import events
 
 import logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)  # remove later
 
 
 class BrokerDialog(sc.SizedDialog):
@@ -25,8 +24,9 @@ class BrokerDialog(sc.SizedDialog):
 
     def __init__(self,
                  parent,
+                 root=None,
                  defaultBroker=None,
-                 defaultAddress='localhost:1883',
+                 defaultAddress='localhost:1883',  # XXX: CHANGE
                  defaultField=0,
                  patterns: Optional[tuple[str]] = None,
                  **kwargs):
@@ -35,6 +35,9 @@ class BrokerDialog(sc.SizedDialog):
         one that's advertised or 'manually' entering a broker IP address.
 
         :param parent: The parent window/dialog. Can be `None`.
+        :param root: The 'root' dialog, i.e., `DeviceSelectionDialog`, in case
+            `parent` isn't it (`parent` might be a child of the root dialog).
+            `None` (default) will use `parent`.
         :param defaultBroker: The default advertised broker name. If `None` or it
             cannot be found, the first one in the list will be selected.
         :param defaultAddress: The default text in the broker address field.
@@ -51,6 +54,7 @@ class BrokerDialog(sc.SizedDialog):
             callback returns `True`, the wait for a response will be cancelled.
             The callback function should require no arguments.
         """
+        self.root = root or parent
         self.defaultBroker = defaultBroker
         self.defaultAddress = defaultAddress
         super().__init__(parent, -1, "Select MQTT Broker",
@@ -97,7 +101,6 @@ class BrokerDialog(sc.SizedDialog):
         self.errorText = wx.StaticText(outerpane, -1, '        ')
         self.errorText.SetSizerProps(expand=True, border=(['all'], 8), halign='center')
         self.errorText.SetForegroundColour(wx.RED)
-        # self.errorText.SetFont(self.errorText.GetFont().Bold())
 
         # Bottom buttons: Connect (OK) and Cancel
         buttonpane = sc.SizedPanel(outerpane, -1)
@@ -171,6 +174,25 @@ class BrokerDialog(sc.SizedDialog):
         self.brokerList.SetToolTip(tt)
 
 
+    def postSelectionEvent(self, info: dict[str, Any]):
+        """ Post a broker selection event to the main window.
+
+            :param info: The info about the selected broker (e.g., from
+                `endaq.device.mqtt.discovery.findBrokers()`).
+        """
+        dest = self.GetParent()
+        if not dest:
+            logger.debug('BrokerDialog had no parent to notify!')
+            return
+
+        logger.debug(f'Posting broker change: {info["name"]}')
+        wx.PostEvent(dest, events.EvtBrokerUpdate(broker=info))
+
+
+    # =======================================================================
+    #
+    # =======================================================================
+
     def OnScanButton(self, _evt):
         """ Handle the 'Rescan' button press.
         """
@@ -199,22 +221,20 @@ class BrokerDialog(sc.SizedDialog):
             # for advertised brokers, but relatively cheap to do)
             host, port = parseIP(addr, check=True)
             if self.ipRB.GetValue():
+                # Create broker info like `findBrokers()`
                 info = {'name': f'{addr}',
                         'serviceType': '_endaq._tcp.local.',
                         'host': [host],
                         'port': port,
                         'properties': {}}
             logger.debug(f'👍 Address valid: {host}:{port}')
+
         except ValueError as err:
             self.errorText.SetLabel(f'⚠ {err}')
             return
 
-        _ = info
-        # TODO: 1. Create MQTTConnector, show error on failure
-        # TODO: 2. Verify MQTTDeviceManager is running (maybe)
-        # TODO: 3. Post event
-
-        # Everything has passed, close the dialog
+        # TODO: Additional tests? Or will the main dialog do them?
+        self.postSelectionEvent(info)
         self.EndModal(wx.ID_OK)
 
 
@@ -239,7 +259,12 @@ class BrokerDialog(sc.SizedDialog):
         self._setBrokerTooltip()
 
 
+# ===========================================================================
+# DIALOG TEST CODE. REMOVE LATER.
+# ===========================================================================
+
 if __name__ == '__main__':
+    logger.setLevel(logging.DEBUG)
     app = wx.App()
     with BrokerDialog(None) as dlg:
         dlg.ShowModal()

@@ -24,6 +24,7 @@ EvtLockDevice, EVT_LOCK_DEVICE = NewEvent()
 # Blink the recorder's LED.
 EvtBlink, EVT_BLINK = NewEvent()
 
+
 # ===========================================================================
 # Wi-Fi events
 # ===========================================================================
@@ -46,4 +47,19 @@ EvtClosingTemp, EVT_CLOSING_TEMP = NewEvent()
 # Remote/MQTT-related events
 # ===========================================================================
 
+# New broker selected in UI. Events should have a `broker` attribute
+# containing a dictionary of broker info.
 EvtBrokerUpdate, EVT_BROKER_UPDATE = NewEvent()
+
+# Connection/disconnection events. `EvtMQTTDisconnected`
+EvtMQTTConnecting, EVT_MQTT_CONNECTING = NewEvent()
+EvtMQTTConnected, EVT_MQTT_CONNECTED = NewEvent()
+
+# Disconnect event. Posted after normal disconnection and disconnections
+# that are (or are caused by) errors. All events should have an `error`
+# attribute, and errors should have a `message`.
+EvtMQTTDisconnected, EVT_MQTT_DISCONNECTED = NewEvent()
+
+# An MQTT-related error, but not one that dropped the connection. Events
+# should have a `message` attribute.
+EvtMQTTError, EVT_MQTT_ERROR = NewEvent()
