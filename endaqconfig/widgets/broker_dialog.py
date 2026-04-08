@@ -1,13 +1,13 @@
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import wx
 import wx.lib.sized_controls as sc
 
 from endaq.device.mqtt.discovery import findBrokers
-from endaq.device.mqtt.mqtt_interface import MQTTConnector, CommunicationError
 
 from endaqconfig.widgets.shared import parseIP
 from endaqconfig.widgets import events
+from endaqconfig.widgets.threads import BrokerConnectThread
 
 import logging
 logger = logging.getLogger(__name__)
@@ -22,13 +22,17 @@ class BrokerDialog(sc.SizedDialog):
     ID_CONNECT = wx.NewIdRef()
 
 
+    # TODO: REMOVE NEXT COMMENT LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
+    # noinspection PyUnresolvedReferences
     def __init__(self,
                  parent,
                  root=None,
                  defaultBroker=None,
-                 defaultAddress='localhost:1883',  # XXX: CHANGE
+                 defaultAddress='localhost:1883',
                  defaultField=0,
                  patterns: Optional[tuple[str]] = None,
+                 clientArgs: Dict[str, Any] = None,
+                 connectArgs: Dict[str, Any] = None,
                  **kwargs):
         """
         A dialog for connecting to an MQTT broker, either by selecting
@@ -44,7 +48,7 @@ class BrokerDialog(sc.SizedDialog):
         :param defaultField: The initial radio button selected, 0 for advertised,
             1 for manually-entered IP address.
         :param patterns: Zero or more MQTT Broker names (multiple positional
-            arguments). Glob-like wildcards may be used (case-sensitive).
+            arguments). Glob-like wildcards may be used (case-insensitive).
             `None` will return all MQTT brokers.
         :param scantime: The minimum time (in seconds) to scan for brokers. If
             any brokers are discovered in this time, they will be returned.
@@ -57,6 +61,8 @@ class BrokerDialog(sc.SizedDialog):
         self.root = root or parent
         self.defaultBroker = defaultBroker
         self.defaultAddress = defaultAddress
+        self.clientArgs = clientArgs
+        self.connectArgs = connectArgs
         super().__init__(parent, -1, "Select MQTT Broker",
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
@@ -98,9 +104,10 @@ class BrokerDialog(sc.SizedDialog):
                                 "You may specify a non-standard port using ':' and the port number")
 
         # Connection error/bad address message
-        self.errorText = wx.StaticText(outerpane, -1, '        ')
+        self.errorText = wx.StaticText(outerpane, -1, ' '*40)
         self.errorText.SetSizerProps(expand=True, border=(['all'], 8), halign='center')
-        self.errorText.SetForegroundColour(wx.RED)
+        self.textColorNormal = self.errorText.GetForegroundColour()
+        self.textColorError = wx.RED
 
         # Bottom buttons: Connect (OK) and Cancel
         buttonpane = sc.SizedPanel(outerpane, -1)
@@ -116,6 +123,14 @@ class BrokerDialog(sc.SizedDialog):
         self.Bind(wx.EVT_CHOICE, self.OnBrokerChoice)
         self.Bind(wx.EVT_RADIOBUTTON, self.OnRadioButton)
         self.enableGroup(defaultField)
+
+        self.connectFailTimer = wx.Timer(self)
+        self.connectThread = None
+
+        self.Bind(events.EVT_MQTT_CONNECTING, self.OnMQTTConnecting)
+        self.Bind(events.EVT_BROKER_SELECTED, self.OnBrokerSelected)
+        self.Bind(events.EVT_MQTT_ERROR, self.OnMQTTError)
+        self.Bind(wx.EVT_TIMER, self.OnFailTimer, self.connectFailTimer)
 
         self.Fit()
         self.SetMinSize(self.GetSize())
@@ -144,7 +159,7 @@ class BrokerDialog(sc.SizedDialog):
         try:
             self.SetCursor(wx.Cursor(wx.CURSOR_ARROW))
             self.connectBtn.Enable(False)
-            self.errorText.SetLabel('')
+            self.setMessage('')
 
             # If findBrokers() lags, it might be better to do it in a thread and post an event
             self.brokers = {b['name']: b for b in findBrokers(*self.patterns, **self.scanKwargs)}
@@ -174,19 +189,29 @@ class BrokerDialog(sc.SizedDialog):
         self.brokerList.SetToolTip(tt)
 
 
-    def postSelectionEvent(self, info: dict[str, Any]):
-        """ Post a broker selection event to the main window.
-
-            :param info: The info about the selected broker (e.g., from
-                `endaq.device.mqtt.discovery.findBrokers()`).
+    def setMessage(self, message: str):
+        """ Set the message area text, normal color/font.
         """
-        dest = self.GetParent()
-        if not dest:
-            logger.debug('BrokerDialog had no parent to notify!')
-            return
+        self.errorText.SetForegroundColour(self.textColorNormal)
+        self.errorText.SetLabel(message)
 
-        logger.debug(f'Posting broker change: {info["name"]}')
-        wx.PostEvent(dest, events.EvtBrokerUpdate(broker=info))
+
+    def setError(self, message: str | Exception):
+        """ Set the message area text, error color/font, plus icon.
+        """
+        self.errorText.SetForegroundColour(self.textColorError)
+        self.errorText.SetLabel(f'⚠ {message}')
+
+
+    def startConnectThread(self, info: Dict[str, Any]):
+        """ Kick off the `BrokerConnectThread` thread.
+        """
+        self.Enable(False)  # Doesn't look disabled; explicitly disable widgets?
+        self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
+        self.connectFailTimer.StartOnce(30000)
+        self.thread = BrokerConnectThread(self, self.root, info,
+                                          connectArgs=self.connectArgs,
+                                          clientArgs=self.clientArgs)
 
 
     # =======================================================================
@@ -196,7 +221,7 @@ class BrokerDialog(sc.SizedDialog):
     def OnScanButton(self, _evt):
         """ Handle the 'Rescan' button press.
         """
-        self.errorText.SetLabel('')
+        self.setMessage('')
         current = self.getSelectedName()
         if current:
             self.defaultBroker = current
@@ -206,9 +231,7 @@ class BrokerDialog(sc.SizedDialog):
     def OnConnectButton(self, _evt):
         """ Handle the 'Connect' button press.
         """
-        # TODO: Try connection. If good, post broker selection event and close dialog.
-        #  If bad, show error message and continue
-        self.errorText.SetLabel('')
+        self.setMessage('')
         info = None
         if self.brokerRB.GetValue():
             info = self.brokers.get(self.getSelectedName())
@@ -230,12 +253,10 @@ class BrokerDialog(sc.SizedDialog):
             logger.debug(f'👍 Address valid: {host}:{port}')
 
         except ValueError as err:
-            self.errorText.SetLabel(f'⚠ {err}')
+            self.setError(str(err))
             return
 
-        # TODO: Additional tests? Or will the main dialog do them?
-        self.postSelectionEvent(info)
-        self.EndModal(wx.ID_OK)
+        self.startConnectThread(info)
 
 
     def OnShow(self, evt):
@@ -243,12 +264,16 @@ class BrokerDialog(sc.SizedDialog):
         """
         if evt.IsShown():
             self.getBrokers()
+        else:
+            self.connectFailTimer.Stop()
+            if self.thread and self.thread.is_alive():
+                logger.debug("BrokerDialog closing, but BrokerConnectThread still running!")
 
 
     def OnRadioButton(self, evt):
         """ Handle the broker selection type radio button changing.
         """
-        self.errorText.SetLabel('')
+        self.setMessage('')
         but = evt.GetEventObject()
         self.enableGroup(0 if but == self.brokerRB else 1)
 
@@ -257,6 +282,44 @@ class BrokerDialog(sc.SizedDialog):
         """ Handle a broker being selected from the list.
         """
         self._setBrokerTooltip()
+
+
+    # =======================================================================
+    #
+    # =======================================================================
+
+    def OnMQTTConnecting(self, _evt):
+        """ Handle the start of an attempt to connect to a broker. Event
+            posted by `BrokerConnectThread`.
+        """
+        ...
+
+
+    def OnBrokerSelected(self, evt):
+        """ Handle (ostensibly) successful `MQTTConnector` creation. Event
+            posted by `BrokerConnectThread`.
+        """
+        if self.root:
+            wx.PostEvent(self.root, evt)
+        self.EndModal(wx.ID_OK)
+
+
+    def OnMQTTError(self, evt):
+        """ Handle an MQTT-related error event.
+        """
+        self.connectFailTimer.Stop()
+        self.Enable()
+        self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+
+        self.setError(evt.message)
+
+
+    def OnFailTimer(self, _evt):
+        """ Handle a contingency timeout event (i.e., the `BrokerConnectThread`
+            failed in some unexpected way).
+        """
+        evt = events.EvtMQTTError("Timed out starting broker connection")
+        wx.PostEvent(self, evt)
 
 
 # ===========================================================================

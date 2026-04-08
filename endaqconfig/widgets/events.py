@@ -47,9 +47,13 @@ EvtClosingTemp, EVT_CLOSING_TEMP = NewEvent()
 # Remote/MQTT-related events
 # ===========================================================================
 
-# New broker selected in UI. Events should have a `broker` attribute
-# containing a dictionary of broker info.
+# New broker selected in UI. Events should have an `info` attribute
+# containing the info from the advertiser. OUTDATED, TO BE REMOVED.
 EvtBrokerUpdate, EVT_BROKER_UPDATE = NewEvent()
+
+# New broker selected in UI. Events should have a `connector` attribute
+# containing a `MQTTConnector`.
+EvtBrokerSelected, EVT_BROKER_SELECTED = NewEvent()
 
 # Connection/disconnection events. `EvtMQTTDisconnected`
 EvtMQTTConnecting, EVT_MQTT_CONNECTING = NewEvent()

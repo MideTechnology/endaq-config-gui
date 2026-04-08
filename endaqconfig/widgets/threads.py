@@ -4,13 +4,15 @@ simple commands to devices in the background.
 """
 
 from functools import partial
+import socket
 import threading
 from time import sleep, time
-from typing import Any, Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 
-from endaq.device import (Recorder, getDevices, DeviceError,
-                          CommandError, UnsupportedFeature)
+from endaq.device import (Recorder, getDevices, DeviceError, CommandError,
+                          CommunicationError, UnsupportedFeature)
 from endaq.device.command_interfaces import SerialCommandInterface
+from endaq.device.mqtt.mqtt_interface import MQTTConnector
 from endaq.device.response_codes import DeviceStatusCode
 
 import logging
@@ -18,13 +20,16 @@ logger = logging.getLogger(__name__)
 
 import wx
 
-if TYPE_CHECKING:
-    # noinspection PyUnusedImports
-    from .device_dialog import DeviceSelectionDialog
-
-from . import events
+from endaqconfig.widgets.events import (EvtMQTTConnecting, EvtMQTTConnected,
+                                        EvtMQTTDisconnected, EvtMQTTError,
+                                        EvtBrokerSelected)
 
 # from .debug_lock import DebugRLock
+
+# noinspection PyUnusedImports
+if TYPE_CHECKING:
+    from .device_dialog import DeviceSelectionDialog
+    from .broker_dialog import BrokerDialog
 
 
 # ===========================================================================
@@ -321,8 +326,8 @@ def getDeviceStatus(device: Recorder) \
                  bool]:
     """ Get the device's cached battery info, status, lock ID, and command
         interface availability in a form that can be hashed and easily tested
-        for changes. Note that this only uses the current status; it does
-        not ping the device to update it.
+        for changes. Note that this only uses the current/last reported
+        status; it does not ping the device to update it.
 
         :return: A tuple containing the device's battery status, status code
             and message, path, lock ID, command interface availability, and
@@ -339,8 +344,7 @@ def getDeviceStatus(device: Recorder) \
     bat = cmd._battery[1]
     if isinstance(bat, dict):
         bat = tuple(bat.values())
-    # NOTE: cmd.available occasionally lags severely
-    return (bat, cmd.status[1:], device.path, cmd.lockId[1], #cmd.available,
+    return (bat, cmd.status[1:], device.path, cmd.lockId[1],
             bool(device._calibration))
 
 
@@ -393,22 +397,35 @@ def isGateway(device: Recorder) -> bool:
 
 class BrokerConnectThread(threading.Thread):
     """
-    Mechanism to connect to a broker. Auto-starts on instantiation.
+    Mechanism to connect to a broker. Auto-starts on instantiation. Stops
+    after posting an event.
 
     Posts events to its 'parent' (usually a `BrokerDialog`, but will be the
     root `DeviceSelectionDialog` when it opens with "Show remote devices"
     checked).
     """
 
-    def __init__(self, parent: wx.Window, brokerInfo: Dict[str, Any]):
+    def __init__(self,
+                 parent: Union["DeviceSelectionDialog", "BrokerDialog"],
+                 root: Union["DeviceSelectionDialog", "BrokerDialog"],
+                 brokerInfo: Dict[str, Any],
+                 **connectorArgs,
+                 ):
         """ Mechanism to connect to a broker. Auto-starts on instantiation.
+            Keyword arguments not listed below are passed to the
+            instantiation of the `MQTTConnector`.
 
-            :param parent: The parent dialog.
+            :param parent: The parent dialog (a `BrokerDialog` or
+                `DeviceSelectionDialog`).
+            :param root: The 'root' `DeviceSelectionDialog`. Can be the same
+                as `parent` if thread started by it.
             :param brokerInfo: The info about the selected broker (e.g., from
                 `endaq.device.mqtt.discovery.findBrokers()`).
         """
         self.parent = parent
+        self.root = root
         self.info = brokerInfo
+        self.connectorArgs = dict(connectorArgs)
         self.stop = threading.Event()  # Set to kill the thread
 
         super().__init__(daemon=True)
@@ -418,11 +435,59 @@ class BrokerConnectThread(threading.Thread):
 
 
     def run(self):
-        onConnect = partial(postCallbackEvent, events.EvtMQTTConnected)
-        onDisconnect = partial(postCallbackEvent, events.EvtMQTTDisconnected)
-        # XXX: IMPLEMENT!
-        ...
+        wx.PostEvent(self.parent, EvtMQTTConnecting(info=self.info))
+        onConnect = partial(postCallbackEvent, EvtMQTTConnected, self.root)
+        onDisconnect = partial(postCallbackEvent, EvtMQTTDisconnected, self.root)
+        onConnect.__name__ = 'EvtMQTTConnected'
+        onDisconnect.__name__ = 'EvtMQTTDisconnected'
 
+        kwargs = self.connectorArgs
+        kwargs.update(self.info)
+        kwargs['connectCallback'] = onConnect
+        kwargs['disconnectCallback'] = onDisconnect
+
+        try:
+            con = MQTTConnector(**kwargs)
+
+        except TimeoutError as err:
+            self.postError('Timeout connecting to broker', err)
+            return
+        except CommunicationError as err:
+            self.postError('Could not connect to broker', err)
+            return
+        except Exception as err:
+            self.postError(str(err), err)
+            return
+
+        # Connected to the broker; check the `MQTTDeviceManager`
+        try:
+            con.command.ping()
+            wx.PostEvent(self.parent, EvtBrokerSelected(connector=con))
+
+        except (CommunicationError, TimeoutError) as err:
+            self.postError("Could not contact enDAQ Device Manager", err)
+
+        except socket.gaierror as err:
+            self.postError(f"Could not resolve hostname", err)
+
+        except ConnectionRefusedError as err:
+            self.postError("Connection refused", err)
+
+        except Exception as err:
+            self.postError(str(err), err)
+
+
+    def postError(self, message: str, err: Exception):
+        """ Post an `EVT_MQTT_ERROR` event.
+        """
+        try:
+            wx.PostEvent(self.parent,
+                         EvtMQTTError(message=message, exception=err))
+        except RuntimeError as e:
+            # Possibly called while changing windows or cleaning up,
+            # which is (probably) okay.
+            logger.debug(f'Ignoring failure posting  to {self.parent}: {e}')
+            pass
 
 
 def postCallbackEvent(eventType, target, *args):
@@ -436,6 +501,10 @@ def postCallbackEvent(eventType, target, *args):
             `events.EvtMQTTConnected` or `events.EvtMQTTDisconnected`)
         :param target: The dialog to which to post the event.
     """
+    if not target:
+        # Can happen in testing, shouldn't happen elsewhere
+        logger.debug('postCallbackEvent: No target specified!')
+        return
     try:
         wx.PostEvent(target, eventType(args=args))
     except RuntimeError as evt:
