@@ -462,7 +462,8 @@ class BrokerConnectThread(threading.Thread):
         # Connected to the broker; check the `MQTTDeviceManager`
         try:
             con.command.ping()
-            wx.PostEvent(self.parent, EvtBrokerSelected(connector=con))
+            wx.PostEvent(self.parent, EvtBrokerSelected(connector=con,
+                                                        info=self.info))
 
         except (CommunicationError, TimeoutError) as err:
             self.postError("Could not contact enDAQ Device Manager", err)

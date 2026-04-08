@@ -66,10 +66,11 @@ class BrokerDialog(sc.SizedDialog):
         super().__init__(parent, -1, "Select MQTT Broker",
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
-        self.brokers = {}
-        self.names = []
+        self.brokers: Dict[str, Dict[str, Any]] = {}
+        self.names: List[str] = []
+        self.thread = None
 
-        # Arguments for `findBrokers()`
+        # Arguments for `findBrokers()`. Rarely used, but could be.
         self.patterns = patterns or (None,)
         self.scanKwargs = {k: kwargs.pop(k)
                            for k in ('timeout', 'scantime', 'patterns')
@@ -130,7 +131,7 @@ class BrokerDialog(sc.SizedDialog):
         self.Bind(events.EVT_MQTT_CONNECTING, self.OnMQTTConnecting)
         self.Bind(events.EVT_BROKER_SELECTED, self.OnBrokerSelected)
         self.Bind(events.EVT_MQTT_ERROR, self.OnMQTTError)
-        self.Bind(wx.EVT_TIMER, self.OnFailTimer, self.connectFailTimer)
+        self.Bind(wx.EVT_TIMER, self.OnFailTimer, id=self.connectFailTimer.GetId())
 
         self.Fit()
         self.SetMinSize(self.GetSize())
@@ -189,18 +190,20 @@ class BrokerDialog(sc.SizedDialog):
         self.brokerList.SetToolTip(tt)
 
 
-    def setMessage(self, message: str):
-        """ Set the message area text, normal color/font.
+    def setMessage(self, message: str, error=False):
+        """ Set the message area text.
+
+            :param error: If `True`, use the error font color and show
+                message with a warning icon.
         """
-        self.errorText.SetForegroundColour(self.textColorNormal)
+        if error:
+            color = self.textColorError
+            message = f'⚠ {message}'
+        else:
+            color = self.textColorNormal
+
+        self.errorText.SetForegroundColour(color)
         self.errorText.SetLabel(message)
-
-
-    def setError(self, message: str | Exception):
-        """ Set the message area text, error color/font, plus icon.
-        """
-        self.errorText.SetForegroundColour(self.textColorError)
-        self.errorText.SetLabel(f'⚠ {message}')
 
 
     def startConnectThread(self, info: Dict[str, Any]):
@@ -253,7 +256,7 @@ class BrokerDialog(sc.SizedDialog):
             logger.debug(f'👍 Address valid: {host}:{port}')
 
         except ValueError as err:
-            self.setError(str(err))
+            self.setMessage(str(err), error=True)
             return
 
         self.startConnectThread(info)
@@ -311,7 +314,7 @@ class BrokerDialog(sc.SizedDialog):
         self.Enable()
         self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
 
-        self.setError(evt.message)
+        self.setMessage(evt.message, error=True)
 
 
     def OnFailTimer(self, _evt):

@@ -22,19 +22,21 @@ from endaq.device import (Recorder, RECORDERS, UnsupportedFeature,
                           CommandError, DeviceError, deviceChanged,
                           _module_busy)
 from endaq.device.base import os_specific
-# from endaq.device.response_codes import DeviceStatusCode
 from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface, MQTTConnector
 
 from . import battery_icons
 from . import icons
+from .broker_dialog import BrokerDialog
 from .controls import (_attribFormatter, populateStatusColumn, populateButtonColumn,
                        populateBatteryColumn, NewControlButtons, ListContextMenu,
                        STATUS_DISPLAY)
-from .events import (EvtRecord, EVT_RECORD, EVT_BROKER_UPDATE,
-                     EVT_STREAM, EVT_CONFIG, EVT_LOCK_DEVICE, EVT_BLINK)
-from .threads import (DeviceScanThread, DeviceCommandThread,
+from .events import (EVT_RECORD, EVT_STREAM, EVT_CONFIG, EVT_LOCK_DEVICE,
+                     EVT_BLINK, EVT_BROKER_SELECTED, EVT_MQTT_CONNECTING,
+                     EVT_MQTT_CONNECTED, EVT_MQTT_DISCONNECTED, EVT_MQTT_ERROR,
+                     EvtMQTTError)
+from .threads import (DeviceScanThread, DeviceCommandThread, BrokerConnectThread,
                       isOnline, isSleeping, isGateway)
-from .shared import DeviceToolTip, BrokerField
+from .shared import DeviceToolTip
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +195,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.ownConnector = self.connector is not None
         self.oldUpdateCallback = None
 
-        defaultBroker: Optional[str] = kwargs.pop('broker', DEFAULT_BROKER)
+        self.defaultBroker: Optional[str] = kwargs.pop('broker', DEFAULT_BROKER)
         okText = kwargs.pop('okText', "Configure")
         okHelp = kwargs.pop('okHelp', 'Configure the selected device')
         cancelText = kwargs.pop('cancelText', "Close")
@@ -218,7 +220,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.updateTimer = wx.Timer(self)
         self.updateCount: int = 0
         self.updateCancelled = threading.Event()  # Use as callback for getBatteryStatus/ping commands
-        self.scanThread: Optional[DeviceScanThread] = None
+        self.scanThread: DeviceScanThread = None
+
+        self.connectFailTimer = wx.Timer(self)  # Failsafe to re-enable broker selection
 
         self.updatingDisplay = threading.Event()  # Set while updating, so other calls skip.
         self.menuOpen = threading.Event()  # Set while context menu open, preventing list updates.
@@ -251,8 +255,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.infoText.SetSizerProps(expand=True)
         self.infoText.Show(self.showWarnings)
 
+        self.textColorNormal = self.infoText.GetForegroundColour()
+        self.textColorError = wx.RED
+
         if self.remote is not None:
-            self._addBrokerSelect(pane, default=defaultBroker)
+            self._addBrokerSelect(pane)
 
         # if self.showSave:
         #     self._addStreamTo(pane, default=self.savePath)
@@ -276,27 +283,45 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.Bind(EVT_LOCK_DEVICE, self.OnLockDevice)
 
         self.Bind(wx.EVT_TIMER, self.OnUpdateTimerTick, id=self.updateTimer.GetId())
+        self.Bind(wx.EVT_TIMER, self.OnConnectFailTimer, id=self.connectFailTimer.GetId())
 
 
     # TODO: REMOVE NEXT COMMENT LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
-    # noinspection PyUnresolvedReferences
-    def _addBrokerSelect(self, pane, default=None):
+    # xnoinspection PyUnresolvedReferences
+    def _addBrokerSelect(self, pane):
         """ Add MQTT Broker selection widgets.
         """
-        selpane = sc.SizedPanel(pane, -1)
+        selpane = self.brokerPane = sc.SizedPanel(pane, -1)
         selpane.SetSizerType("horizontal")
         selpane.SetSizerProps(expand=True)
         self.remoteCheck = wx.CheckBox(selpane, -1, "Show Remote Devices")
         self.remoteCheck.SetSizerProps(valign='centre')
 
-        self.brokerList = BrokerField(selpane, default=default)
-        self.brokerList.SetSizerProps(valign='center', expand=True)
-
-        self.remoteCheck.SetValue(self.remote)
-        self.brokerList.Show(self.remote)
+        self.brokerLabel = wx.StaticText(selpane, -1, "Broker:")
+        self.brokerLabel.SetSizerProps(valign='centre', border=(['top', 'left'], 2))
+        self.brokerNameField = wx.TextCtrl(selpane, style=wx.TE_READONLY)
+        self.brokerNameField.SetSizerProps(expand=True, proportion=1)
+        self.brokerSelectBtn = wx.Button(selpane, -1, "Select...")
+        self.brokerSelectBtn.SetSizerProps(valign='centre')
+        self.brokerMessageText = wx.StaticText(selpane, -1, " "*40)
+        self.brokerMessageText.SetSizerProps(expand=True, proportion=2, valign='centre')
 
         self.remoteCheck.Bind(wx.EVT_CHECKBOX, self.OnRemoteCheckChanged)
-        self.Bind(EVT_BROKER_UPDATE, self.OnBrokerSelected)
+        self.brokerSelectBtn.Bind(wx.EVT_BUTTON, self.OnBrokerSelect)
+        self.Bind(EVT_BROKER_SELECTED, self.OnBrokerSelected)
+        self.Bind(EVT_MQTT_CONNECTING, self.OnMQTTConnecting)
+        self.Bind(EVT_MQTT_CONNECTED, self.OnMQTTConnected)
+        self.Bind(EVT_MQTT_DISCONNECTED, self.OnMQTTDisconnected)
+        self.Bind(EVT_MQTT_ERROR, self.OnMQTTError)
+
+
+    def showBrokerSelection(self, hide=False):
+        """ Show or hide the broker name/button/etc.
+        """
+        self.brokerLabel.Show(hide)
+        self.brokerNameField.Show(hide)
+        self.brokerSelectBtn.Show(hide)
+        self.brokerMessageText.Show(hide)
 
 
     # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
@@ -815,7 +840,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     def startUpdater(self):
-        """ Start the disply updating threads and timers.
+        """ Start the display updating threads and timers.
         """
         if not self.scanThreadRunning():
             interval = self.scanInterval / 1000 if self.autoUpdate else 0
@@ -997,6 +1022,37 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.startUpdater()
 
 
+    def selectBroker(self):
+        """ Open the broker selection dialog. The selected `MQTTConnector`
+            is communicated back via an `EVT_BROKER_SELECTED` event.
+        """
+        try:
+            self.pauseUpdater()
+            with BrokerDialog(self) as dlg:
+                dlg.ShowModal()
+        finally:
+            self.startUpdater()
+
+
+    def getDefaultBroker(self):
+        """ Start a `BrokerConnectThread` to find the default broker. The
+            `MQTTConnector` is communicated back via an `EVT_BROKER_SELECTED`
+            event.
+        """
+        _thread = BrokerConnectThread(self, self, self.defaultBroker)
+
+
+    def setBrokerMessage(self, message, error=False):
+        if error:
+            color = self.textColorError
+            message = f'⚠ {message}'
+        else:
+            color = self.textColorNormal
+
+        self.brokerMessageText.SetForegroundColour(color)
+        self.brokerMessageText.SetLabel(message)
+
+
     def setBroker(self, broker: Optional[dict]):
         """ Set the broker to use.
 
@@ -1004,6 +1060,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 with `endaq.device.mqtt.discovery.findBrokers()` or
                 `endaq.device.mqtt.discovery.getBroker()`.
         """
+        return  # XXX: REMOVE
         try:
             logger.debug(f'selected broker: {broker}')
             self.pauseUpdater()
@@ -1062,18 +1119,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         logger.debug(f'onMqttUpdate({data!r}, {connector!r})')
         if self.scanThreadRunning() and connector == self.connector:
             self.scanThread.onUpdate(data)
-
-
-    # noinspection PyUnusedLocal
-    def onMqttConnect(self, client, userdata, disconnect_flags, reason_code, properties):
-        # TODO: Implement onMqttConnect (if needed)
-        logger.debug('Called DeviceDialog.onMqttConnect')
-
-
-    # noinspection PyUnusedLocal
-    def onMqttDisconnect(self, client, userdata, disconnect_flags, reason_code, properties):
-        # TODO: Remove MQTT devices from display
-        logger.debug(f'Called DeviceDialog.onMqttDisconnect, {reason_code.is_failure=}')
 
 
     # =======================================================================
@@ -1163,11 +1208,14 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         if self.listMsgs[self.selected] is not None:
             self.infoText.SetLabel(self.listMsgs[self.selected])
 
-        recorder = self.recordersByIndex.get(self.selected, None)
-        if not recorder:
+        if self.selected not in self.recordersByIndex:
             logger.error(f'Could not get selected recorder with index {self.selected}!')
             self.okButton.Enable(False)
-        elif recorder.canRecord:
+            evt.Skip()
+            return
+
+        recorder = self.recordersByIndex[self.selected]
+        if recorder.canRecord:
             self.recordButton.SetToolTip(self.RECORD_ENABLED)
             self.recordButton.Enable(True)
         else:
@@ -1205,7 +1253,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     def OnItemDoubleClick(self, evt):
-        """ Hande lsit item (row) double-click.
+        """ Hande list item (row) double-click.
         """
         if (self.allowDoubleClick and self.list.GetSelectedItemCount() > 0
                 and self.okButton.IsEnabled()):
@@ -1280,12 +1328,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """ Handle dialog being shown/hidden.
         """
         if evt.IsShown():
-            try:
-                if self.remote:
-                    if self.remoteCheck.IsChecked():
-                        wx.CallAfter(self.brokerList.postSelectionEvent)
-            except Exception as err:
-                logger.error(f'Failed to post first broker selection event: {err!r}')
+            # XXX: REFACTOR
+            # try:
+            #     if self.remote:
+            #         if self.remoteCheck.IsChecked():
+            #             wx.CallAfter(self.brokerList.postSelectionEvent)
+            # except Exception as err:
+            #     logger.error(f'Failed to post first broker selection event: {err!r}')
 
             wx.CallAfter(self.OnUpdateTimerTick)
             self.startUpdater()
@@ -1311,8 +1360,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.startThreads('set the clock', devices)
 
 
-    def OnStartRecording(self,
-                         evt: Union[wx.CommandEvent, EvtRecord, None] = None):
+    def OnStartRecording(self, evt):
         """ Initiate a recording.
 
             :param evt: The event generated by a dialog 'Record' button, or
@@ -1407,8 +1455,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.EndModal(wx.ID_OK)
 
 
-    def OnStartAllRecorders(self,
-                            evt: Union[wx.CommandEvent, EvtRecord, None] = None):
+    def OnStartAllRecorders(self, evt):
         """ Send the 'start recording' command to all devices.
 
             This is placeholder for future functionality. It may or may not
@@ -1454,33 +1501,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.startThreads('stop recording/streaming', devices, ignore=CommandError)
 
 
-    def OnRemoteCheckChanged(self, _evt):
-        """ Handle the 'remote' checkbox changing. Also used to update
-            things on startup.
-        """
-        checked = self.remoteCheck.GetValue()
-        self.brokerList.Show(checked)
-        if checked:
-            self.brokerList.updateList()
-            self.brokerList.postSelectionEvent()
-        else:
-            self.setBroker(None)
-
-
-    def OnBrokerSelected(self, evt):
-        """ Handle an MQTT broker selection.
-        """
-        info = evt.broker
-        logger.debug(f'OnSetBrokerSelected() -> {info}')
-        if not info:
-            logger.debug("No broker info in selection event, bad broker address?")
-            return
-        elif info == self.brokerInfo:
-            logger.debug('same broker selected, ignoring')
-            return
-        self.setBroker(info)
-
-
     def OnItemChecked(self, evt):
         """ Handle an item check.
         """
@@ -1523,6 +1543,88 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         logger.debug('Check none')
         self.checkedRecorders.clear()
         self.updateList()
+
+
+    # =======================================================================
+    # MQTT-related events
+    # =======================================================================
+
+    def OnRemoteCheckChanged(self, _evt):
+        """ Handle the 'remote' checkbox changing. Also used to update
+            things on startup.
+        """
+        checked = self.remoteCheck.GetValue()
+        self.showBrokerSelection(checked)
+        if checked:
+            self.selectBroker()
+        else:
+            self.setBroker(None)
+
+
+    def OnBrokerSelect(self, _evt):
+        """ Handle the broker 'Select...' button press.
+        """
+        self.selectBroker()
+
+
+    def OnBrokerSelected(self, evt):
+        """ Handle an MQTT broker selection.
+        """
+        self.brokerPane.Enable()
+        # XXX: REDO THIS - use evt.connector, evt.info
+        info = evt.broker
+        logger.debug(f'OnSetBrokerSelected() -> {info}')
+        if not info:
+            logger.debug("No broker info in selection event, bad broker address?")
+            return
+        elif info == self.brokerInfo:
+            logger.debug('same broker selected, ignoring')
+            return
+        self.setBroker(info)
+
+
+    def OnMQTTConnecting(self, _evt):
+        """ Handle the `BrokerConnectThread` starting.
+        """
+        self.brokerPane.Disable()
+        self.setBrokerMessage('Connecting...')
+        self.connectFailTimer.StartOnce(30000)
+        # XXX: IMPLEMENT - start failsafe timer (like BrokerDialog)?
+
+    def OnMQTTConnected(self, _evt):
+        """ Handle a MQTT client connection event, posted by
+            `MQTTConnector.connectCallback`.
+        """
+        self.connectFailTimer.Stop()
+        self.brokerPane.Enable()
+        self.setBrokerMessage('Connected')
+        # XXX: IMPLEMENT - stop device list rebuild timer?
+        ...
+
+    def OnMQTTDisconnected(self, _evt):
+        """ Handle a MQTT client disconnection event, posted by
+            `MQTTConnector.disconnectCallback`.
+        """
+        self.connectFailTimer.Stop()
+        self.brokerPane.Enable()
+        self.setBrokerMessage('Disconnected')
+        # XXX: IMPLEMENT - start timer to rebuild device list if no reconnection?
+        ...
+
+    def OnMQTTError(self, evt):
+        """ Handle a MQTT error event.
+        """
+        self.connectFailTimer.Stop()
+        self.brokerPane.Enable()
+        self.setBrokerMessage(evt.message, error=True)
+
+
+    def OnConnectFailTimer(self, _evt):
+        """ Handle a contingency timeout event (i.e., the `BrokerConnectThread`
+            failed in some unexpected way).
+        """
+        evt = EvtMQTTError("Timed out starting broker connection")
+        wx.PostEvent(self, evt)
 
 
 # ===========================================================================
