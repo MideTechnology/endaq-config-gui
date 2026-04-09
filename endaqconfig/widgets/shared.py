@@ -308,6 +308,7 @@ def parseIP(val: str,
 
 class IPDialog(sc.SizedDialog):
     """ Simple dialog for entering a broker IP address.
+        TODO: OUTDATED, REMOVE THIS
     """
 
     def __init__(self, *args, **kwargs):
@@ -347,6 +348,8 @@ class BrokerField(wx.Panel):
     """
     A widget for selecting an MQTT broker, either from advertising or
     a manually-entered IP address.
+
+    TODO: OUTDATED, REMOVE THIS
 
     """
 

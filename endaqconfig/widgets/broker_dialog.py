@@ -76,6 +76,8 @@ class BrokerDialog(sc.SizedDialog):
                            for k in ('timeout', 'scantime', 'patterns')
                            if k in kwargs}
 
+        self.activeGroup = defaultField
+
         outerpane = self.GetContentsPane()
         outerpane.SetSizerType('vertical')
         pane = sc.SizedPanel(outerpane, -1)
@@ -131,7 +133,7 @@ class BrokerDialog(sc.SizedDialog):
         self.Bind(events.EVT_MQTT_CONNECTING, self.OnMQTTConnecting)
         self.Bind(events.EVT_BROKER_SELECTED, self.OnBrokerSelected)
         self.Bind(events.EVT_MQTT_ERROR, self.OnMQTTError)
-        self.Bind(wx.EVT_TIMER, self.OnFailTimer, id=self.connectFailTimer.GetId())
+        self.Bind(wx.EVT_TIMER, self.OnConnectFailTimer, id=self.connectFailTimer.GetId())
 
         self.Fit()
         self.SetMinSize(self.GetSize())
@@ -143,6 +145,7 @@ class BrokerDialog(sc.SizedDialog):
         """ Explicitly set the radio buttons: 0 for advertised, 1 for
             manually-entered IP address.
         """
+        self.activeGroup = groupNo
         self.adpane.Enable(groupNo == 0)
         self.ipField.Enable(groupNo == 1)
 
@@ -159,7 +162,7 @@ class BrokerDialog(sc.SizedDialog):
         """
         try:
             self.SetCursor(wx.Cursor(wx.CURSOR_ARROW))
-            self.connectBtn.Enable(False)
+            self.Enable(False)
             self.setMessage('')
 
             # If findBrokers() lags, it might be better to do it in a thread and post an event
@@ -174,7 +177,7 @@ class BrokerDialog(sc.SizedDialog):
             self._setBrokerTooltip()
 
         finally:
-            self.connectBtn.Enable(True)
+            self.Enable(True)
             self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
 
 
@@ -193,6 +196,7 @@ class BrokerDialog(sc.SizedDialog):
     def setMessage(self, message: str, error=False):
         """ Set the message area text.
 
+            :param message: Message text.
             :param error: If `True`, use the error font color and show
                 message with a warning icon.
         """
@@ -210,6 +214,7 @@ class BrokerDialog(sc.SizedDialog):
         """ Kick off the `BrokerConnectThread` thread.
         """
         self.Enable(False)  # Doesn't look disabled; explicitly disable widgets?
+
         self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
         self.connectFailTimer.StartOnce(30000)
         self.thread = BrokerConnectThread(self, self.root, info,
@@ -295,7 +300,7 @@ class BrokerDialog(sc.SizedDialog):
         """ Handle the start of an attempt to connect to a broker. Event
             posted by `BrokerConnectThread`.
         """
-        ...
+        self.setMessage('Connecting...')
 
 
     def OnBrokerSelected(self, evt):
@@ -312,12 +317,13 @@ class BrokerDialog(sc.SizedDialog):
         """
         self.connectFailTimer.Stop()
         self.Enable()
+        self.connectBtn.Enable()
         self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
 
         self.setMessage(evt.message, error=True)
 
 
-    def OnFailTimer(self, _evt):
+    def OnConnectFailTimer(self, _evt):
         """ Handle a contingency timeout event (i.e., the `BrokerConnectThread`
             failed in some unexpected way).
         """
