@@ -19,8 +19,6 @@ class BrokerDialog(sc.SizedDialog):
     advertised or 'manually' entering a broker IP address.
     """
 
-    ID_CONNECT = wx.NewIdRef()
-
 
     # TODO: REMOVE NEXT COMMENT LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
     # noinspection PyUnresolvedReferences
@@ -117,7 +115,7 @@ class BrokerDialog(sc.SizedDialog):
         buttonpane.SetSizerType("horizontal")
         buttonpane.SetSizerProps(expand=True)
         sc.SizedPanel(buttonpane, -1).SetSizerProps(proportion=1)  # Spacer
-        self.connectBtn = wx.Button(buttonpane, self.ID_CONNECT, 'Connect')
+        self.connectBtn = wx.Button(buttonpane, -1, 'Connect')
         self.connectBtn.SetSizerProps(halign="right")
         wx.Button(buttonpane, wx.ID_CANCEL).SetSizerProps(halign="right")
 

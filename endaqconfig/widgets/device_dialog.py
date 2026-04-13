@@ -1322,9 +1322,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         index, _ = self.list.HitTest(evt.GetPosition())
         if index != wx.NOT_FOUND:
             try:
+                self.pauseUpdater()
+                self.updatingDisplay.set()
                 self.menuOpen.set()
+
                 self.tooltipFrame.timer.Stop()
                 self.tooltipFrame.Hide()
+
                 try:
                     device = self.recordersByIndex[index]
                 except IndexError:
@@ -1335,8 +1339,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 menu = ListContextMenu(self, device, self.list, index)
                 self.PopupMenu(menu)
                 menu.Destroy()
+
             finally:
                 self.menuOpen.clear()
+                self.updatingDisplay.clear()
+                self.startUpdater()
 
         evt.Skip()
 
