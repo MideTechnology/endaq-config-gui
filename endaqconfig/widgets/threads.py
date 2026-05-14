@@ -386,9 +386,8 @@ def isGateway(device: Recorder) -> bool:
     """ Is the device a HDS Gateway box?
     """
     # Gateway-ness determined by bits in the "recorder's" `RecorderTypeUID`.
-    # See its use in `endaq.device.mqtt.manager.MQTTDeviceManager`.
     devtype = device.getInfo('RecorderTypeUID', 0)
-    return bool(devtype & 0b11100000000000000000000000000000)
+    return bool(devtype & 0xa0000000)  # bits 31 (non-recorder) and 29 (gateway)
 
 
 # ===========================================================================

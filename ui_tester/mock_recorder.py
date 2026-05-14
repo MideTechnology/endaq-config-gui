@@ -102,8 +102,9 @@ class MockCommandInterface(FileCommandInterface):
             return {'SSID': 'Data Collection Box', 'WiFiConnectionStatus': 0x30, 'APN': '4g_apn'}
         return {'SSID': 'MIDE-Guest', 'WiFiConnectionStatus': 2}
 
-    @showName
+    # @showName
     def setWifi(self, *args, **kwargs):
+        logger.debug(f'setWifi({args}, {kwargs})')
         return
 
     @showName
