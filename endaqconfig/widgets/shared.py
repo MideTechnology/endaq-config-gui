@@ -594,3 +594,34 @@ def validateIP(value: str):
         return True
     except ValueError as err:
         raise FieldValidationError(str(err))
+
+
+#===============================================================================
+#
+#===============================================================================
+
+class KeepAliveCallback:
+    """
+    A somewhat simplistic device command callback that is intended to prevent
+    long-running commands in the main thread from getting the GUI flagged
+    as 'Not Responding.'
+
+    Use:
+        cb = KeepAliveCallback()
+        device.command.setWifi(data, callback=cb)
+
+    TODO: Determine if this actually works reliably
+    """
+
+    def __init__(self, interval: float = 4.5):
+        self.interval = interval
+        self.nextUpdate = time() + interval
+
+
+    def __call__(self, *args, **kwargs):
+        """ Callback that kicks the GUI. Always returns `False` (don't cancel).
+        """
+        if time() > self.nextUpdate:
+            wx.Yield()
+            self.nextUpdate = time() + self.interval
+        return False

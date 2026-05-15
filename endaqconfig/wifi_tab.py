@@ -5,6 +5,12 @@ Created on Nov 13, 2019
 
 :author: dstokes
 """
+
+# NOTE: The PyCharm linter does not like how `wx.lib.sized_controls`
+# monkeypatches `SetSizerProps()` onto widget instances, hence the use
+# of `# noinspection PyUnresolvedReferences` in various places. This
+# could potentially suppress some useful unknown attribute warnings.
+
 import threading
 from time import time, sleep
 
@@ -16,9 +22,10 @@ from .base import Tab
 from .base import logger, registerTab
 from .widgets import icons
 from .widgets.events import *
-from .widgets.shared import TextValidator, FieldValidationError
+from .widgets.shared import TextValidator, FieldValidationError, KeepAliveCallback
 
 from endaq.device import DeviceError, DeviceTimeout
+from endaq.device.config import RemoteConfigInterface
 from endaq.device.response_codes import DeviceStatusCode, WiFiConnectionStatus
 
 # ===============================================================================
@@ -42,16 +49,20 @@ CONNECTION_STATUS_TO_STR = {
 #
 # ===============================================================================
 
-
 class WiFiScanThread(threading.Thread):
     """ Thread for asynchronously retrieving a list of Wi-Fi APs from the
         wireless-enabled device. Posts an `EVT_CONFIG_WIFI_SCAN` event when
         complete. Can be cancelled by calling `cancel.set()`.
     """
 
-
-    def __init__(self, parent, interval=.25, timeout=10, pause=0):
-        """ Constructor.
+    def __init__(self,
+                 parent: "WiFiSelectionTab",
+                 interval: float = .25,
+                 timeout: int = 30,
+                 pause: int = 0):
+        """ Thread for asynchronously retrieving a list of Wi-Fi APs from the
+            wireless-enabled device. Posts an `EVT_CONFIG_WIFI_SCAN` event when
+            complete. Can be cancelled by calling `cancel.set()`.
 
             :param parent: The parent `WifiSelectionTab`
             :keyword interval: Time (in seconds) between reads of the device's
@@ -85,6 +96,7 @@ class WiFiScanThread(threading.Thread):
                                                        callback=self.cancel.is_set)
         except Exception as err:
             E = err
+            logger.error(f'Error in Wi-Fi scan: {err!r}', stack_info=True)
 
         evt = EvtConfigWiFiScan(data=data, error=E)
 
@@ -100,12 +112,20 @@ class ContinousNetworkStatusChecker(threading.Thread):
         connection, done asynchronously.
     """
 
-    def __init__(self, parent, interval=4, timeout=10):
-        """ Constructor.
+    def __init__(self, parent: 'WiFiSelectionTab',
+                 interval: float = 4,
+                 timeout: float = 20,
+                 extra: bool = False):
+        """ Thread for continually checking the current status of the network
+            connection, done asynchronously.
 
             :param parent: The parent `WifiSelectionTab`
-            :param interval: Time (in seconds) between each check of the network status
-            :param timeout: Time (in seconds) to wait for the device to finish checking the network status
+            :param interval: Time (in seconds) between each check of the
+                network status
+            :param timeout: Time (in seconds) to wait for the device to
+                finish checking the network status
+            :param extra: If `True`, include additional information in the
+                update event.
         """
         super(ContinousNetworkStatusChecker, self).__init__(name=type(self).__name__)
         self.daemon = True
@@ -113,6 +133,7 @@ class ContinousNetworkStatusChecker(threading.Thread):
         self.parent = parent
         self.interval = interval
         self.timeout = timeout
+        self.extra = extra
         self.cancel = threading.Event()
         self.cancel.clear()
 
@@ -121,23 +142,44 @@ class ContinousNetworkStatusChecker(threading.Thread):
         """ The main loop.
         """
         sleep(self.interval)
+
+        timeout = self.timeout
+        device = self.parent.device
+        extra = self.parent.parent.showAdvanced
+
         while bool(self.parent) and not self.cancel.is_set():
             start_time = time()
+            result = {}
+
+            if self.parent.working.is_set():
+                sleep(self.interval)
+                continue
+
             try:
-                result = self.parent.device.command.queryWifi(timeout=5)
-                evt = EvtConfigWiFiConnectionCheck(result=result)
-                if bool(self.parent):
-                    wx.PostEvent(self.parent, evt)
+                result.update(device.command.queryWifi(timeout=timeout))
+
+                if extra:
+                    mac, ip = device.command.getNetworkAddress(timeout=timeout)
+                    result['MACAddress'] = mac
+                    result['IPV4Address'] = ip
 
             except DeviceTimeout:
                 logger.warning("Timed out when checking the network connection, retrying")
+                continue
 
             except DeviceError as E:
                 if E.args and E.args[0] == DeviceStatusCode.ERR_BUSY:
-                    logger.info("Device repoted ERR_BUSY, retrying")
+                    logger.info("Device reported ERR_BUSY, retrying")
+                    continue
                 else:
                     logger.error(E)
                     raise
+
+            try:
+                if result:
+                    evt = EvtConfigWiFiConnectionCheck(result=result)
+                    if bool(self.parent):
+                        wx.PostEvent(self.parent, evt)
 
             except IOError as E:
                 logger.warning(E)
@@ -161,7 +203,8 @@ class AddWifiDialog(SC.SizedDialog):
         network.
     """
 
-
+    # XXX: REMOVE noinspection
+    # noinspection PyUnresolvedReferences
     def __init__(self, parent, wxId=-1, title="Add Access Point",
                  style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER,
                  booleanAuth=True, authType=DEFAULT_AUTH, **kwargs):
@@ -219,6 +262,7 @@ class AddWifiDialog(SC.SizedDialog):
         """ Handle authorization selection from the drop-down list, if
             not `booleanAuth`.
         """
+        # noinspection PyUnresolvedReferences
         self.pwField.Enable(self.authField.GetSelection() != 0)
         evt.Skip()
 
@@ -226,6 +270,7 @@ class AddWifiDialog(SC.SizedDialog):
     def OnAuthCheck(self, _evt):
         """ Handle authorization selection checkbox, if `booleanAuth`.
         """
+        # noinspection PyUnresolvedReferences
         self.pwField.Enable(self.authField.GetValue())
 
 
@@ -235,8 +280,10 @@ class AddWifiDialog(SC.SizedDialog):
             :return: A dictionary of Wi-Fi AP info and the password
         """
         if self.booleanAuth:
+            # noinspection PyUnresolvedReferences
             auth = self.authField.GetValue()
         else:
+            # noinspection PyUnresolvedReferences
             auth = AUTH_TYPES[self.authField.GetSelection()]
 
         result = {'SSID': self.ssidField.GetValue(),
@@ -251,6 +298,7 @@ class AddWifiDialog(SC.SizedDialog):
 # ===============================================================================
 #
 # ===============================================================================
+
 
 @registerTab
 class WiFiSelectionTab(Tab):
@@ -287,6 +335,8 @@ class WiFiSelectionTab(Tab):
         self.ssid = self.apn = ''  # AP mode: the gateway's reported SSID and APN
         self.apChanged = False
         self.initialized = False  # Prevents premature update call triggered by EVT_TEXT
+
+        self.working = threading.Event()
 
         self.networkStatusThread = ContinousNetworkStatusChecker(self)
         self.scanThread = WiFiScanThread(self)
@@ -655,23 +705,35 @@ class WiFiSelectionTab(Tab):
         """ Handle an update of the Wi-Fi connection status. Event posted by
             the `ContinuousNetworkStatusCheck` thread.
         """
+        if self.working.is_set():
+            # Events should not be posted when working (applying Wi-Fi
+            # settings), but one could be in transit before working was set.
+            return
+
         result = evt.result
         status = result.get('WiFiConnectionStatus', 0)
         text_to_display = CONNECTION_STATUS_TO_STR.get(status, '').format(**result)
-        is_connected = result['WiFiConnectionStatus'] == 2
+        is_connected = status & WiFiConnectionStatus.CONNECTED
 
-        self.currentConnectionLabel.SetLabel(text_to_display)  # I'm not sure if this is doing anything
+        if (ip := result.get('IPV4Address', None)) is not None:
+            tt = f'Device IP address: {ip}' if ip else 'No IP address assigned'
+            self.currentConnectionLabel.SetToolTip(tt)
+        else:
+            self.currentConnectionLabel.UnsetToolTip()
+
+        self.currentConnectionLabel.SetLabel(text_to_display)
 
         if self.stationPanel.IsEnabled():
             for j in range(self.list.GetItemCount()):
-                label = u'\u2713' if is_connected and self.list.GetItemText(j, col=0) == result['SSID'] else '-'
+                itemtext = self.list.GetItemText(j, col=0).rstrip(' *')  # XXX: HACK: Gateway not initially matching selected AP?
+                label = u'\u2713' if is_connected and itemtext == result['SSID'] else '-'
                 self.list.SetItem(j, column=2, label=label)
 
         if self.show4GMode:
             self.wwan4gCheck.SetValue(bool(status & 0x20))
 
 
-    def makeToolTip(self, ap):
+    def makeToolTip(self, ap: dict) -> str:
         """ Generate the tool tip string for an AP. Isolated because it's
             bulky.
         """
@@ -704,7 +766,7 @@ class WiFiSelectionTab(Tab):
         return tooltip
 
 
-    def makeAuthTypeString(self, ap):
+    def makeAuthTypeString(self, ap: dict) -> str:
         """ Turn the AP AuthType into a string.
         """
         # Currently, AuthType is boolean (any or none), but might eventually
@@ -828,8 +890,11 @@ class WiFiSelectionTab(Tab):
             # FUTURE: Do checks to other APs for multiple AP configuration
             if self.selected != self.firstSelected:
                 enable = True
-            elif self.info[self.firstSelected]['SSID'] in self.passwords:
-                enable = True
+            else:
+                try:
+                    enable = self.info[self.firstSelected]['SSID'] in self.passwords
+                except (IndexError, KeyError) as err:
+                    logger.debug(f'Error finding AP info: {err!r}')
 
         else:
             enable = bool(self.apChanged
@@ -1127,7 +1192,7 @@ class WiFiSelectionTab(Tab):
 
         # FUTURE: Any SSIDs in self.deleted should be deleted here.
 
-        return self.setWifi(data)
+        return self.setWifi({'AP': data})
 
 
     def saveAPMode(self):
@@ -1138,7 +1203,7 @@ class WiFiSelectionTab(Tab):
 
         if self.wwan4gCheck.GetValue():
             data['MobileData'] = {'APN': self.wwan4gNameField.GetValue(),
-                            'SIMPin': self.wwan4gPwField.GetValue()}
+                                  'SIMPin': self.wwan4gPwField.GetValue()}
 
         return self.setWifi({'APMode': data})
 
@@ -1146,40 +1211,64 @@ class WiFiSelectionTab(Tab):
     def setWifi(self, data):
         """ Call `Recorder.command.setWifi()` command and handle any errors.
         """
+        # Allow more time for remote devices to respond
+        timeout = 45 if isinstance(self.device.config, RemoteConfigInterface) else 10
+
+        self.working.set()
+        self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
+        self.parent.Enable(False)
+        self.applyButton.Enable(False)
+        self.currentConnectionLabel.SetLabel('Setting Wi-Fi, please wait...')
+        self.currentConnectionLabel.UnsetToolTip()
+
         try:
-            self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
-            self.applyButton.Enable(False)
-            self.device.command.setWifi(data)
+            cb = KeepAliveCallback()
+            self.device.command.setWifi(data, timeout=timeout, callback=cb)
+
         except TimeoutError:
             wx.MessageBox(
-                    message="Timed out when attempting to set device Wi-Fi (communicating with device).\nWi-Fi was not set.",
+                    "Timed out when attempting to set device Wi-Fi\n\n"
+                    "The device did not respond within the expected time.\n\n"
+                    "Wi-Fi may not have been set.",
                     caption="Wi-Fi Configuration Error",
                     style=wx.OK,
                     parent=self)
             return False
+
         except IOError:
-            logger.warning("An IOError occurred while setting the Wi-Fi. "
-                           "This is usually because the device was unplugged part of the way through")
+            logger.warning("An IOError occurred while setting the Wi-Fi; "
+                           "was device unplugged?")
+
         except DeviceError as E:
             if len(E.args) > 1 and E.args[1]:
                 msg = f'\n{E.args[1]}'
             else:
                 msg = ''
             wx.MessageBox(
-                    message=f"An error occurred while setting the Wi-Fi.{msg}\nWi-Fi was not set.",
+                    "An error occurred while setting the Wi-Fi\n\n"
+                    f"The device reported an error: {msg}\n\n"
+                    "Wi-Fi was not set.",
                     caption="Wi-Fi Configuration Error",
                     style=wx.OK,
                     parent=self)
             return False
+
         except Exception as E:
+            logger.error(f'Unexpected error in setWifi: {E!r}', stack_info=True)
             wx.MessageBox(
-                    f"An unexpected {type(E).__name__} occurred when attempting to set the Wi-Fi network.\n"
+                    "An error occurred while setting the Wi-Fi\n\n"
+                    f"An unexpected {type(E).__name__} occurred when attempting "
+                    "to set the Wi-Fi network.\n\n"
                     "Wi-Fi was not set.",
                     caption="Wi-Fi Configuration Error",
                     style=wx.OK | wx.ICON_ERROR,
                     parent=self)
             return False
+
         finally:
+            self.parent.Enable(True)
+            self.currentConnectionLabel.SetLabel('')
+            self.working.clear()
             self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
             self.updateApplyButton()
 
