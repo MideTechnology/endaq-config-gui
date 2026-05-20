@@ -617,14 +617,14 @@ class WiFiSelectionTab(Tab):
         row3sizer, wwan4gNameLbl, self.wwan4gNameField = labeledField(
                 "APN:",
                 name="wwan4gNameField",
-                val=TextValidator(minLen=1, maxLen=63),
+                val=TextValidator(minLen=8, maxLen=63),
                 handler=self.OnAPModeText)
         sizer.Add(row3sizer, 0, wx.EXPAND | wx.WEST | wx.EAST, 12)
         row4sizer, wwan4gPwLabel, self.wwan4gPwField = labeledField(
                 "Password:", pw=True,
                 name="wwan4gPwField",
                 tt="The cellular data access PIN",
-                val=TextValidator(maxLen=63))
+                val=TextValidator(minLen=8, maxLen=63))
         sizer.AddSpacer(8)
         sizer.Add(row4sizer, 0, wx.EXPAND | wx.WEST | wx.EAST, 12)
 
@@ -1192,6 +1192,7 @@ class WiFiSelectionTab(Tab):
 
         # FUTURE: Any SSIDs in self.deleted should be deleted here.
 
+        logger.debug(f'Setting STA mode: {data}')
         return self.setWifi({'AP': data})
 
 
@@ -1205,6 +1206,7 @@ class WiFiSelectionTab(Tab):
             data['MobileData'] = {'APN': self.wwan4gNameField.GetValue(),
                                   'SIMPin': self.wwan4gPwField.GetValue()}
 
+        logger.debug(f'Setting AP mode: {data}')
         return self.setWifi({'APMode': data})
 
 
@@ -1225,7 +1227,8 @@ class WiFiSelectionTab(Tab):
             cb = KeepAliveCallback()
             self.device.command.setWifi(data, timeout=timeout, callback=cb)
 
-        except TimeoutError:
+        except TimeoutError as E:
+            logger.error(f'setWifi timed out! {E!r}')
             wx.MessageBox(
                     "Timed out when attempting to set device Wi-Fi\n\n"
                     "The device did not respond within the expected time.\n\n"
@@ -1240,6 +1243,7 @@ class WiFiSelectionTab(Tab):
                            "was device unplugged?")
 
         except DeviceError as E:
+            logger.error(f'Error in setWifi: {E!r}', stack_info=True)
             if len(E.args) > 1 and E.args[1]:
                 msg = f'\n{E.args[1]}'
             else:

@@ -490,7 +490,9 @@ class BrokerConnectThread(threading.Thread):
             pass
 
 
-def postCallbackEvent(eventType, target, *args):
+def postCallbackEvent(eventType: type[wx.Event],
+                      target: Union["DeviceSelectionDialog", "BrokerDialog"],
+                      *args):
     """ Post an event in response to an MQTT connect or disconnect callback.
         Meant to be set as `MQTTConnector.onConnect` or `MQTTConnector.onDisconnect`
         after using `partial` to set the `eventType` and `target`. Other
@@ -506,6 +508,7 @@ def postCallbackEvent(eventType, target, *args):
         logger.debug('postCallbackEvent: No target specified!')
         return
     try:
+        # noinspection PyArgumentList
         wx.PostEvent(target, eventType(args=args))
     except RuntimeError as evt:
         # Possibly called while changing windows or cleaning up,
