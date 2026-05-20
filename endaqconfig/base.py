@@ -29,6 +29,7 @@ import time
 from typing import Optional
 
 from ebmlite import Element, MasterElement
+from endaq.device import UnsupportedFeature
 
 import wx
 import wx.lib.filebrowsebutton as FB
@@ -1632,6 +1633,52 @@ class ResetButton(CheckDriftButton):
         """
         if self.group is not None:
             self.group.setToDefault()
+
+
+# ===============================================================================
+# Command buttons
+# ===============================================================================
+
+@registerField
+class RebootButton(CheckDriftButton):
+    """ Special-case "field" that consists of a button that sends a reset
+        command to the device.
+    """
+
+    def __init__(self, *args, **kwargs):
+        """ Constructor.
+
+            :see: `ConfigWidget.__init__()`
+        """
+        self.setAttribDefault("label", "Reset/Reboot Device")
+        self.setAttribDefault("tooltip", "Send a reset/reboot command to the device")
+        self._command = getattr(self.root.device.command, 'reset', None)
+        super().__init__(*args, **kwargs)
+
+
+    def OnButtonPress(self, evt):
+        """ Handle button press: reset sibling fields to the factory defaults.
+        """
+        if self._command is None:
+            return
+
+        # TODO: Wrap `_command()` call with exception handling, etc.
+        self._command()
+        self.root.EndModal(wx.ID_CANCEL)
+
+
+@registerField
+class ShutdownButton(RebootButton):
+    """ Special-case "field" that consists of a button that sends a
+        shutdown/power off command command, intended for use with a
+        Gateway.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.setAttribDefault("label", "Power Off")
+        self.setAttribDefault("tooltip", "Send a shutdown/power off command to the device")
+        self._command = getattr(self.root.device.command, 'shutdown', None)
+        super().__init__(*args, **kwargs)
 
 
 # ===============================================================================
