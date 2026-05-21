@@ -6,6 +6,7 @@ Created on Sep 10, 2015
 
 from datetime import datetime, timedelta
 import logging
+import os.path
 import re
 import socket
 from time import time
@@ -20,6 +21,7 @@ from endaq.device.mqtt.discovery import findBrokers
 
 from .events import EvtBrokerUpdate
 from .controls import getStatusDisplay
+from .icons import pw_show, pw_hide
 
 from ..validators import TextValidator, FieldValidationError
 
@@ -92,6 +94,161 @@ def wx_DateTime_FromTimeT(timet: int | float) -> wx.DateTime:
     dt = wx.DateTime.Now()
     dt.ParseISOCombined(datetime.fromtimestamp(timet).isoformat())
     return dt
+
+
+# ===========================================================================
+#
+# ===========================================================================
+
+FONTFILE = os.path.join(os.path.dirname(__file__), 'password-dots.ttf')
+FONTNAME = 'Password Dots'
+
+
+class PasswordTextCtrl(wx.Panel):
+    """
+    Text field for passwords, with a show/hide clear text toggle button.
+
+    Note that this is not a complete drop-in replacement for `wx.TextCtrl`;
+    some `wx.TextCtrl` methods must be explicitly called on the internal
+    `text_ctrl`. Event binding might also be weird.
+
+    Uses the "Password Dots" font:
+
+        The FontStruction “Password Dots”
+        (https://fontstruct.com/fontstructions/show/1106896) by “JimProuty” is
+        licensed under a Creative Commons Attribution license
+        (http://creativecommons.org/licenses/by/3.0/).
+        [ancestry]
+
+    TODO: include font info in any documentation before release!
+    """
+
+    _STYLE = wx.TE_PROCESS_ENTER | wx.TE_RICH2
+
+
+    def __init__(self,
+                 parent,
+                 id=wx.ID_ANY,
+                 value="",
+                 style=_STYLE,
+                 parent_style=wx.BORDER_NONE | wx.TRANSPARENT_WINDOW,
+                 **kwargs):
+        """ Text field for passwords, with a show/hide clear text toggle button.
+            Takes standard `wx.TextCtrl` arguments, plus:
+
+            :param parent_style: The style of the outer container. The standard
+                `style` argument is applied to the inner text field.
+
+        """
+        self.text_kwargs = {}
+        if validator := kwargs.pop('validator', None):
+            self.text_kwargs['validator'] = validator
+
+        super().__init__(parent, id, style=parent_style, **kwargs)
+
+        self.textstyle = style
+        self.text_ctrl = wx.TextCtrl(self,
+                                     size=(self.GetSize().width - 40, -1),
+                                     style=style,
+                                     **self.text_kwargs)
+
+        self.bmp_hidden = pw_show.GetBitmap()
+        self.bmp_visible = pw_hide.GetBitmap()
+
+        self.staticbmp = wx.StaticBitmap(self, -1, self.bmp_hidden, pos=(5, 6))
+        self.staticbmp.SetToolTip('Show Password')
+
+        wx.Font.AddPrivateFont(FONTFILE)
+        self.fontVisible = self.text_ctrl.GetFont()
+        self.fontHidden = wx.Font(self.fontVisible)
+        self.fontHidden.SetFaceName(FONTNAME)
+
+        self.sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.sizer.Add(self.text_ctrl, 1, wx.EXPAND | wx.ALL, 0)
+        self.sizer.Add(self.staticbmp, 0, wx.ALIGN_CENTER_VERTICAL | wx.LEFT, 4)
+
+        outersizer = wx.BoxSizer(wx.VERTICAL)
+        outersizer.Add(self.sizer, 0, wx.ALL | wx.EXPAND, 0)
+        self.SetSizer(outersizer)
+
+        self.text_ctrl.SetMinSize((-1, self.text_ctrl.GetSize().height))
+
+        self.hidden = True
+        self.text_ctrl.SetFont(self.fontHidden)
+        self.text_ctrl.SetValue(value)
+
+        self.staticbmp.Bind(wx.EVT_LEFT_UP, self.OnShowPassword)
+
+
+    def Bind(self, *args, **kwargs):
+        return self.text_ctrl.Bind(*args, **kwargs)
+
+
+    def Unbind(self, *args, **kwargs):
+        self.text_ctrl.Unbind(*args, **kwargs)
+
+
+    def OnShowPassword(self, _evt):
+        """ Handle PW show/hide toggle.
+        """
+        self.showPassword(None)
+
+
+    def showPassword(self, show=True):
+        """ Show, hide, or toggle the password visibility.
+
+            :param show: `True` to show text, `False` to show dots, `None` to
+                toggle.
+        """
+        is_password = self.hidden
+
+        if show is None:
+            show = is_password
+        elif (show != is_password):
+            return
+
+        current_value = self.text_ctrl.GetValue()
+        current_insertion = self.text_ctrl.GetInsertionPoint()
+        current_selection = self.text_ctrl.GetSelection()
+
+        if show:
+            font, bmp, tt = self.fontVisible, self.bmp_visible, 'Hide Password'
+        else:
+            font, bmp, tt = self.fontHidden, self.bmp_hidden, 'Show Password'
+
+        self.hidden = not show
+        self.text_ctrl.SetValue('')
+        self.text_ctrl.SetFont(font)
+        self.text_ctrl.SetValue(current_value)
+        self.text_ctrl.SetSelection(*current_selection)
+        self.text_ctrl.SetInsertionPoint(current_insertion)
+
+        self.staticbmp.SetBitmap(bmp)
+        self.staticbmp.SetToolTip(tt)
+
+
+    # =======================================================================
+    # Standard methods that map directly to the inner `TextCtrl`
+    # =======================================================================
+
+    def GetValue(self) -> str:
+        return self.text_ctrl.GetValue()
+
+
+    def SetValue(self, value: str):
+        self.text_ctrl.SetValue(value)
+
+
+    def SetToolTop(self, tt: str):
+        self.text_ctrl.SetToolTip(tt)
+
+
+    def GetToolTip(self) -> str:
+        return self.text_ctrl.GetToolTip()
+
+
+    def UnsetToolTip(self):
+        self.text_ctrl.UnsetToolTip()
 
 
 # ===========================================================================

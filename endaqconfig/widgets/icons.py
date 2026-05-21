@@ -665,3 +665,25 @@ select_none = PyEmbeddedImage(
     b'WpYFy7KQyWSQyWRgmqYvk3MLYOYTEU3G4/Hv9Xr9VlGUV/iXts+2JEkBB5cQXzbrIxE9lMvl'
     b'HwBStxspiuLlbJrmCcCfsCn8Gg6Hqqqq9/F4PPRzbbfb02KxmDCzS+fvfFtEJAKIhYKAy8wu'
     b'APwFEAPick+kmasAAAAASUVORK5CYII=')
+
+
+#----------------------------------------------------------------------
+pw_show = PyEmbeddedImage(
+    b'iVBORw0KGgoAAAANSUhEUgAAABAAAAALCAYAAAB24g05AAAACXBIWXMAAAnXAAAJ1wGxbhe3'
+    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAOBJREFUKJGl0qFKhEEU'
+    b'huFnZINYBAXFIIisRdBkM2pYk80gBtG4F2A2GnZBDN6BYBS8AW/AJgYxaJRNIoKwy7H8v8wO'
+    b'uwY98DHhvO9hzjApIuSVUprGHrawjIRX3OEqInpDfD4gpXSMM/RxiycM0EQLszhFJ2qxOhMu'
+    b'8I42JiNCHjRwgDdcoxERPwNO0MN6KY4YtIQXnNeXWMEXdgpwF494xlHR26icTejipgAW8Imo'
+    b'MsBawVxWq5jDTNHczuQ6hwUzhcVxe87jI5P7WB3J/vJYLdzjAfvjuKF/8Jea+JeNb9/D37W0'
+    b'NvS/AAAAAElFTkSuQmCC')
+
+#----------------------------------------------------------------------
+pw_hide = PyEmbeddedImage(
+    b'iVBORw0KGgoAAAANSUhEUgAAABAAAAALCAYAAAB24g05AAAACXBIWXMAAAnXAAAJ1wGxbhe3'
+    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAOBJREFUKJGl0TErBWAY'
+    b'xfHfW7cM7iRZSfEBFJmU1UAxsfgkRkopmXwBNnfxBSxMRhlIioHJogipY/Be6dbNvXnqXU7n'
+    b'f3rP85Qk/jMFTXwmeesLLKWBZsEuhpKs9xmwiUmYwgdmk+jlVfAFC21hB3cY7QEexgUOkmiL'
+    b'DbTwgCWULvA8bnCMgSTfxtppEPcYwiWOcI1PTGARM7XuWJJH+J2+h6tq3sAJnmvXU2zV7mdo'
+    b'/XAVnsM7pju+vI3DDm28Bq8m0ahXecJakvO/zpfktpSyjFftZXWbUsoKRpLsd/N8AVzetLQN'
+    b'rb75AAAAAElFTkSuQmCC')
+

@@ -37,7 +37,7 @@ import wx.lib.scrolledpanel as SP
 
 from .common import getUtcOffset, isCompiled
 from .validators import TextValidator
-from .widgets.shared import DateTimeCtrl, wx_DateTime_FromTimeT
+from .widgets.shared import DateTimeCtrl, wx_DateTime_FromTimeT, PasswordTextCtrl
 
 # ===============================================================================
 # --- Utility functions
@@ -820,6 +820,25 @@ class ASCIIField(TextField):
 
     # String of valid characters, limited to the printable part of 7b ASCII.
     VALID_CHARS = string.printable
+
+
+# ===============================================================================
+
+@registerField
+class PasswordField(TextField):
+    """ UI widget for editing a password.
+    """
+
+    def addField(self):
+        """ Class-specific method for adding the appropriate type of widget.
+        """
+        validator = TextValidator(self.isValid, minLen=self.minLength, maxLen=self.maxLength)
+        self.field = PasswordTextCtrl(self, -1, str(self.default or ''),
+                                      validator=validator)
+
+        self.field.Bind(wx.EVT_KILL_FOCUS, self.OnExitField)
+        self.sizer.Add(self.field, 4, wx.EXPAND)
+        return self.field
 
 
 # ===============================================================================
