@@ -45,6 +45,11 @@ setuptools.setup(
         keywords='endaq slamstick config utility gui',
         packages=setuptools.find_packages(),
         package_dir={'': '.'},
+        package_data={
+            'endaqconfig': ['endaqconfig/widgets/password-dots.ttf',  # is this right?
+                            'endaqconfig/widgets/control_buttons.png'  # will likely remove before release
+                            ]
+        },
         entry_points={'console_scripts': [
             'endaqconfig=endaqconfig.__main__:run',
         ]},

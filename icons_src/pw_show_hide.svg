@@ -60,7 +60,10 @@
        inkscape:locked="false" />
   </sodipodi:namedview>
   <g
-     id="pw_show">
+     id="pw_show"
+     inkscape:export-filename="pw_show.png"
+     inkscape:export-xdpi="64"
+     inkscape:export-ydpi="64">
     <rect
        style="fill:#ffff00;fill-opacity:0.48564;stroke:none;stroke-width:3.77953;stroke-linecap:round;stroke-linejoin:round;opacity:0"
        id="rect8"
@@ -74,7 +77,10 @@
        d="m 12.081687,0.24310466 c -4.5979041,0 -9.2110599,2.59131494 -11.4818944,7.63761314 A 0.88927943,0.88927943 0 0 0 1.0444323,9.0571609 0.88927943,0.88927943 0 0 0 2.220875,8.6125212 c 1.9977066,-4.439349 5.9216334,-6.5908577 9.860812,-6.5908577 3.939178,0 7.863105,2.1515087 9.860812,6.5908577 a 0.88927943,0.88927943 0 0 0 1.176443,0.4446397 0.88927943,0.88927943 0 0 0 0.444639,-1.1764431 C 21.292747,2.8344196 16.679591,0.24310466 12.081687,0.24310466 Z m 0,5.63210304 c -1.964596,0 -3.5571178,1.5925216 -3.5571178,3.5571177 0,1.9645956 1.5925218,3.5571176 3.5571178,3.5571176 1.964596,0 3.557118,-1.592522 3.557118,-3.5571176 0,-1.9645961 -1.592522,-3.5571177 -3.557118,-3.5571177 z" />
   </g>
   <g
-     id="pw_hide">
+     id="pw_hide"
+     inkscape:export-filename="pw_hide.png"
+     inkscape:export-xdpi="64"
+     inkscape:export-ydpi="64">
     <rect
        style="fill:#ffff00;fill-opacity:0.48564;stroke:none;stroke-width:3.77953;stroke-linecap:round;stroke-linejoin:round;opacity:0"
        id="rect9"
