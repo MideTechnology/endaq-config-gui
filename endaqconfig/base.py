@@ -37,6 +37,7 @@ import wx.lib.scrolledpanel as SP
 
 from .common import getUtcOffset, isCompiled
 from .validators import TextValidator
+from .widgets.controls import NewControlButtons
 from .widgets.shared import DateTimeCtrl, wx_DateTime_FromTimeT, PasswordTextCtrl
 
 # ===============================================================================
@@ -1669,6 +1670,8 @@ class RebootButton(CheckDriftButton):
         command to the device.
     """
 
+    _ICON_IDX = 8
+
     def __init__(self, *args, **kwargs):
         """ Constructor.
 
@@ -1676,8 +1679,27 @@ class RebootButton(CheckDriftButton):
         """
         self.setAttribDefault("label", "Reset/Reboot Device")
         self.setAttribDefault("tooltip", "Send a reset/reboot command to the device")
-        self._command = getattr(self.root.device.command, 'reset', None)
         super().__init__(*args, **kwargs)
+        self._command = getattr(self.root.device.command, 'reset', None)
+
+
+    def initUI(self):
+        self.checkbox = None
+        self.sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.field = wx.Button(self, -1, self.label)
+        self.field.SetToolTip(self.tooltip)
+
+        NewControlButtons._loadImages()
+        icons = NewControlButtons.ICONS[self._ICON_IDX]
+        self.field.SetBitmap(icons[0], wx.LEFT)
+        self.field.SetBitmapCurrent(icons[0])
+        self.field.SetBitmapPressed(icons[2])
+        self.field.SetBitmapDisabled(icons[3])
+        self.field.SetBitmapMargins((0, 0))
+
+        self.sizer.Add(self.field, 1, wx.EXPAND)
+        self.SetSizer(self.sizer)
+        self.Bind(wx.EVT_BUTTON, self.OnButtonPress)
 
 
     def OnButtonPress(self, evt):
@@ -1698,11 +1720,13 @@ class ShutdownButton(RebootButton):
         Gateway.
     """
 
+    _ICON_IDX = 9
+
     def __init__(self, *args, **kwargs):
         self.setAttribDefault("label", "Power Off")
         self.setAttribDefault("tooltip", "Send a shutdown/power off command to the device")
-        self._command = getattr(self.root.device.command, 'shutdown', None)
         super().__init__(*args, **kwargs)
+        self._command = getattr(self.root.device.command, 'shutdown', None)
 
 
 # ===============================================================================

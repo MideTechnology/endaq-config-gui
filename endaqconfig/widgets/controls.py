@@ -2,9 +2,8 @@
 Device control buttons and column population/content formatting.
 """
 import logging
-import os.path
 from time import time
-from typing import Optional, Union
+from typing import Union
 
 import wx
 from wx.lib.agw import ultimatelistctrl as ULC
@@ -97,6 +96,8 @@ def getStatusDisplay(status: Union[DeviceStatusCode, int]) -> tuple[str, wx.Colo
 class NewControlButtons(wx.Panel):
     """
     Panel containing device control buttons (start/stop recording and config).
+    Its icons are also used in device dialog context menus and reboot/shutdown
+    button widgets.
     """
 
     BG_NORMAL = None  # Taken from widget's defaults
@@ -169,7 +170,8 @@ class NewControlButtons(wx.Panel):
         """
         self._loadImages()
         (self.configIcons, self.recordIcons, self.stopIcons, self.streamIcons,
-         self.streamingIcons, self.lockIcons, self.lockedIcons, self.blinkIcons) = self.ICONS
+         self.streamingIcons, self.lockIcons, self.lockedIcons, self.blinkIcons,
+         self.rebootIcons, self.shutdownIcons) = self.ICONS
 
         size = self.configIcons[0].GetSize()
         style = wx.NO_BORDER | wx.BU_EXACTFIT
