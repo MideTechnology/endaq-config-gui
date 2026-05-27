@@ -102,7 +102,7 @@ class NewControlButtons(wx.Panel):
     BG_NORMAL = None  # Taken from widget's defaults
     FG_NORMAL = None
 
-    ICONS: Optional[list] = None  # class variable, a list of icons, set on first use
+    ICONS: list = None  # class variable, a list of icons, set on first use
 
 
     def __init__(self, root, parent, device, index, column,
@@ -153,7 +153,7 @@ class NewControlButtons(wx.Panel):
 
             img = icons.control_buttons.GetImage()
 
-            numIcons = 8
+            numIcons = 10
             size = img.GetWidth() // numIcons
             cls.ICONS = []
             for col in range(numIcons):

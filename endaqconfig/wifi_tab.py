@@ -22,7 +22,8 @@ from .base import Tab
 from .base import logger, registerTab
 from .widgets import icons
 from .widgets.events import *
-from .widgets.shared import TextValidator, FieldValidationError, KeepAliveCallback
+from .widgets.shared import (TextValidator, FieldValidationError, KeepAliveCallback,
+                             PasswordTextCtrl)
 
 from endaq.device import DeviceError, DeviceTimeout
 from endaq.device.config import RemoteConfigInterface
@@ -241,8 +242,10 @@ class AddWifiDialog(SC.SizedDialog):
         self.authField.SetSizerProps(expand=True, valign='center')
 
         wx.StaticText(pane, -1, "Password:").SetSizerProps(valign='center')
-        self.pwField = wx.TextCtrl(pane, -1, "", style=wx.TE_PASSWORD,
-                                   validator=TextValidator( maxLen=63))
+        # self.pwField = wx.TextCtrl(pane, -1, "", style=wx.TE_PASSWORD,
+        #                            validator=TextValidator( maxLen=63))
+        self.pwField = PasswordTextCtrl(pane, -1, "",
+                                        validator=TextValidator( maxLen=63))
         self.pwField.SetSizerProps(expand=True, valign='center')
         self.pwField.Enable(pwFieldEnabled)
 
@@ -513,7 +516,8 @@ class WiFiSelectionTab(Tab):
         pwsizer = wx.BoxSizer(wx.HORIZONTAL)
         self.pwCheck = wx.CheckBox(listPanel, -1, "Change Password to Selected AP:")
         self.pwCheck.Enable(False)
-        self.pwField = wx.TextCtrl(listPanel, -1, style=wx.TE_PASSWORD | wx.TE_PROCESS_ENTER, name="pwField")
+        # self.pwField = wx.TextCtrl(listPanel, -1, style=wx.TE_PASSWORD | wx.TE_PROCESS_ENTER, name="pwField")
+        self.pwField = PasswordTextCtrl(listPanel, -1, name="pwField")
         self.pwField.Enable(False)
 
         pwstyle = wx.RESERVE_SPACE_EVEN_IF_HIDDEN
@@ -579,12 +583,14 @@ class WiFiSelectionTab(Tab):
 
         def labeledField(label, pw=False, tt=None, name=wx.StaticTextNameStr,
                          val=wx.DefaultValidator, handler=None):
-            style = (wx.TE_PASSWORD if pw else 0) | wx.TE_PROCESS_ENTER
             rowsizer = wx.BoxSizer(wx.HORIZONTAL)
             lbl = wx.StaticText(panel, -1, label, size=(labelWidth, -1),
                                 style=wx.ALIGN_CENTER_VERTICAL,
                                 name=f'{name}_label')
-            txt = wx.TextCtrl(panel, -1, style=style, name=name, validator=val)
+            if pw:
+                txt = PasswordTextCtrl(panel, -1, name=name, validator=val)
+            else:
+                txt = wx.TextCtrl(panel, -1, name=name, validator=val)
             if tt:
                 lbl.SetToolTip(tt)
                 txt.SetToolTip(tt)
