@@ -117,7 +117,7 @@ class PasswordTextCtrl(wx.Panel):
         The FontStruction “Password Dots”
         (https://fontstruct.com/fontstructions/show/1106896) by “JimProuty” is
         licensed under a Creative Commons Attribution license
-        (http://creativecommons.org/licenses/by/3.0/).
+        (https://creativecommons.org/licenses/by/3.0/).
         [ancestry]
 
     TODO: include font info in any documentation before release!
@@ -127,11 +127,11 @@ class PasswordTextCtrl(wx.Panel):
 
 
     def __init__(self,
-                 parent,
-                 id=wx.ID_ANY,
-                 value="",
-                 style=_STYLE,
-                 parent_style=wx.BORDER_NONE | wx.TRANSPARENT_WINDOW,
+                 parent: wx.Window,
+                 id: int = wx.ID_ANY,
+                 value: str = "",
+                 style: int = _STYLE,
+                 parent_style: int = wx.BORDER_NONE | wx.TRANSPARENT_WINDOW,
                  **kwargs):
         """ Text field for passwords, with a show/hide clear text toggle button.
             Takes standard `wx.TextCtrl` arguments, plus:

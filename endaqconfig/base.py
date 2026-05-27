@@ -1431,6 +1431,13 @@ class CheckASCIIField(ASCIIField):
 
 
 @registerField
+class CheckPasswordField(PasswordField):
+    """ UI widget (with a checkbox) for editing passwords.
+    """
+    CHECK = True
+
+
+@registerField
 class CheckIntField(IntField):
     """ UI widget (with a checkbox) for editing a signed integer.
     """
@@ -1624,7 +1631,6 @@ class VerticalPadding(ConfigWidget):
         that this is handled as a special case by `Group.addChild()`.
     """
 
-
     def initUI(self):
         self.checkbox = self.field = None
 
@@ -1634,7 +1640,6 @@ class ResetButton(CheckDriftButton):
     """ Special-case "field" that consists of a button that resets all its
         sibling fields in its group or tab.
     """
-
 
     def __init__(self, *args, **kwargs):
         """ Constructor.
