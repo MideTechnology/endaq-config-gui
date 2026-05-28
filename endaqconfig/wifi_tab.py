@@ -24,6 +24,7 @@ from .widgets import icons
 from .widgets.events import *
 from .widgets.shared import (TextValidator, FieldValidationError, KeepAliveCallback,
                              PasswordTextCtrl)
+from .widgets.spinner import Spinner
 
 from endaq.device import DeviceError, DeviceTimeout
 from endaq.device.config import RemoteConfigInterface
@@ -450,12 +451,14 @@ class WiFiSelectionTab(Tab):
         sizer.Add(line, 0, wx.EXPAND | wx.ALL, 8)
         self.SetSizer(sizer)
 
+        self.spinner = Spinner(self)
         self.currentConnectionLabel = wx.StaticText(self, -1, "")
         self.applyButton = wx.Button(self, -1, "Apply Wi-Fi Changes")
 
         connection_and_apply_sizer = wx.BoxSizer(wx.HORIZONTAL)
         connection_and_apply_sizer.AddMany(
-                ((self.currentConnectionLabel, 1, wx.EXPAND | wx.WEST, 8),
+                ((self.spinner, 0),
+                 (self.currentConnectionLabel, 1, wx.EXPAND | wx.WEST, 8),
                  (self.applyButton, 0, wx.SOUTH | wx.EAST, 8)))
 
         sizer.Add(connection_and_apply_sizer, 0, wx.EXPAND)
@@ -919,6 +922,7 @@ class WiFiSelectionTab(Tab):
         """
         try:
             logger.debug('Shutting down Wi-Fi scan and status threads')
+            self.spinner.Stop()
             self.stopUpdateThreads(wait=True)
             if self.scanThread:
                 self.scanThread.cancel.set()
