@@ -13,6 +13,7 @@ Created on Nov 13, 2019
 
 import threading
 from time import time, sleep
+from typing import Any
 
 import wx
 import wx.lib.sized_controls as SC
@@ -26,9 +27,10 @@ from .widgets.shared import (TextValidator, FieldValidationError, KeepAliveCallb
                              PasswordTextCtrl)
 from .widgets.spinner import Spinner
 
-from endaq.device import DeviceError, DeviceTimeout
+from endaq.device import DeviceError, DeviceTimeout, CommandError
 from endaq.device.config import RemoteConfigInterface
-from endaq.device.response_codes import DeviceStatusCode, WiFiConnectionStatus
+from endaq.device.response_codes import (DeviceStatusCode, CommandResponseCode,
+                                         WiFiConnectionStatus)
 
 # ===============================================================================
 #
@@ -38,13 +40,44 @@ from endaq.device.response_codes import DeviceStatusCode, WiFiConnectionStatus
 AUTH_TYPES = ("None", "WPA", "WPA2", "Unknown")
 DEFAULT_AUTH = 1
 
-CONNECTION_STATUS_TO_STR = {
-    0x00: "",
-    0x01: "Trying to connect to {SSID}",
-    0x02: "Connected to {SSID}",
-    0x10: "In AP mode as {SSID}",
-    0x30: "In AP+4G mode as {SSID}",
-}
+
+def connectionStatus2Str(result: dict[str, Any]) -> str:
+    """ Generate a Wi-Fi connection status display, for use if the
+        `QueryWiFiResponse` has no `WiFiStatusMessage`.
+
+        :param result: The contents of the `QueryWiFiResponse`.
+        :return: A human-readable description of the status.
+    """
+    if msg := result.get('WiFiStatusMessage', None):
+        return msg
+
+    status = result.get('WiFiConnectionStatus', 0)
+    ssid = result.get('SSID', '(no SSID)')
+
+    if status & WiFiConnectionStatus.CHANGING:
+        # If the device (i.e., gateway) reports it is changing, it *should*
+        # include a message in the response, but just in case...
+        return "Applying Wi-Fi changes..."
+
+    _4g = status & WiFiConnectionStatus.MODE_4G
+
+    if status & WiFiConnectionStatus.MODE_AP:
+        mode = "AP+4G" if _4g else "AP"
+        result = f"In {mode} mode as {ssid}"
+    else:
+        if status & WiFiConnectionStatus.PENDING:
+            mode = 'Connecting to'
+        elif status & WiFiConnectionStatus.CONNECTED:
+            mode = 'Connected to'
+        else:
+            mode = 'Disconnected from'
+        result = (f'{mode} as {ssid} (client+4G mode)' if _4g
+                  else f'{mode} as {ssid}')
+
+        if _4g:
+            result += ' (client+4G mode)'
+
+    return result
 
 
 # ===============================================================================
@@ -160,10 +193,14 @@ class ContinousNetworkStatusChecker(threading.Thread):
             try:
                 result.update(device.command.queryWifi(timeout=timeout))
 
-                if extra:
-                    mac, ip = device.command.getNetworkAddress(timeout=timeout)
-                    result['MACAddress'] = mac
-                    result['IPV4Address'] = ip
+                if extra and not result.get('WiFiConnectionStatus', 0) & WiFiConnectionStatus.CHANGING:
+                    try:
+                        mac, ip = device.command.getNetworkAddress(timeout=timeout)
+                        result['MACAddress'] = mac
+                        result['IPV4Address'] = ip
+                    except CommandError as err:
+                        if err.errno != CommandResponseCode.ERR_BUSY:
+                            raise
 
             except DeviceTimeout:
                 logger.warning("Timed out when checking the network connection, retrying")
@@ -243,10 +280,8 @@ class AddWifiDialog(SC.SizedDialog):
         self.authField.SetSizerProps(expand=True, valign='center')
 
         wx.StaticText(pane, -1, "Password:").SetSizerProps(valign='center')
-        # self.pwField = wx.TextCtrl(pane, -1, "", style=wx.TE_PASSWORD,
-        #                            validator=TextValidator( maxLen=63))
         self.pwField = PasswordTextCtrl(pane, -1, "",
-                                        validator=TextValidator( maxLen=63))
+                                        validator=TextValidator(maxLen=63))
         self.pwField.SetSizerProps(expand=True, valign='center')
         self.pwField.Enable(pwFieldEnabled)
 
@@ -335,7 +370,8 @@ class WiFiSelectionTab(Tab):
         self.info = []
         self.parent = kwargs['root']
         self.device = kwargs['root'].device
-        self.mode = 'station'
+        self.mode = ''
+        self.reportedMode = ''
         self.ssid = self.apn = ''  # AP mode: the gateway's reported SSID and APN
         self.apChanged = False
         self.initialized = False  # Prevents premature update call triggered by EVT_TEXT
@@ -437,6 +473,7 @@ class WiFiSelectionTab(Tab):
                     mode = 'ap'
                     self.ssid = result.get('SSID', '')
                     self.apn = result.get('APN', '')
+                    self.apNameField.SetValue(self.ssid)
             except (DeviceError, TimeoutError) as err:
                 logger.error(f'Initial QueryWiFi failed: {err!r}')
 
@@ -465,7 +502,7 @@ class WiFiSelectionTab(Tab):
 
         self.applyButton.Bind(wx.EVT_BUTTON, self.OnApplyButton)
 
-        self.setMode(mode)
+        self.setModeDisplay(mode)
 
 
     def addWifiScan(self, parent):
@@ -519,7 +556,6 @@ class WiFiSelectionTab(Tab):
         pwsizer = wx.BoxSizer(wx.HORIZONTAL)
         self.pwCheck = wx.CheckBox(listPanel, -1, "Change Password to Selected AP:")
         self.pwCheck.Enable(False)
-        # self.pwField = wx.TextCtrl(listPanel, -1, style=wx.TE_PASSWORD | wx.TE_PROCESS_ENTER, name="pwField")
         self.pwField = PasswordTextCtrl(listPanel, -1, name="pwField")
         self.pwField.Enable(False)
 
@@ -660,14 +696,14 @@ class WiFiSelectionTab(Tab):
         if ssid == self.ssid:
             return True
         if ssid in (ap.get('SSID') for ap in self.info):
-            raise FieldValidationError(f"'{ssid}' aready exists! Choose a unique SSID.")
+            raise FieldValidationError(f"'{ssid}' already exists! Choose a unique SSID.")
         return True
 
 
-    def setMode(self, mode: str):
+    def setModeDisplay(self, mode: str):
         """ Change the Gateway's Wi-Fi mode.
 
-            :param mode: ``"station"``, ``"ap"``, or ``"ap4g"``
+            :param mode: ``"station"``, ``"ap"``, ``"sta4g"``, or ``"ap4g"``
         """
         logger.debug(f'setMode({mode!r})')
         self.mode = mode
@@ -675,7 +711,7 @@ class WiFiSelectionTab(Tab):
             if self.stationModeCheck:
                 self.stationModeCheck.SetValue(True)
             self.stationPanel.Enable(True)
-        elif mode == 'ap':
+        elif mode.startswith('ap'):
             self.apModeCheck.SetValue(True)
             self.apPanel.Enable(True)
             self.stationModeCheck.SetValue(False)
@@ -705,34 +741,51 @@ class WiFiSelectionTab(Tab):
         """
         obj = evt.GetEventObject()
         if obj == self.apModeCheck:
-            self.setMode('ap')
-        else:
-            self.setMode('station')
+            self.setModeDisplay('ap')
+            return
+
+        self.setModeDisplay('station')
 
 
     def OnConnectionCheck(self, evt):
         """ Handle an update of the Wi-Fi connection status. Event posted by
             the `ContinuousNetworkStatusCheck` thread.
         """
+        print(f'OnConnectionCheck({evt.result})')
         if self.working.is_set():
             # Events should not be posted when working (applying Wi-Fi
             # settings), but one could be in transit before working was set.
             return
 
         result = evt.result
+        result.setdefault('SSID', '(no SSID)')
         status = result.get('WiFiConnectionStatus', 0)
-        text_to_display = CONNECTION_STATUS_TO_STR.get(status, '').format(**result)
-        is_connected = status & WiFiConnectionStatus.CONNECTED
+        text_to_display = connectionStatus2Str(result)
+        is_changing = status & WiFiConnectionStatus.CHANGING
 
-        if (ip := result.get('IPV4Address', None)) is not None:
-            tt = f'Device IP address: {ip}' if ip else 'No IP address assigned'
+        self.currentConnectionLabel.SetLabel(text_to_display)
+
+        if ip := result.get('IPV4Address', None):
+            tt = f'Device IP address: {ip}'
             self.currentConnectionLabel.SetToolTip(tt)
         else:
             self.currentConnectionLabel.UnsetToolTip()
 
-        self.currentConnectionLabel.SetLabel(text_to_display)
+        mode = 'ap' if status & WiFiConnectionStatus.MODE_AP else 'station'
+        if status & WiFiConnectionStatus.MODE_4G:
+            mode += '4g'
+
+        self.reportedMode = mode
+
+        self.Enable(not is_changing)
+        if is_changing:
+            self.spinner.Start()
+            return
+
+        self.spinner.Stop()
 
         if self.stationPanel.IsEnabled():
+            is_connected = status & WiFiConnectionStatus.CONNECTED
             for j in range(self.list.GetItemCount()):
                 itemtext = self.list.GetItemText(j, col=0).rstrip(' *')  # XXX: HACK: Gateway not initially matching selected AP?
                 label = u'\u2713' if is_connected and itemtext == result['SSID'] else '-'
@@ -807,7 +860,10 @@ class WiFiSelectionTab(Tab):
             self.startUpdateThreads()
 
         else:
-            self.stopUpdateThreads()
+            self.scanThread.cancel.set()
+            if not self.networkStatusThread.is_alive():
+                self.networkStatusThread = ContinousNetworkStatusChecker(self)
+                self.networkStatusThread.start()
 
 
     def populate(self):
@@ -1235,6 +1291,7 @@ class WiFiSelectionTab(Tab):
 
         try:
             cb = KeepAliveCallback()
+            self.spinner.Start()
             self.device.command.setWifi(data, timeout=timeout, callback=cb)
 
         except TimeoutError as E:
@@ -1285,5 +1342,28 @@ class WiFiSelectionTab(Tab):
             self.working.clear()
             self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
             self.updateApplyButton()
+            self.spinner.Stop()
 
         return True
+
+
+    def blockCancel(self) -> bool | str:
+        """ Is the widget in a busy stat the should disallow/warn against
+            cancelling?
+
+            :return: A message if cancelling should be blocked (a string that
+                doesn't cast to `False`), or `False` if cancelling is allowed.
+        """
+        # TODO: Warn if trying to cancel if Wi-Fi change is going, or if the
+        #  Wi-Fi is in an unusable state (e.g., changed to STA but no AP
+        #  selected)
+        return False
+
+
+    def blockOK(self) -> bool | str:
+        """ Are the widget's contents or value valid enough to save?
+
+            :return: A message if saving should be blocked (a string that
+                doesn't cast to `False`), or `False` if saving is allowed.
+        """
+        return self.blockCancel()

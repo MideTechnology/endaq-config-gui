@@ -140,7 +140,8 @@ class Spinner(wx.Panel):
 
     def Start(self):
         """ Start the animation. """
-        self.timer.Start(self.frameDelay)
+        if not self.timer.IsRunning():
+            self.timer.Start(self.frameDelay)
 
 
     def Stop(self):

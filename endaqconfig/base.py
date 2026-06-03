@@ -666,6 +666,25 @@ class ConfigWidget(wx.Panel, ConfigBase):
         self.Enable(enabled)
 
 
+    def blockOK(self) -> bool | str:
+        """ Are the widget's contents or value valid enough to save?
+
+            :return: A message if saving should be blocked (a string that
+                doesn't cast to `False`), or `False` if saving is allowed.
+        """
+        return False
+
+
+    def blockCancel(self) -> bool | str:
+        """ Is the widget or its contents in a busy stat the should
+            disallow cancelling?
+
+            :return: A message if cancelling should be blocked (a string that
+                doesn't cast to `False`), or `False` if cancelling is allowed.
+        """
+        return False
+
+
     # ===========================================================================
     # Event handlers
     # ===========================================================================
@@ -1887,6 +1906,38 @@ class Group(ConfigWidget):
         if self.checkbox is not None and not self.checkbox.GetValue():
             return None
         return not self.isDisabled() or None
+
+
+    def blockOK(self) -> bool | list[str]:
+        """ Are the widget's contents or value valid enough to save?
+
+            :return: A list of messages if saving should be blocked (strings
+                that don't cast to `False`), or `False` if saving is allowed.
+        """
+        if self.isDisabled():
+            return False
+
+        blocks = [child.blockOK() for child in self.fields]
+        if not any(blocks):
+            return False
+        return [b for b in blocks if b]
+
+
+    def blockCancel(self) -> bool | list[str]:
+        """ Is the widget or its contents in a busy stat the should
+            disallow/warn against cancelling?
+
+            :return: A list of messages if cancelling should be blocked
+                (strings that don't cast to `False`), or `False` if
+                cancelling is allowed.
+        """
+        if self.isDisabled():
+            return False
+
+        blocks = [child.blockCancel() for child in self.fields]
+        if not any(blocks):
+            return False
+        return [b for b in blocks if b]
 
 
 @registerField
