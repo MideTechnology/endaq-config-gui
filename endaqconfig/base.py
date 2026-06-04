@@ -29,7 +29,6 @@ import time
 from typing import Optional
 
 from ebmlite import Element, MasterElement
-from endaq.device import UnsupportedFeature
 
 import wx
 import wx.lib.filebrowsebutton as FB
@@ -84,14 +83,6 @@ def getConfigId(el: Element) -> Optional[int]:
 #
 # ===============================================================================
 
-# ===============================================================================
-#
-# ===============================================================================
-
-# ===============================================================================
-#
-# ===============================================================================
-
 class DisplayContainer(object):
     """ A wrapper for the dialog's dictionary of configuration items, which
         dynamically gets the displayed values from the corresponding widget. It
@@ -101,7 +92,6 @@ class DisplayContainer(object):
         by giving dependent values higher config IDs than the fields they
         depend upon.
     """
-
 
     def __init__(self, root):
         self.root = root

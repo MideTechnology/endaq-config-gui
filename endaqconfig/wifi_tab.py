@@ -52,7 +52,7 @@ def connectionStatus2Str(result: dict[str, Any]) -> str:
         return msg
 
     status = result.get('WiFiConnectionStatus', 0)
-    ssid = result.get('SSID', '(no SSID)')
+    ssid = result.get('SSID', '') or '(no SSID)'
 
     if status & WiFiConnectionStatus.CHANGING:
         # If the device (i.e., gateway) reports it is changing, it *should*
@@ -71,8 +71,8 @@ def connectionStatus2Str(result: dict[str, Any]) -> str:
             mode = 'Connected to'
         else:
             mode = 'Disconnected from'
-        result = (f'{mode} as {ssid} (client+4G mode)' if _4g
-                  else f'{mode} as {ssid}')
+        result = (f'{mode} {ssid} (client+4G mode)' if _4g
+                  else f'{mode} {ssid}')
 
         if _4g:
             result += ' (client+4G mode)'
@@ -494,14 +494,12 @@ class WiFiSelectionTab(Tab):
 
         connection_and_apply_sizer = wx.BoxSizer(wx.HORIZONTAL)
         connection_and_apply_sizer.AddMany(
-                ((self.spinner, 0),
-                 (self.currentConnectionLabel, 1, wx.EXPAND | wx.WEST, 8),
-                 (self.applyButton, 0, wx.SOUTH | wx.EAST, 8)))
-
+                ((self.currentConnectionLabel, 1, wx.EXPAND | wx.WEST, 8),
+                 (self.spinner, 0, wx.NORTH, 3),
+                 (self.applyButton, 0, wx.SOUTH | wx.EAST | wx.WEST, 8)))
         sizer.Add(connection_and_apply_sizer, 0, wx.EXPAND)
 
         self.applyButton.Bind(wx.EVT_BUTTON, self.OnApplyButton)
-
         self.setModeDisplay(mode)
 
 
@@ -725,6 +723,22 @@ class WiFiSelectionTab(Tab):
         self.getInfo()
 
 
+    def startBusy(self):
+        """ Start 'busy' mode: controls disabled, spinner running.
+        """
+        if not self.spinner.IsRunning():
+            self.Enable(False)
+            self.spinner.Start()
+
+
+    def stopBusy(self):
+        """ Stop 'busy' mode, re-enable everything.
+        """
+        if not self.IsEnabled():
+            self.Enable(True)
+            self.spinner.Stop()
+
+
     def OnExitField(self, evt):
         """ Handler for leaving a text field; does validation.
         """
@@ -745,6 +759,10 @@ class WiFiSelectionTab(Tab):
             return
 
         self.setModeDisplay('station')
+        # if self.reportedMode != self.mode:
+        # XXX: TODO: IMPLEMENT SWITCH TO STA MODE IF STARTED IN AP MODE
+        #  If change to STA and reported in AP* mode, change to STA.
+        #  (got to make sure things stay disabled until next WiFiConnectionStatus update)
 
 
     def OnConnectionCheck(self, evt):
@@ -775,14 +793,12 @@ class WiFiSelectionTab(Tab):
         if status & WiFiConnectionStatus.MODE_4G:
             mode += '4g'
 
-        self.reportedMode = mode
-
-        self.Enable(not is_changing)
         if is_changing:
-            self.spinner.Start()
+            self.startBusy()
             return
 
-        self.spinner.Stop()
+        self.reportedMode = mode
+        self.stopBusy()
 
         if self.stationPanel.IsEnabled():
             is_connected = status & WiFiConnectionStatus.CONNECTED
@@ -980,13 +996,6 @@ class WiFiSelectionTab(Tab):
             logger.debug('Shutting down Wi-Fi scan and status threads')
             self.spinner.Stop()
             self.stopUpdateThreads(wait=True)
-            if self.scanThread:
-                self.scanThread.cancel.set()
-            if self.networkStatusThread:
-                self.networkStatusThread.cancel.set()
-            while ((self.scanThread and self.scanThread.is_alive()) or
-                   (self.networkStatusThread and self.networkStatusThread.is_alive())):
-                pass
         except AttributeError:
             # Can sometimes occur in race conditions during shutdown.
             pass
@@ -1226,18 +1235,19 @@ class WiFiSelectionTab(Tab):
         """ Save Wi-Fi configuration data to the device. Implemented in all
             tabs/fields.
         """
+        self.startBusy()
         if self.mode == 'station':
             return self.saveStationMode()
         return self.saveAPMode()
 
 
-    def saveStationMode(self):
+    def saveStationMode(self, force=False):
         """ Apply Wi-Fi 'station' mode changes.
         """
         data = []
 
         # `updateApplyButton()` also returns whether changes have been made.
-        if self.updateApplyButton():
+        if force or self.updateApplyButton():
             for n, ap in enumerate(self.info):
                 ssid = ap['SSID']
                 if ssid in self.deleted:
