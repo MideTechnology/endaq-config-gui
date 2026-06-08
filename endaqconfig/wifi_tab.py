@@ -13,7 +13,7 @@ Created on Nov 13, 2019
 
 import threading
 from time import time, sleep
-from typing import Any
+from typing import Any, Literal
 
 import wx
 import wx.lib.sized_controls as SC
@@ -45,10 +45,11 @@ def connectionStatus2Str(result: dict[str, Any]) -> str:
     """ Generate a Wi-Fi connection status display, for use if the
         `QueryWiFiResponse` has no `WiFiStatusMessage`.
 
-        :param result: The contents of the `QueryWiFiResponse`.
+        :param result: The decoded contents of the `QueryWiFiResponse`.
         :return: A human-readable description of the status.
     """
     if msg := result.get('WiFiStatusMessage', None):
+        # Response explicitly provided status message; use it
         return msg
 
     status = result.get('WiFiConnectionStatus', 0)
@@ -59,25 +60,22 @@ def connectionStatus2Str(result: dict[str, Any]) -> str:
         # include a message in the response, but just in case...
         return "Applying Wi-Fi changes..."
 
+    msg = 'Disconnected'
     _4g = status & WiFiConnectionStatus.MODE_4G
 
     if status & WiFiConnectionStatus.MODE_AP:
         mode = "AP+4G" if _4g else "AP"
-        result = f"In {mode} mode as {ssid}"
+        msg = f"In {mode} mode as '{ssid}'"
     else:
         if status & WiFiConnectionStatus.PENDING:
-            mode = 'Connecting to'
+            msg = f'Connecting to {ssid}'
         elif status & WiFiConnectionStatus.CONNECTED:
-            mode = 'Connected to'
-        else:
-            mode = 'Disconnected from'
-        result = (f'{mode} {ssid} (client+4G mode)' if _4g
-                  else f'{mode} {ssid}')
+            msg = f'Connected to {ssid}'
 
         if _4g:
-            result += ' (client+4G mode)'
+            msg = f'{msg} (client+4G mode)'
 
-    return result
+    return msg
 
 
 # ===============================================================================
@@ -142,7 +140,7 @@ class WiFiScanThread(threading.Thread):
             pass
 
 
-class ContinousNetworkStatusChecker(threading.Thread):
+class StatusCheckThread(threading.Thread):
     """ Thread for continually checking the current status of the network
         connection, done asynchronously.
     """
@@ -162,7 +160,7 @@ class ContinousNetworkStatusChecker(threading.Thread):
             :param extra: If `True`, include additional information in the
                 update event.
         """
-        super(ContinousNetworkStatusChecker, self).__init__(name=type(self).__name__)
+        super(StatusCheckThread, self).__init__(name=type(self).__name__)
         self.daemon = True
 
         self.parent = parent
@@ -183,10 +181,10 @@ class ContinousNetworkStatusChecker(threading.Thread):
         extra = self.parent.parent.showAdvanced
 
         while bool(self.parent) and not self.cancel.is_set():
-            start_time = time()
             result = {}
 
-            if self.parent.working.is_set():
+            # if self.parent.working.is_set():
+            if self.parent.scanThread.is_alive():
                 sleep(self.interval)
                 continue
 
@@ -209,6 +207,7 @@ class ContinousNetworkStatusChecker(threading.Thread):
             except DeviceError as E:
                 if E.args and E.args[0] == DeviceStatusCode.ERR_BUSY:
                     logger.info("Device reported ERR_BUSY, retrying")
+                    sleep(1)
                     continue
                 else:
                     logger.error(E)
@@ -219,6 +218,7 @@ class ContinousNetworkStatusChecker(threading.Thread):
                     evt = EvtConfigWiFiConnectionCheck(result=result)
                     if bool(self.parent):
                         wx.PostEvent(self.parent, evt)
+                sleep(self.interval)
 
             except IOError as E:
                 logger.warning(E)
@@ -227,10 +227,9 @@ class ContinousNetworkStatusChecker(threading.Thread):
                 if bool(self.parent):
                     wx.PostEvent(self.parent, evt)
 
-                return
+                break
 
-            to_sleep = max(0, self.interval - (time() - start_time))
-            sleep(to_sleep)
+        logger.debug(f'Exiting main loop of {self.name}')
 
 
 # ===============================================================================
@@ -375,25 +374,39 @@ class WiFiSelectionTab(Tab):
         self.ssid = self.apn = ''  # AP mode: the gateway's reported SSID and APN
         self.apChanged = False
         self.initialized = False  # Prevents premature update call triggered by EVT_TEXT
+        self.checkInterval = kwargs.pop('checkInterval', 4)
 
         self.working = threading.Event()
 
-        self.networkStatusThread = ContinousNetworkStatusChecker(self)
+        self.networkStatusThread = StatusCheckThread(self,
+                                                     interval=self.checkInterval)
         self.scanThread = WiFiScanThread(self)
+
+        # List of UI widgets to easily enable/disable (not all widgets
+        # draw disabled when parent panel disabled).
+        self.apWidgets = []
+        self.stationWidgets = []
+        self.sharedWidgets = []
 
         super(WiFiSelectionTab, self).__init__(*args, **kwargs)
         if not getattr(self, 'label'):
             self.label = 'Wi-Fi'
+
+        # Timer to temporarily suppress updates from status checker
+        # No event handler; explicitly checked if running
+        self.delay = wx.Timer()
 
 
     def startUpdateThreads(self):
         """ Start the Wi-Fi update threads (Wi-Fi scan and status) if not
             already running.
         """
+        logger.debug('Called startUpdateThreads()')
         if not self.networkStatusThread.is_alive():
-            self.networkStatusThread = ContinousNetworkStatusChecker(self)
+            self.networkStatusThread = StatusCheckThread(self, interval=self.checkInterval)
             self.networkStatusThread.start()
-        if not self.scanThread.is_alive():
+        if not self.reportedMode.startswith('ap') and not self.scanThread.is_alive():
+            self.startBusy()
             self.scanThread = WiFiScanThread(self)
             self.scanThread.start()
 
@@ -416,12 +429,12 @@ class WiFiSelectionTab(Tab):
                     if time() > t:
                         logger.debug('Timed out shutting down Wi-Fi threads!')
                         break
+                    sleep(0.05)
 
         except AttributeError as err:
             # Can potentially occur in race condition during shutdown, ignore.
             logger.debug(f'AttributeError stopping Wi-Fi threads: {err}')
             pass
-
 
 
     def loadImages(self):
@@ -448,6 +461,7 @@ class WiFiSelectionTab(Tab):
 
         if self.showAPMode:
             self.apModeCheck = wx.RadioButton(self, -1, "Run Gateway as Access Point")
+
             boldfont = self.apModeCheck.GetFont().Bold()
             self.apModeCheck.SetFont(boldfont)
 
@@ -463,6 +477,8 @@ class WiFiSelectionTab(Tab):
             sizer.Add(self.stationModeCheck, 0, wx.EXPAND | wx.ALL, 4)
             sizer.Add(self.stationPanel, 1, wx.EXPAND | wx.WEST, 12)
             sizer.AddSpacer(24)
+
+            self.sharedWidgets.extend([self.apModeCheck, self.stationModeCheck])
 
             self.apModeCheck.Bind(wx.EVT_RADIOBUTTON, self.OnWiFiModeChange)
             self.stationModeCheck.Bind(wx.EVT_RADIOBUTTON, self.OnWiFiModeChange)
@@ -498,6 +514,9 @@ class WiFiSelectionTab(Tab):
                  (self.spinner, 0, wx.NORTH, 3),
                  (self.applyButton, 0, wx.SOUTH | wx.EAST | wx.WEST, 8)))
         sizer.Add(connection_and_apply_sizer, 0, wx.EXPAND)
+
+        self.sharedWidgets.extend([self.applyButton, self.spinner,
+                                   self.currentConnectionLabel])
 
         self.applyButton.Bind(wx.EVT_BUTTON, self.OnApplyButton)
         self.setModeDisplay(mode)
@@ -568,6 +587,9 @@ class WiFiSelectionTab(Tab):
 
         listPanel.SetSizer(sizer)
 
+        self.stationWidgets.extend([self.list, self.rescan, self.addButton,
+                                    self.pwCheck, self.pwField, self.forgetCheck])
+
         # For doing per-item tool tips in the list
         self.listToolTips = []
         self.lastToolTipItem = -1
@@ -636,6 +658,8 @@ class WiFiSelectionTab(Tab):
             txt.Bind(wx.EVT_KILL_FOCUS, self.OnExitField)
             rowsizer.Add(lbl, 0, wx.EXPAND | wx.NORTH, 4)
             rowsizer.Add(txt, 1, wx.EXPAND)
+
+            self.apWidgets.extend([lbl, txt])
             return  rowsizer, lbl, txt
 
         row1sizer, _, self.apNameField = labeledField(
@@ -656,6 +680,7 @@ class WiFiSelectionTab(Tab):
         sizer.AddSpacer(4)
         self.wwan4gCheck = wx.CheckBox(panel, -1, label="Connect to 4G wireless data")
         sizer.Add(self.wwan4gCheck, 0, wx.EXPAND | wx.ALL, 4)
+        self.apWidgets.append(self.wwan4gCheck)
 
         row3sizer, wwan4gNameLbl, self.wwan4gNameField = labeledField(
                 "APN:",
@@ -698,12 +723,13 @@ class WiFiSelectionTab(Tab):
         return True
 
 
-    def setModeDisplay(self, mode: str):
+    def setModeDisplay(self, mode: Literal['station', 'ap', 'sta4g', 'ap4g']):
         """ Change the Gateway's Wi-Fi mode.
 
-            :param mode: ``"station"``, ``"ap"``, ``"sta4g"``, or ``"ap4g"``
+            :param mode: ``"station"``, ``"ap"``, ``"sta4g"``, or ``"ap4g"``.
+                Note that 4G is not currently supported.
         """
-        logger.debug(f'setMode({mode!r})')
+        logger.debug(f'setModeDisplay({mode!r})')
         self.mode = mode
         if not self.showAPMode:
             if self.stationModeCheck:
@@ -712,13 +738,16 @@ class WiFiSelectionTab(Tab):
         elif mode.startswith('ap'):
             self.apModeCheck.SetValue(True)
             self.apPanel.Enable(True)
+            self.list.DeleteAllItems()
             self.stationModeCheck.SetValue(False)
             self.stationPanel.Enable(False)
+            # TODO: Disable individual widgets? (see comments elsewhere)
         else:
             self.stationModeCheck.SetValue(True)
             self.stationPanel.Enable(True)
             self.apModeCheck.SetValue(False)
             self.apPanel.Enable(False)
+
 
         self.getInfo()
 
@@ -728,15 +757,43 @@ class WiFiSelectionTab(Tab):
         """
         if not self.spinner.IsRunning():
             self.Enable(False)
+            # self.parent.Enable(False)
             self.spinner.Start()
+
+        self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
+
+        # TODO: Explicitly disable widgets, so they look right?
+        # for widget in self.apWidgets + self.stationWidgets + self.sharedWidgets:
+        #     widget.Enable(False)
+
+        # self.list.Enable(False)
+        # self.addButton.Enable(False)
+        # self.pwCheck.Enable(False)
+        # self.pwField.Enable(False)
+        # self.forgetCheck.Enable(False)
+        #
+        # if self.showAPMode:
+        #     self.apModeCheck.Enable(False)
 
 
     def stopBusy(self):
         """ Stop 'busy' mode, re-enable everything.
         """
+        self.working.clear()
+        self.delay.Stop()
+
         if not self.IsEnabled():
             self.Enable(True)
             self.spinner.Stop()
+        self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+
+        # TODO: Explicitly enable widgets if disabled by startBusy()?
+        # widgets = (self.apWidgets if self.mode.startswith('ap')
+        #            else self.stationWidgets)
+        #
+        # for widget in widgets + self.sharedWidgets:
+        #     widget.Enable(True)
+
 
 
     def OnExitField(self, evt):
@@ -759,18 +816,16 @@ class WiFiSelectionTab(Tab):
             return
 
         self.setModeDisplay('station')
-        # if self.reportedMode != self.mode:
-        # XXX: TODO: IMPLEMENT SWITCH TO STA MODE IF STARTED IN AP MODE
-        #  If change to STA and reported in AP* mode, change to STA.
-        #  (got to make sure things stay disabled until next WiFiConnectionStatus update)
+        if self.reportedMode != self.mode and not self.reportedMode.startswith('sta'):
+            self.setWifi({'AP': [{'SSID': '_', 'Password': '_', 'Selected': 0}]})
 
 
     def OnConnectionCheck(self, evt):
         """ Handle an update of the Wi-Fi connection status. Event posted by
             the `ContinuousNetworkStatusCheck` thread.
         """
-        print(f'OnConnectionCheck({evt.result})')
-        if self.working.is_set():
+        logger.debug(f'OnConnectionCheck({evt.result})')
+        if self.delay.IsRunning():
             # Events should not be posted when working (applying Wi-Fi
             # settings), but one could be in transit before working was set.
             return
@@ -863,7 +918,7 @@ class WiFiSelectionTab(Tab):
             device-reading thread.
         """
 
-        if self.mode == 'station':
+        if self.mode.startswith('sta'):
             if not self.scanThread.is_alive():
                 self.list.Enable(False)
                 self.addButton.Enable(False)
@@ -878,7 +933,8 @@ class WiFiSelectionTab(Tab):
         else:
             self.scanThread.cancel.set()
             if not self.networkStatusThread.is_alive():
-                self.networkStatusThread = ContinousNetworkStatusChecker(self)
+                self.networkStatusThread = StatusCheckThread(self,
+                                                             interval=self.checkInterval)
                 self.networkStatusThread.start()
 
 
@@ -1015,9 +1071,12 @@ class WiFiSelectionTab(Tab):
     def OnWiFiScan(self, evt):
         """ Handle the asynchronous Wi-Fi scan finishing.
         """
+        self.stopBusy()
+        self.working.set()
         self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
 
         if evt.error is not None:  # Scan encountered error; show warning.
+            self.working.clear()
 
             if isinstance(evt.error, IOError):
                 return
@@ -1289,13 +1348,14 @@ class WiFiSelectionTab(Tab):
     def setWifi(self, data):
         """ Call `Recorder.command.setWifi()` command and handle any errors.
         """
+        logger.debug(f'Setting WIFI: {data}')
         # Allow more time for remote devices to respond
         timeout = 45 if isinstance(self.device.config, RemoteConfigInterface) else 10
 
-        self.working.set()
-        self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
-        self.parent.Enable(False)
-        self.applyButton.Enable(False)
+        # Delay next scan by 3/4 of its interval time
+        self.delay.StartOnce(int(self.checkInterval * 750))
+
+        self.startBusy()
         self.currentConnectionLabel.SetLabel('Setting Wi-Fi, please wait...')
         self.currentConnectionLabel.UnsetToolTip()
 
@@ -1346,13 +1406,13 @@ class WiFiSelectionTab(Tab):
                     parent=self)
             return False
 
-        finally:
-            self.parent.Enable(True)
-            self.currentConnectionLabel.SetLabel('')
-            self.working.clear()
-            self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-            self.updateApplyButton()
-            self.spinner.Stop()
+        # finally:
+        #     self.parent.Enable(True)
+        #     self.currentConnectionLabel.SetLabel('')
+        #     self.working.clear()
+        #     self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+        #     self.updateApplyButton()
+        #     self.spinner.Stop()
 
         return True
 
