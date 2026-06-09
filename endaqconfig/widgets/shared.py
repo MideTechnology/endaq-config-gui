@@ -155,6 +155,9 @@ class PasswordTextCtrl(wx.Panel):
         self.bmp_hidden = pw_show.GetBitmap()
         self.bmp_visible = pw_hide.GetBitmap()
 
+        dis = pw_show.GetImage().AdjustChannels(1.0, 1.0, 1.0, 0.33)
+        self.bmp_disabled = wx.Bitmap(dis, depth=32)
+
         self.staticbmp = wx.StaticBitmap(self, -1, self.bmp_hidden, pos=(5, 6))
         self.staticbmp.SetToolTip('Show Password')
 
@@ -178,6 +181,24 @@ class PasswordTextCtrl(wx.Panel):
         self.text_ctrl.SetValue(value)
 
         self.staticbmp.Bind(wx.EVT_LEFT_UP, self.OnShowPassword)
+
+
+    def Enable(self, enable=True):
+        """ Enable or disable the window for user input. """
+        # NOTE: This doesn't get called if parent enabled/disabled!
+        if not enable:
+            self.showPassword(False)
+            bmp = self.bmp_disabled
+        else:
+            bmp = self.bmp_hidden
+        self.staticbmp.SetBitmap(bmp)
+
+        return super().Enable(enable=enable)
+
+
+    def Disable(self):
+        """ Disables the window. """
+        self.Enable(False)
 
 
     def Bind(self, *args, **kwargs):

@@ -1715,7 +1715,12 @@ class RebootButton(CheckDriftButton):
         """ Handle button press: reset sibling fields to the factory defaults.
         """
         if self._command is None:
+            logger.debug("No function attached to button; no device?")
             return
+
+        # TODO: Check for unsaved config changes.
+        #  If changes: Prompt to save before execution (yes, no, cancel)
+        #  If no changes: Prompt before execution (yes, no)
 
         # TODO: Wrap `_command()` call with exception handling, etc.
         self._command()
