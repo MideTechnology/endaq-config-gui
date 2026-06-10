@@ -1490,14 +1490,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnRebootDevice(self, evt):
         """ Handle the 'reboot' button or menu item selection.
         """
-        # XXX: OnRebootDevice doesn't work right; it closes the dialog?
         device = evt.device
         if isGateway(device):
             q = wx.MessageBox(
                     f'Reboot/Reset {device.productName}?\n\n'
                     'This will disrupt communication with any device connected to it.',
                     'Reset',
-                    style=wx.ICON_QUESTION | wx.YES_NO | wx.YES_DEFAULT,
+                    style=wx.ICON_WARNING | wx.YES_NO | wx.YES_DEFAULT,
                     parent=self)
 
             if q != wx.YES:
@@ -1507,7 +1506,15 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         try:
             logger.debug(f'Sending reboot to {device}')
-            DeviceCommandThread(device, device.command.reboot)
+            DeviceCommandThread(device, device.command.reset)
+
+            if isGateway(device) and 'MQTT' not in type(device.command).__name__:
+                wx.MessageBox('Unplug Gateway USB cable now!\n\n'
+                              'The Gateway must not have a USB connection when booting.',
+                              'Disconnect USB',
+                              style=wx.ICON_WARNING | wx.OK,
+                              parent=self)
+
         except DeviceError as err:
             # TODO: Handle reset error
             logger.error(f'Device failed reboot: {err!r}', stack_info=True)
@@ -1522,7 +1529,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 f'Shutdown/power off {device.productName}?\n\n'
                 'This will disrupt communication with any device connected to it.',
                 'Power Off',
-                style=wx.ICON_QUESTION | wx.YES_NO | wx.YES_DEFAULT,
+                style=wx.ICON_WARNING | wx.YES_NO | wx.YES_DEFAULT,
                 parent=self)
 
         if q != wx.YES:
