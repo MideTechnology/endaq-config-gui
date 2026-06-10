@@ -13,17 +13,20 @@ import wx
 
 try:
     from ctypes import windll
-
+    # noinspection PyUnresolvedReferences
     DOUBLE_CLICK_DEBOUNCE_TIME = windll.user32.GetDoubleClickTime()
 except (ImportError, AttributeError):
     DOUBLE_CLICK_DEBOUNCE_TIME = 300
+
+
+from endaq.device import Recorder
 
 
 # ===============================================================================
 #
 # ===============================================================================
 
-def isCompiled():
+def isCompiled() -> bool:
     """ Is this a compiled (i.e. with PyInstaller) application?
     """
     return getattr(sys, 'frozen', False)
@@ -33,7 +36,8 @@ def isCompiled():
 # Time utility functions, etc.
 #===============================================================================
 
-def datetime2int(val, tzOffset=0):
+def datetime2int(val: datetime | wx.DateTime,
+                 tzOffset: int = 0):
     """ Convert a date/time object (either a standard Python datetime.datetime
         or wx.DateTime) into the UTC epoch time (i.e. UNIX time stamp).
     """
@@ -42,7 +46,7 @@ def datetime2int(val, tzOffset=0):
     return int(calendar.timegm(val.utctimetuple()) + tzOffset)
 
 
-def time2int(val, tzOffset=0):
+def time2int(val: str, tzOffset: int = 0) -> int:
     """ Parse a time string (as returned from `TimeCtrl.GetValue()`) into
         seconds since midnight.
     """
@@ -50,7 +54,7 @@ def time2int(val, tzOffset=0):
     return int((t.hour * 60 * 60) + (t.minute * 60) + t.second + tzOffset)
 
 
-def makeWxDateTime(val):
+def makeWxDateTime(val: datetime | wx.DateTime | int | float) -> wx.DateTime:
     """ Create a `wx.DateTime` instance from a standard `datetime`, time tuple
         (or a similar 'normal' tuple), epoch timestamp, or another
         `wx.DateTime` object.
@@ -67,8 +71,11 @@ def makeWxDateTime(val):
     return wx.DateTime.FromDMY(val[2], val[1]-1, val[0], val[3], val[4], val[5])
 
 
-def getUtcOffset(seconds=False):
+def getUtcOffset(seconds=False) -> int | float:
     """ Get the local offset from UTC time, in hours or seconds (float).
+
+        :param seconds: If `True`, return the offset in whole seconds. If
+            `False`, return the offset in fractional hours.
     """
     gt = time.gmtime()
     lt = time.localtime()
@@ -86,7 +93,7 @@ def getUtcOffset(seconds=False):
 #
 #===============================================================================
 
-def deviceString(device):
+def deviceString(device: Recorder):
     """ Little utility function to generate a nice string for a recorder.
     """
     # TODO: Move this to `Recorder.__str__()`?
@@ -100,7 +107,7 @@ def deviceString(device):
 #
 #===============================================================================
 
-def getClipboardText():
+def getClipboardText() -> str:
     """ Retrieve text from the clipboard.
     """
     if not wx.TheClipboard.IsOpened():

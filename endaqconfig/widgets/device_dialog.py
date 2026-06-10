@@ -36,7 +36,7 @@ from .controls import (_attribFormatter, populateStatusColumn, populateButtonCol
 from .events import (EVT_RECORD, EVT_STREAM, EVT_CONFIG, EVT_LOCK_DEVICE,
                      EVT_BLINK, EVT_BROKER_SELECTED, EVT_MQTT_CONNECTING,
                      EVT_MQTT_CONNECTED, EVT_MQTT_DISCONNECTED, EVT_MQTT_ERROR,
-                     EvtMQTTError)
+                     EVT_RESET, EVT_SHUTDOWN, EvtMQTTError)
 from .threads import (DeviceScanThread, DeviceCommandThread, BrokerConnectThread,
                       isOnline, isSleeping, isGateway)
 from .shared import DeviceToolTip
@@ -288,6 +288,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.Bind(EVT_CONFIG, self.OnConfigButton)
         self.Bind(EVT_BLINK, self.OnBlink)
         self.Bind(EVT_LOCK_DEVICE, self.OnLockDevice)
+        self.Bind(EVT_RESET, self.OnRebootDevice)
+        self.Bind(EVT_SHUTDOWN, self.OnShutdownDevice)
 
         self.Bind(wx.EVT_TIMER, self.OnUpdateTimerTick, id=self.updateTimer.GetId())
         self.Bind(wx.EVT_TIMER, self.OnConnectFailTimer, id=self.connectFailTimer.GetId())
@@ -1485,6 +1487,58 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.EndModal(wx.ID_OK)
 
 
+    def OnRebootDevice(self, evt):
+        """ Handle the 'reboot' button or menu item selection.
+        """
+        # XXX: OnRebootDevice doesn't work right; it closes the dialog?
+        device = evt.device
+        if isGateway(device):
+            q = wx.MessageBox(
+                    f'Reboot/Reset {device.productName}?\n\n'
+                    'This will disrupt communication with any device connected to it.',
+                    'Reset',
+                    style=wx.ICON_QUESTION | wx.YES_NO | wx.YES_DEFAULT,
+                    parent=self)
+
+            if q != wx.YES:
+                logger.debug('No reset for the wicked!')
+                evt.Veto()
+                return
+
+        try:
+            logger.debug(f'Sending reboot to {device}')
+            DeviceCommandThread(device, device.command.reboot)
+        except DeviceError as err:
+            # TODO: Handle reset error
+            logger.error(f'Device failed reboot: {err!r}', stack_info=True)
+            pass
+
+
+    def OnShutdownDevice(self, evt):
+        """ Handle the 'shutdown' button or menu item selection.
+        """
+        device = evt.device
+        q = wx.MessageBox(
+                f'Shutdown/power off {device.productName}?\n\n'
+                'This will disrupt communication with any device connected to it.',
+                'Power Off',
+                style=wx.ICON_QUESTION | wx.YES_NO | wx.YES_DEFAULT,
+                parent=self)
+
+        if q != wx.YES:
+            logger.debug('Never gonna give you up, never gonna shut you down')
+            evt.Veto()
+            return
+
+        try:
+            logger.debug(f'Sending shutdown to {device}')
+            DeviceCommandThread(device, device.command.shutdown)
+        except DeviceError as err:
+            # TODO: Handle shutdown error
+            logger.error(f'Device failed shutdown: {err!r}', stack_info=True)
+            pass
+
+
     def OnStartAllRecorders(self, evt):
         """ Send the 'start recording' command to all devices.
 
@@ -1499,7 +1553,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnStartSelected(self, _evt):
         """ Handle the 'Start Checked' button press event.
         """
-        # TODO: Better identification of valid devices (correct status, etc.)
         devices = [(rec, rec.command.startRecording, (), {})
                    for rec in self.getChecked()
                    if rec.command.canRecord]

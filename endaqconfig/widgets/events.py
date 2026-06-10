@@ -24,6 +24,11 @@ EvtLockDevice, EVT_LOCK_DEVICE = NewEvent()
 # Blink the recorder's LED.
 EvtBlink, EVT_BLINK = NewEvent()
 
+# Reset the device
+EvtReset, EVT_RESET = NewEvent()
+
+# Power down the device (i.e., a Gateway)
+EvtShutdown, EVT_SHUTDOWN = NewEvent()
 
 # ===========================================================================
 # Wi-Fi events

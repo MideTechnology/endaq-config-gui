@@ -9,14 +9,14 @@ import wx
 from wx.lib.agw import ultimatelistctrl as ULC
 
 from endaq.device.response_codes import DeviceStatusCode
-from endaq.device import CommandError, UnsupportedFeature, Recorder
+from endaq.device import CommandError, DeviceError, UnsupportedFeature, Recorder
 from endaq.device.command_interfaces import SerialCommandInterface
 
 from . import battery_icons
 from . import icons
-from .events import EvtConfig, EvtRecord, EvtStream, EvtLockDevice, EvtBlink
+from .events import EvtConfig, EvtRecord, EvtStream, EvtLockDevice, EvtBlink, EvtReset, EvtShutdown
 from ..common import deviceString
-from .threads import isOnline
+from .threads import isOnline, isGateway
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -317,7 +317,7 @@ class NewControlButtons(wx.Panel):
 # ===========================================================================
 
 class ListContextMenu(wx.Menu):
-    """ 'Right Click' menu for devlice list items. Duplicates most of the
+    """ 'Right Click' menu for device list items. Duplicates most of the
         functionality of the item control buttons.
     """
 
@@ -331,7 +331,7 @@ class ListContextMenu(wx.Menu):
 
 
     def __init__(self, root, device, devlist, index):
-        """ 'Right Click' menu for devlice list items.
+        """ 'Right Click' menu for device list items.
         """
         self.root = root
         self.list = devlist
@@ -342,16 +342,6 @@ class ListContextMenu(wx.Menu):
         NewControlButtons._loadImages()
         icons = NewControlButtons.ICONS
 
-        available = isOnline(device)
-        devstr = deviceString(self.device)
-        config = self._addMI(f"Configure {devstr}...", self.OnConfig, icons[0][0])
-        startRec = self._addMI(f"Start Recording", self.OnStartRecording, icons[1][0])
-        startStream = self._addMI(f"Start Streaming", self.OnStartStreaming, icons[4][0])
-        stopRec = self._addMI("Stop Recording/Streaming", self.OnStopRecording, icons[2][0])
-        self.AppendSeparator()
-        lock = self._addMI(f"Lock {devstr}", self.OnLock, icons[6][0])
-        self.AppendSeparator()
-        blink = self._addMI("Blink Recorder LEDs", self.OnBlink, icons[7][0])
 
         locked, mine = self.device.command.isLocked()
         anothers = locked and not mine
@@ -361,12 +351,33 @@ class ListContextMenu(wx.Menu):
                                                         DeviceStatusCode.TRIGGERING,
                                                         DeviceStatusCode.TRIGGERING_PERIODIC,
                                                         DeviceStatusCode.STREAMING)
+        available = isOnline(device)
+        devstr = deviceString(self.device)
+        serial =  isinstance(self.device.command, SerialCommandInterface)
 
+        config = self._addMI(f"Configure {devstr}...", self.OnConfig, icons[0][0])
+        startRec = self._addMI(f"Start Recording", self.OnStartRecording, icons[1][0])
+        startStream = self._addMI(f"Start Streaming", self.OnStartStreaming, icons[4][0])
+        stopRec = self._addMI("Stop Recording/Streaming", self.OnStopRecording, icons[2][0])
+        self.AppendSeparator()
+        lock = self._addMI(f"Lock {devstr}", self.OnLock, icons[6][0])
+        self.AppendSeparator()
+        blink = self._addMI("Blink Recorder LEDs", self.OnBlink, icons[7][0])
+
+        self.AppendSeparator()
+        reboot = self._addMI(f"Reset/Reboot {devstr}...", self.OnDeviceReset, icons[8][0])
+
+        if isGateway(self.device):
+            shutdown = self._addMI("Power Off", self.OnDeviceShutdown, icons[9][0])
+            shutdown.Enable(available and not anothers)
+
+        # TODO: Handle very old devices without command interfaces?
         config.Enable(available and not anothers)
         startRec.Enable(available and self.device.command.canRecord and not anothers and not isRecording)
         startStream.Enable(available and self.device.command.canStream and not anothers and not isRecording)
         stopRec.Enable(available and not anothers and isRecording)
-        blink.Enable(available and isinstance(self.device.command, SerialCommandInterface))
+        blink.Enable(available and serial)
+        reboot.Enable(available and not anothers)
 
         self.clearLock = locked
         self.forceLock = anothers and wx.GetKeyState(wx.WXK_CONTROL)
@@ -422,6 +433,18 @@ class ListContextMenu(wx.Menu):
         """ Handle Blink menu item.
         """
         self._postEvent(EvtBlink(device=self.device))
+
+
+    def OnDeviceReset(self, _evt):
+        """ Handle Reset menu item.
+        """
+        self._postEvent(EvtReset(device=self.device))
+
+
+    def OnDeviceShutdown(self, _evt):
+        """ Handle the Power Off menu item.
+        """
+        self._postEvent(EvtShutdown(device=self.device))
 
 
 # ===========================================================================
