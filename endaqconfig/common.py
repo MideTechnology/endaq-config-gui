@@ -19,7 +19,7 @@ except (ImportError, AttributeError):
     DOUBLE_CLICK_DEBOUNCE_TIME = 300
 
 
-from endaq.device import Recorder
+from endaq.device import Recorder, DeviceStatusCode
 
 
 # ===============================================================================
@@ -118,3 +118,51 @@ def getClipboardText() -> str:
         return obj.GetText()
 
     return ""
+
+
+#===============================================================================
+# Device status checks
+#===============================================================================
+
+def isOnline(device: Recorder) -> bool:
+    """ Is the device in an 'online' state? Note that local USB devices are
+        inherently online.
+    """
+    if device.isVirtual:
+        return False
+    elif not device.isRemote:
+        return True
+
+    # TODO: Also exclude timed out devices?
+    status = device.command.status[1]
+    if status is not None and 300 <= status < 500:
+        # Codes 400-499 are 'offline' variants of positive codes 0-99
+        return False
+    return status not in (DeviceStatusCode.ERR_DISCONNECTED,
+                          DeviceStatusCode.OFFLINE,
+                          DeviceStatusCode.SHUTDOWN,
+                          DeviceStatusCode.RESET_PENDING,
+                          DeviceStatusCode.START_PENDING,
+                          DeviceStatusCode.STOP_PENDING,
+                          DeviceStatusCode.UPLOADING,
+                          None)
+
+
+def isSleeping(device: Recorder) -> bool:
+    """ Is the device in a 'sleeping' state?
+    """
+    status = device.command.status[1]
+    if status is not None and 200 <= status < 400:
+        # Codes 300-399 are 'periodic' variants of positive codes 0-99
+        return True
+    return status in (DeviceStatusCode.SLEEPING,
+                      DeviceStatusCode.WAKING)
+
+
+def isGateway(device: Recorder) -> bool:
+    """ Is the device a HDS Gateway box?
+    """
+    return True
+    # Gateway-ness determined by bits in the "recorder's" `RecorderTypeUID`.
+    devtype = device.getInfo('RecorderTypeUID', 0)
+    return bool(devtype & 0xa0000000)  # bits 31 (non-recorder) and 29 (gateway)

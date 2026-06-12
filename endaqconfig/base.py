@@ -8,20 +8,8 @@ The dialog itself was split off to allow a more modular approach.
 __author__ = "dstokes"
 __copyright__ = "Copyright 2022 Mide Technology Corporation"
 
-# ===============================================================================
-#
-# ===============================================================================
-
-# ===============================================================================
-#
-# ===============================================================================
-
 import logging
 logger = logging.getLogger(__name__)
-
-# ===============================================================================
-#
-# ===============================================================================
 
 from fnmatch import fnmatch
 import string
@@ -34,9 +22,8 @@ import wx
 import wx.lib.filebrowsebutton as FB
 import wx.lib.scrolledpanel as SP
 
-from .common import getUtcOffset, isCompiled
+from .common import getUtcOffset
 from .validators import TextValidator
-from .widgets.controls import NewControlButtons
 from .widgets.shared import DateTimeCtrl, wx_DateTime_FromTimeT, PasswordTextCtrl
 
 # ===============================================================================
@@ -1574,67 +1561,6 @@ class CheckFloatAccelerationField(FloatAccelerationField):
 # ===============================================================================
 
 @registerField
-class CheckDriftButton(ConfigWidget):
-    """ Special-case "field" consisting of a button that checks the recorder's
-        clock versus the host computer's time. It does not affect the config
-        data.
-    """
-    UNITS = False
-    DEFAULT_TYPE = None
-
-
-    def __init__(self, *args, **kwargs):
-        """ Constructor.
-
-            :see: `ConfigWidget.__init__()`
-        """
-        self.setAttribDefault("label", "Check Clock Drift")
-        self.setAttribDefault("tooltip", "Read the recorder's clock and "
-                                         "compare to the current system time.")
-        super(CheckDriftButton, self).__init__(*args, **kwargs)
-
-
-    def initUI(self):
-        """ Build the user interface, adding the item label and/or checkbox,
-            the appropriate UI control(s) and a 'units' label (if applicable).
-            Separated from `__init__()` for the sake of subclassing.
-        """
-        self.checkbox = None
-        self.sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.field = wx.Button(self, -1, self.label)
-        self.sizer.Add(self.field, 0)
-
-        if self.tooltip:
-            self.SetToolTip(self.tooltip)
-            self.field.SetToolTip(self.tooltip)
-
-        self.SetSizer(self.sizer)
-
-        self.Bind(wx.EVT_BUTTON, self.OnButtonPress)
-
-
-    def OnButtonPress(self, evt):
-        """ Handle button press: perform the clock drift test.
-        """
-        self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
-        try:
-            times = self.root.device.getTime()
-        except Exception:
-            if self.root.DEBUG and not isCompiled():
-                raise
-            self.showError("Could not read the recorder's clock!", self.label,
-                           style=wx.OK | wx.ICON_ERROR)
-            return
-
-        drift = times[0] - times[1]
-        msg = "Recorder is %.4f seconds %s the computer." % \
-              (drift, "behind" if drift > 0 else "ahead of")
-
-        self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-        wx.MessageBox(msg, self.label, parent=self, style=wx.OK | wx.ICON_INFORMATION)
-
-
-@registerField
 class VerticalPadding(ConfigWidget):
     """ Special-case "field" that simply provides resizeable vertical padding,
         so the  fields following it appear at the bottom of the dialog. Note
@@ -1643,104 +1569,6 @@ class VerticalPadding(ConfigWidget):
 
     def initUI(self):
         self.checkbox = self.field = None
-
-
-@registerField
-class ResetButton(CheckDriftButton):
-    """ Special-case "field" that consists of a button that resets all its
-        sibling fields in its group or tab.
-    """
-
-    def __init__(self, *args, **kwargs):
-        """ Constructor.
-
-            :see: `ConfigWidget.__init__()`
-        """
-        self.setAttribDefault("label", "Reset to Defaults")
-        self.setAttribDefault("tooltip", "Reset this set of fields to their "
-                                         "default values")
-        super(ResetButton, self).__init__(*args, **kwargs)
-
-
-    def OnButtonPress(self, evt):
-        """ Handle button press: reset sibling fields to the factory defaults.
-        """
-        if self.group is not None:
-            self.group.setToDefault()
-
-
-# ===============================================================================
-# Command buttons
-# ===============================================================================
-
-@registerField
-class RebootButton(CheckDriftButton):
-    """ Special-case "field" that consists of a button that sends a reset
-        command to the device.
-    """
-
-    _ICON_IDX = 8
-
-    def __init__(self, *args, **kwargs):
-        """ Constructor.
-
-            :see: `ConfigWidget.__init__()`
-        """
-        self.setAttribDefault("label", "Reset/Reboot Device")
-        self.setAttribDefault("tooltip", "Send a reset/reboot command to the device")
-        super().__init__(*args, **kwargs)
-        self._command = getattr(self.root.device.command, 'reset', None)
-
-
-    def initUI(self):
-        self.checkbox = None
-        self.sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.field = wx.Button(self, -1, self.label)
-        self.field.SetToolTip(self.tooltip)
-
-        NewControlButtons._loadImages()
-        icons = NewControlButtons.ICONS[self._ICON_IDX]
-        self.field.SetBitmap(icons[0], wx.LEFT)
-        self.field.SetBitmapCurrent(icons[0])
-        self.field.SetBitmapPressed(icons[2])
-        self.field.SetBitmapDisabled(icons[3])
-        self.field.SetBitmapMargins((0, 0))
-
-        self.sizer.Add(self.field, 1, wx.EXPAND)
-        self.SetSizer(self.sizer)
-        self.Bind(wx.EVT_BUTTON, self.OnButtonPress)
-
-
-    def OnButtonPress(self, evt):
-        """ Handle button press: reset sibling fields to the factory defaults.
-        """
-        if self._command is None:
-            logger.debug("No function attached to button; no device?")
-            return
-
-        # TODO: Check for unsaved config changes.
-        #  If changes: Prompt to save before execution (yes, no, cancel)
-        #  If no changes: Prompt before execution (yes, no)
-
-        # TODO: Wrap `_command()` call with exception handling, etc.
-        self._command()
-        self.root.EndModal(wx.ID_CANCEL)
-
-
-@registerField
-class ShutdownButton(RebootButton):
-    """ Special-case "field" that consists of a button that sends a
-        shutdown/power off command command, intended for use with a
-        Gateway.
-    """
-
-    _ICON_IDX = 9
-
-    def __init__(self, *args, **kwargs):
-        self.setAttribDefault("label", "Power Off")
-        self.setAttribDefault("tooltip", "Send a shutdown/power off command to the device")
-        super().__init__(*args, **kwargs)
-        self._command = getattr(self.root.device.command, 'shutdown', None)
 
 
 # ===============================================================================

@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 import wx
 
+from endaqconfig.common import isOnline, isSleeping
 from endaqconfig.widgets.events import (EvtMQTTConnecting, EvtMQTTConnected,
                                         EvtMQTTDisconnected, EvtMQTTError,
                                         EvtBrokerSelected)
@@ -259,8 +260,12 @@ class DeviceCommandThread(threading.Thread):
         self.failed = threading.Event()  # Set if command raises an exception
         self.failure: Optional[Exception] = None  # Exception raised by the command (if any)
 
-        super().__init__(name=f'{type(self).__name__}_{device.serial} ({command.__name__})',
-                         daemon=True)
+        super().__init__(
+                # name=f'{type(self).__name__}_{device.serial} ({command.__name__})',
+                daemon=True
+        )
+        self.name = self.name.replace('Thread',
+                                      f'{type(self).__name__}_{device.serial} ({command.__name__})')
         self.start()
 
 
@@ -346,48 +351,6 @@ def getDeviceStatus(device: Recorder) \
         bat = tuple(bat.values())
     return (bat, cmd.status[1:], device.path, cmd.lockId[1],
             bool(device._calibration))
-
-
-def isOnline(device: Recorder) -> bool:
-    """ Is the device in an 'online' state? Note that local USB devices are
-        inherently online.
-    """
-    if device.isVirtual:
-        return False
-    elif not device.isRemote:
-        return True
-
-    # TODO: Also exclude timed out devices?
-    status = device.command.status[1]
-    if status is not None and 300 <= status < 500:
-        # Codes 400-499 are 'offline' variants of positive codes 0-99
-        return False
-    return status not in (DeviceStatusCode.ERR_DISCONNECTED,
-                          DeviceStatusCode.OFFLINE,
-                          DeviceStatusCode.RESET_PENDING,
-                          DeviceStatusCode.START_PENDING,
-                          DeviceStatusCode.STOP_PENDING,
-                          DeviceStatusCode.UPLOADING,
-                          None)
-
-
-def isSleeping(device: Recorder) -> bool:
-    """ Is the device in a 'sleeping' state?
-    """
-    status = device.command.status[1]
-    if status is not None and 200 <= status < 400:
-        # Codes 300-399 are 'periodic' variants of positive codes 0-99
-        return True
-    return status in (DeviceStatusCode.SLEEPING,
-                      DeviceStatusCode.WAKING)
-
-
-def isGateway(device: Recorder) -> bool:
-    """ Is the device a HDS Gateway box?
-    """
-    # Gateway-ness determined by bits in the "recorder's" `RecorderTypeUID`.
-    devtype = device.getInfo('RecorderTypeUID', 0)
-    return bool(devtype & 0xa0000000)  # bits 31 (non-recorder) and 29 (gateway)
 
 
 # ===========================================================================

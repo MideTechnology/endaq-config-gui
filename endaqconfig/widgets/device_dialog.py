@@ -27,19 +27,21 @@ from endaq.device import (Recorder, RECORDERS, UnsupportedFeature,
 from endaq.device.base import os_specific
 from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface, MQTTConnector
 
-from . import battery_icons
-from . import icons
-from .broker_dialog import BrokerDialog
-from .controls import (_attribFormatter, populateStatusColumn, populateButtonColumn,
-                       populateBatteryColumn, NewControlButtons, ListContextMenu,
-                       STATUS_DISPLAY)
-from .events import (EVT_RECORD, EVT_STREAM, EVT_CONFIG, EVT_LOCK_DEVICE,
-                     EVT_BLINK, EVT_BROKER_SELECTED, EVT_MQTT_CONNECTING,
-                     EVT_MQTT_CONNECTED, EVT_MQTT_DISCONNECTED, EVT_MQTT_ERROR,
-                     EVT_RESET, EVT_SHUTDOWN, EvtMQTTError)
-from .threads import (DeviceScanThread, DeviceCommandThread, BrokerConnectThread,
-                      isOnline, isSleeping, isGateway)
-from .shared import DeviceToolTip
+from endaqconfig.common import isGateway, isOnline, isSleeping
+from endaqconfig.widgets import battery_icons
+from endaqconfig.widgets import icons
+from endaqconfig.widgets.broker_dialog import BrokerDialog
+from endaqconfig.widgets.controls import (
+    _attribFormatter, populateStatusColumn, populateButtonColumn,
+    populateBatteryColumn, NewControlButtons, ListContextMenu,
+    STATUS_DISPLAY)
+from endaqconfig.widgets.events import (
+    EVT_RECORD, EVT_STREAM, EVT_CONFIG, EVT_LOCK_DEVICE, EVT_BLINK,
+    EVT_BROKER_SELECTED, EVT_MQTT_CONNECTING, EVT_MQTT_CONNECTED,
+    EVT_MQTT_DISCONNECTED, EVT_MQTT_ERROR, EVT_RESET, EVT_SHUTDOWN,
+    EvtMQTTError)
+from endaqconfig.widgets.threads import (DeviceScanThread, DeviceCommandThread, BrokerConnectThread)
+from endaqconfig.widgets.shared import DeviceToolTip, promptDeviceReboot, promptDeviceShutdown
 
 logger = logging.getLogger(__name__)
 
@@ -1490,60 +1492,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnRebootDevice(self, evt):
         """ Handle the 'reboot' button or menu item selection.
         """
-        device = evt.device
-        if isGateway(device):
-            q = wx.MessageBox(
-                    f'Reboot/Reset {device.productName}?\n\n'
-                    'This will disrupt communication with any device connected to it.',
-                    'Reset',
-                    style=wx.ICON_WARNING | wx.YES_NO | wx.YES_DEFAULT,
-                    parent=self)
-
-            if q != wx.YES:
-                logger.debug('No reset for the wicked!')
-                evt.Veto()
-                return
-
-        try:
-            logger.debug(f'Sending reboot to {device}')
-            DeviceCommandThread(device, device.command.reset)
-
-            if isGateway(device) and 'MQTT' not in type(device.command).__name__:
-                wx.MessageBox('Unplug Gateway USB cable now!\n\n'
-                              'The Gateway must not have a USB connection when booting.',
-                              'Disconnect USB',
-                              style=wx.ICON_WARNING | wx.OK,
-                              parent=self)
-
-        except DeviceError as err:
-            # TODO: Handle reset error
-            logger.error(f'Device failed reboot: {err!r}', stack_info=True)
-            pass
+        promptDeviceReboot(evt.device, self)
 
 
     def OnShutdownDevice(self, evt):
         """ Handle the 'shutdown' button or menu item selection.
         """
-        device = evt.device
-        q = wx.MessageBox(
-                f'Shutdown/power off {device.productName}?\n\n'
-                'This will disrupt communication with any device connected to it.',
-                'Power Off',
-                style=wx.ICON_WARNING | wx.YES_NO | wx.YES_DEFAULT,
-                parent=self)
-
-        if q != wx.YES:
-            logger.debug('Never gonna give you up, never gonna shut you down')
-            evt.Veto()
-            return
-
-        try:
-            logger.debug(f'Sending shutdown to {device}')
-            DeviceCommandThread(device, device.command.shutdown)
-        except DeviceError as err:
-            # TODO: Handle shutdown error
-            logger.error(f'Device failed shutdown: {err!r}', stack_info=True)
-            pass
+        promptDeviceShutdown(evt.device, self)
 
 
     def OnStartAllRecorders(self, evt):

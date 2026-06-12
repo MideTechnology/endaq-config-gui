@@ -15,8 +15,7 @@ from endaq.device.command_interfaces import SerialCommandInterface
 from . import battery_icons
 from . import icons
 from .events import EvtConfig, EvtRecord, EvtStream, EvtLockDevice, EvtBlink, EvtReset, EvtShutdown
-from ..common import deviceString
-from .threads import isOnline, isGateway
+from ..common import deviceString, isOnline, isGateway
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -51,6 +50,7 @@ STATUS_DISPLAY = {
     100:  ("Sleeping",      wx.Colour(100, 100, 100),   None),
     101:  ("Waking",        wx.Colour(200, 200, 200),   None),
     110:  ("Offline",       wx.Colour(200, 200, 200),   None),
+    111:  ("Shutdown",      wx.Colour(200, 0, 0),       "System shutting down"),
 }
 
 

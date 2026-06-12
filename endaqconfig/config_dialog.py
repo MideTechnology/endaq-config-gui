@@ -41,10 +41,12 @@ from . import base
 from .common import isCompiled
 from .widgets import icons
 
-# Widgets. Even though these modules aren't used directly, they need to be
-# imported so that their contents can get into the `base.TAB_TYPES` dictionary.
+# Widgets. Even though some of these modules aren't used directly, they need
+# to be imported so that their contents can get into the `base.TAB_TYPES` and
+# `base.FIELD_TYPES` dictionaries.
 from . import special_tabs
 from . import wifi_tab
+from . import command_buttons
 
 # ===============================================================================
 #
@@ -95,7 +97,7 @@ class ConfigDialog(SC.SizedDialog):
         self.schema = loadSchema('mide_config_ui.xml')
 
         self.setTime: bool = kwargs.pop('setTime', True)
-        self.device: Optional[Recorder] = kwargs.pop('device', None)
+        self.device: Recorder = kwargs.pop('device', None)
         self.saveOnOk: bool = kwargs.pop('saveOnOk', True)
         self.useUtc: bool = kwargs.pop('useUtc', True)
         self.showAdvanced: bool = kwargs.pop('showAdvanced', False)
@@ -346,7 +348,7 @@ class ConfigDialog(SC.SizedDialog):
                   f"The recorder's firmware can use a later version (v{maxVersion}). Some newer configuration\n"
                   "options in the dialog may be lost if the older version is used.\n\n"
                   "'Yes' will save using the newer version (recommended).\n"
-                  "'No' will save using the file's original version."
+                  "'No' will save using the file's original version.",
                                   "Apply Configuration",
                                   wx.YES_NO | wx.YES_DEFAULT | wx.ICON_QUESTION,
                                   self)

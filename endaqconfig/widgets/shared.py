@@ -9,21 +9,23 @@ import logging
 import os.path
 import re
 import socket
-from time import time
-from typing import Any, Dict, Optional, Tuple
+from time import sleep, time
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import wx
 import wx.adv
 import wx.lib.masked as wx_mc
 import wx.lib.sized_controls as sc
 
+from endaq.device import DeviceError, Recorder
 from endaq.device.mqtt.discovery import findBrokers
 
-from .events import EvtBrokerUpdate
-from .controls import getStatusDisplay
-from .icons import pw_show, pw_hide
-
-from ..validators import TextValidator, FieldValidationError
+from endaqconfig.common import isGateway
+from endaqconfig.validators import TextValidator, FieldValidationError
+from endaqconfig.widgets.threads import DeviceCommandThread
+from endaqconfig.widgets.events import EvtBrokerUpdate
+from endaqconfig.widgets.controls import getStatusDisplay
+from endaqconfig.widgets.icons import pw_show, pw_hide
 
 logger = logging.getLogger(__name__)
 
@@ -376,6 +378,8 @@ class DeviceToolTip(wx.Frame):
         """ Handle the mouse motion timer expiring.
         """
         if not self.IsShown():
+            # wx.Point *does* implement __add__!
+            # noinspection PyUnresolvedReferences
             self.SetPosition(wx.GetMousePosition() + self.MOUSE_OFFSET)
             self.Show()
 
@@ -788,7 +792,7 @@ class KeepAliveCallback:
         cb = KeepAliveCallback()
         device.command.setWifi(data, callback=cb)
 
-    TODO: Determine if this actually works reliably
+    TODO: Determine if this actually works reliably, without adverse side effects
     """
 
     def __init__(self, interval: float = 4.5):
@@ -803,3 +807,118 @@ class KeepAliveCallback:
             wx.Yield()
             self.nextUpdate = time() + self.interval
         return False
+
+
+#===============================================================================
+#
+#===============================================================================
+
+def promptDeviceReboot(device: Recorder,
+                       parent: Optional[wx.Window] = None,
+                       callback: Optional[Callable] = None) -> DeviceCommandThread:
+    """ Send a reset/reboot command to a device. If the device is a Gateway,
+        prompt the user to confirm, and tell them to disconnect USB (so the
+        CompuLab-based Gateway doesn't go into recovery 'bootloader' mode.
+
+        :param device: The enDAQ device to reboot.
+        :param parent: The parent window, for positioning the dialog (if shown).
+        :param callback: A callback function for `CommandInterface.reset()`
+            (see `endaq.device.command_interfaces`).
+        :returns: A wxPython modal dialog response ID, `wx.ID_YES` or
+            `wx.ID_NO`. If the user was not prompted, `wx.ID_YES` will be
+            returned.
+    """
+    if isGateway(device):
+        q = wx.MessageBox(
+                f'Reboot/Reset {device.productName}?\n\n'
+                'This will disrupt communication with any device connected to it.',
+                'Reset',
+                style=wx.ICON_WARNING | wx.YES_NO | wx.YES_DEFAULT,
+                parent=parent)
+
+        if q != wx.YES:
+            logger.debug('No reset for the wicked!')
+            return None
+
+    logger.debug(f'Sending reboot to {device}')
+    thread = DeviceCommandThread(device, device.command.reset,
+                                 callback=callback)
+
+    # This will need revising if we use different hardware
+    if isGateway(device) and 'MQTT' not in type(device.command).__name__:
+        wx.MessageBox('Unplug Gateway USB cable now!\n\n'
+                      'The Gateway must not have a USB connection when booting.',
+                      'Disconnect USB',
+                      style=wx.ICON_WARNING | wx.OK,
+                      parent=parent)
+
+    return thread
+
+
+def promptDeviceShutdown(device: Recorder,
+                         parent: Optional[wx.Window] = None,
+                         callback: Optional[Callable] = None) -> DeviceCommandThread:
+    """ Prompt the user to confirm before sending a shutdown command to a
+        device (presumably a Gateway).
+
+        :param device: The enDAQ device to shut down/power off.
+        :param parent: The parent window, for positioning the dialog (if shown).
+        :param callback: A callback function for `CommandInterface.shutdown()`
+            (see `endaq.device.command_interfaces`).
+        :returns:
+    """
+    q = wx.MessageBox(
+            f'Shutdown/power off {device.productName}?\n\n'
+            'This will disrupt communication with any device connected to it.',
+            'Power Off',
+            style=wx.ICON_WARNING | wx.YES_NO | wx.YES_DEFAULT,
+            parent=parent)
+
+    if q != wx.YES:
+        logger.debug('Never gonna give you up, never gonna shut you down')
+        return None
+
+    logger.debug(f'Sending shutdown to {device}')
+    thread = DeviceCommandThread(device, device.command.shutdown,
+                                 callback=callback)
+    return thread
+
+
+# ===============================================================================
+#
+# ===============================================================================
+
+def ExtraMessageBox(message: str,
+                    caption: str = wx.MessageBoxCaptionStr,
+                    extra: str = '',
+                    style: int = wx.OK | wx.CENTRE,
+                    parent: Optional[wx.Window] = None,
+                    x: int = wx.DefaultCoord,
+                    y: int = wx.DefaultCoord) -> int:
+    """ A drop-in replacement for `wx.MessageBox()` with an extended message
+        (e.g., a verbose error). It takes the same arguments, plus `extra`,
+        minus the `x` and `y` position arguments (ignored under MSW, anyway,
+        left in for compatibility).
+
+        :param message: Message to show in the dialog.
+        :param caption: The dialog title.
+        :param extra: The error message.
+        :param style: Combination of style flags described in wx.MessageDialog
+            documentation.
+        :param parent: The parent window.
+        :param x: Horizontal dialog position (ignored under MSW).
+        :param y: Vertical dialog position (ignored under MSW).
+        :returns: `wx.YES`, `wx.NO`, `wx.CANCEL`, `wx.OK` or `wx.HELP` (notice
+            that this return value is different from the return value of
+            `wx.MessageDialog.ShowModal`).
+    """
+    with wx.RichMessageDialog(parent, message, caption, style=style) as dlg:
+        if extra:
+            dlg.ShowDetailedText(extra)
+        result = dlg.ShowModal()
+
+        return {wx.ID_OK: wx.OK,
+                wx.ID_CANCEL: wx.CANCEL,
+                wx.ID_YES: wx.YES,
+                wx.ID_NO: wx.NO,
+                wx.ID_HELP: wx.HELP}.get(result, wx.ID_OK)
