@@ -4,7 +4,6 @@ config item values.
 """
 
 import logging
-import time
 
 import wx
 
@@ -171,16 +170,19 @@ class RebootButton(CheckDriftButton):
                 self.configData = None
 
         if thread := self._command(self.root.device, self.root):
-            time.sleep(0.1)  # Just to make sure the command executed
-            if thread.failed.set():
-                # TODO: Improved error dialog content based on failure type
-                msg = f"An error occurred while executing {self.WHAT}"
-                err = ''
-                if thread.failure:
-                    err = f'Error: {thread.failure!r}'
+            wx.MilliSleep(100)  # Just to make sure the command executed
+            while thread.is_alive():
+                if thread.failed.set():
+                    # TODO: Improved error dialog content based on failure type
+                    msg = f"An error occurred while executing {self.WHAT}"
+                    err = ''
+                    if thread.failure:
+                        err = f'Error: {thread.failure!r}'
 
-                ExtraMessageBox(msg, "Error", err)
-                return
+                    ExtraMessageBox(msg, "Error", err)
+                    return
+                wx.Yield()
+                wx.MilliSleep(100)
 
             # Changes already saved, end with CANCEL
             self.root.EndModal(wx.ID_CANCEL)

@@ -45,6 +45,9 @@ from endaqconfig.widgets.shared import DeviceToolTip, promptDeviceReboot, prompt
 
 logger = logging.getLogger(__name__)
 
+import endaq.device
+endaq.device.logger.setLevel(logging.DEBUG)
+
 # ===========================================================================
 # Threshold values for showing warning or error icons
 # ===========================================================================

@@ -1348,7 +1348,7 @@ class WiFiSelectionTab(Tab):
     def setWifi(self, data):
         """ Call `Recorder.command.setWifi()` command and handle any errors.
         """
-        logger.debug(f'Setting WIFI: {data}')
+        # logger.debug(f'Setting WIFI: {data}')
         # Allow more time for remote devices to respond
         timeout = 45 if isinstance(self.device.config, RemoteConfigInterface) else 10
 

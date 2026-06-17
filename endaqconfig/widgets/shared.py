@@ -9,7 +9,7 @@ import logging
 import os.path
 import re
 import socket
-from time import sleep, time
+from time import time
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import wx
@@ -17,7 +17,7 @@ import wx.adv
 import wx.lib.masked as wx_mc
 import wx.lib.sized_controls as sc
 
-from endaq.device import DeviceError, Recorder
+from endaq.device import Recorder
 from endaq.device.mqtt.discovery import findBrokers
 
 from endaqconfig.common import isGateway
@@ -493,6 +493,8 @@ class IPDialog(sc.SizedDialog):
         TODO: OUTDATED, REMOVE THIS
     """
 
+
+    # noinspection PyUnresolvedReferences
     def __init__(self, *args, **kwargs):
         kwargs.setdefault('style', wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         kwargs.setdefault('title', 'Enter Broker IP')
@@ -824,9 +826,8 @@ def promptDeviceReboot(device: Recorder,
         :param parent: The parent window, for positioning the dialog (if shown).
         :param callback: A callback function for `CommandInterface.reset()`
             (see `endaq.device.command_interfaces`).
-        :returns: A wxPython modal dialog response ID, `wx.ID_YES` or
-            `wx.ID_NO`. If the user was not prompted, `wx.ID_YES` will be
-            returned.
+        :returns: A `DeviceCommandThread` running the `CommandInterface.reset()`
+            command.
     """
     if isGateway(device):
         q = wx.MessageBox(
@@ -865,7 +866,8 @@ def promptDeviceShutdown(device: Recorder,
         :param parent: The parent window, for positioning the dialog (if shown).
         :param callback: A callback function for `CommandInterface.shutdown()`
             (see `endaq.device.command_interfaces`).
-        :returns:
+        :returns: A `DeviceCommandThread` running the `CommandInterface.shutdown()`
+            command.
     """
     q = wx.MessageBox(
             f'Shutdown/power off {device.productName}?\n\n'
@@ -888,6 +890,7 @@ def promptDeviceShutdown(device: Recorder,
 #
 # ===============================================================================
 
+# noinspection PyUnusedLocal
 def ExtraMessageBox(message: str,
                     caption: str = wx.MessageBoxCaptionStr,
                     extra: str = '',

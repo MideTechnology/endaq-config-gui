@@ -162,7 +162,6 @@ def isSleeping(device: Recorder) -> bool:
 def isGateway(device: Recorder) -> bool:
     """ Is the device a HDS Gateway box?
     """
-    return True
     # Gateway-ness determined by bits in the "recorder's" `RecorderTypeUID`.
     devtype = device.getInfo('RecorderTypeUID', 0)
     return bool(devtype & 0xa0000000)  # bits 31 (non-recorder) and 29 (gateway)
