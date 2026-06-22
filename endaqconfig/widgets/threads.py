@@ -173,10 +173,11 @@ class DeviceScanThread(threading.Thread):
             # logger.debug('Starting updateDeviceStatus threads')
             # XXX: Skip update for timed out devices?
             for dev in self.devices.copy():
-                if not isOnline(dev):
-                    continue
-                elif isSleeping(dev):
-                    continue
+                if dev.command.status[0] > 0:  # device has reported status
+                    if not isOnline(dev):
+                        continue
+                    elif isSleeping(dev):
+                        continue
 
                 if dev not in self.updateThreads:
                     currentThreads[dev] = DeviceCommandThread(dev, updateDeviceStatus,
@@ -305,7 +306,8 @@ def updateDeviceStatus(device: Recorder, callback: Callable, timeout=1):
             # ERR_INVALID_COMMAND. Try to `ping` to get status.
             try:
                 device.command.ping(timeout=timeout, callback=callback)
-            except (DeviceError, AttributeError, IOError):
+            except (DeviceError, AttributeError, IOError) as err:
+                logger.debug(f'Ping to {device} failed: {err!r}')
                 pass
         except (NotImplementedError, UnsupportedFeature):
             pass

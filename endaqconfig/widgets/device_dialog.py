@@ -706,6 +706,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 path = dev.path or ''
                 index = self.list.InsertImageStringItem(idx, path, [0], int(self.checks))
                 self.list.EnableItem(index, enable=isOnline(dev))
+                # print(f'{dev} {dev.command.status} {isOnline(dev)=} {isSleeping(dev)=}')
 
                 # update dict of checked recorders with new list indices
                 if dev in checked:

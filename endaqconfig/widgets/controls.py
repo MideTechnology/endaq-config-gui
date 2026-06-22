@@ -530,7 +530,7 @@ def populateStatusColumn(dev: Recorder,
                          root: "DeviceSelectionDialog") -> str:
     """ Add/update a column displaying the device status.
 
-        :param dev: The device beind displayed.
+        :param dev: The device being displayed.
         :param index: The list index (row).
         :param column: The index of the column being populated.
         :param root: The parent window/dialog.
