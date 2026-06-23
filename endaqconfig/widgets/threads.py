@@ -253,8 +253,8 @@ class DeviceCommandThread(threading.Thread):
         """
         self.device = device
         self.command = command
-        self.args = args
-        self.kwargs = kwargs
+        self.args: Tuple[Any] = args
+        self.kwargs: Dict[str, Any] = kwargs
 
         self.completed = threading.Event()  # Set upon successful completion
         self.result: Any = None  # The result of the function (if any)

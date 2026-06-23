@@ -733,6 +733,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 if self.showWarnings:
                     self.setItemIcon(index, dev)
 
+                self.updateRow(dev)
+
             for i, w in enumerate(self.minWidths):
                 w = w + 8
                 if self.list.GetColumnWidth(i) < w:
@@ -785,6 +787,18 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         item.Check(dev in self.checkedRecorders)
         self.list.SetItem(item)
 
+        font = self.defaultFont
+        color = self.defaultColor
+
+        if sleeping:
+            # Sleeping/periodically online devices not disabled, but
+            # drawn in gray as if they were (so checkbox still accessible)
+            color = STATUS_DISPLAY[100][1]
+            font = self.sleepingListFont
+        elif isGateway(dev):
+            # DCB/HDS Gateway device; highlight it.
+            font = self.boldListFont
+
         for i, col in enumerate(self.columns[1:], 1):
             # Don't rebuild button panel in update
             if i == self.buttonCol:
@@ -796,18 +810,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                     logger.error(f'Could not get button panel for index {index}')
             else:
                 val = col.formatter(dev, index, i, self)
-
-            font = self.defaultFont
-            color = self.defaultColor
-
-            if sleeping:
-                # Sleeping/periodically online devices not disabled, but
-                # drawn in gray as if they were (so checkbox still accessible)
-                color = STATUS_DISPLAY[100][1]
-                font = self.sleepingListFont
-            elif isGateway(dev):
-                # DCB/HDS Gateway device; highlight it.
-                font = self.boldListFont
 
             self.list.SetItemTextColour(index, color)
             self.list.SetItemFont(index, font)

@@ -37,16 +37,16 @@ import endaq.device
 from endaq.device import Recorder, configio, ConfigError
 from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface
 
-from . import base
-from .common import isCompiled
-from .widgets import icons
+from endaqconfig import base
+from endaqconfig.common import isCompiled, isGateway
+from endaqconfig.widgets import icons
 
 # Widgets. Even though some of these modules aren't used directly, they need
 # to be imported so that their contents can get into the `base.TAB_TYPES` and
 # `base.FIELD_TYPES` dictionaries.
-from . import special_tabs
-from . import wifi_tab
-from . import command_buttons
+from endaqconfig import special_tabs
+from endaqconfig import wifi_tab
+from endaqconfig import command_buttons
 
 # ===============================================================================
 #
@@ -517,7 +517,9 @@ class ConfigDialog(SC.SizedDialog):
             self._saveTabs()
             self._setClock()
 
-            if self.device.hasWifi and self.configData.get(0x18ff7f) != wifiWasEnabled:
+            if (self.device.hasWifi
+                    and self.configData.get(0x18ff7f) != wifiWasEnabled
+                    and not isGateway(self.device)):
                 q = wx.MessageBox("Reset recording device?\n\n"
                                   "Enabling or disabling Wi-Fi requires the "
                                   "recording device to reset in order to take effect.\n"
