@@ -9,7 +9,7 @@ import wx
 from wx.lib.agw import ultimatelistctrl as ULC
 
 from endaq.device.response_codes import DeviceStatusCode
-from endaq.device import CommandError, DeviceError, UnsupportedFeature, Recorder
+from endaq.device import CommandError, UnsupportedFeature, Recorder
 from endaq.device.command_interfaces import SerialCommandInterface
 
 from . import battery_icons
@@ -176,7 +176,8 @@ class NewControlButtons(wx.Panel):
         size = self.configIcons[0].GetSize()
         style = wx.NO_BORDER | wx.BU_EXACTFIT
 
-        def _add(icons, tooltip, handler):
+        def _add(icons, tooltip, handler,
+                 sizerprops=wx.EXPAND | wx.RESERVE_SPACE_EVEN_IF_HIDDEN):
             """ Helper to do the button-adding busy work. """
             btn = wx.BitmapButton(self, -1, icons[0], style=style, size=size)
             btn.SetBitmapCurrent(icons[1])
@@ -184,14 +185,14 @@ class NewControlButtons(wx.Panel):
             btn.SetBitmapDisabled(icons[3])
             btn.SetBackgroundColour(self.GetBackgroundColour())
             btn.SetToolTip(tooltip)
-            sizer.Add(btn, 1, wx.EXPAND)
+            sizer.Add(btn, 1, sizerprops)
             btn.Bind(wx.EVT_BUTTON, handler)
             return btn
 
         self.stopBtn = _add(self.stopIcons, 'Stop Recording/Streaming', self.OnStopButton)
         self.recBtn = _add(self.recordIcons, 'Start Recording', self.OnRecordButton)
         self.streamBtn = _add(self.streamIcons, 'Start Streaming', self.OnStreamButton)
-        self.configBtn = _add(self.configIcons, 'Configure Device', self.OnConfigButton)
+        self.configBtn = _add(self.configIcons, 'Configure Device', self.OnConfigButton, wx.EXPAND)
         self.lockBtn = _add(self.lockIcons, 'Set Device Lock', self.OnLockButton)
 
         self.stopBtn.Enable(False)
@@ -251,8 +252,6 @@ class NewControlButtons(wx.Panel):
         self.uploading = status == DeviceStatusCode.UPLOADING
 
         self.Enable(enabled and not self.uploading)
-
-        self.recBtn.Show(self.device.command.canRecord)
         self.recBtn.Enable(enabled
                            and self.device.command.canRecord)
 

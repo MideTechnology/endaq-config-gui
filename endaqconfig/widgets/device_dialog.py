@@ -1008,7 +1008,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """ Start one or more devices streaming (assuming they can stream).
         """
         def _startStreaming(dev, path, **kwargs):
-            dev.command.openStream(path)
+            dev.command.saveStream(path)
             dev.command.startRecording(**kwargs)
 
         path = os.path.abspath(self.savePathField.GetValue())
