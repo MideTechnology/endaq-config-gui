@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 import wx
 import wx.lib.sized_controls as sc
 
-from endaq.device.mqtt.discovery import findBrokers
+from endaq.device.mqtt.discovery import MDNSFinder, MDNSInfo
 
 from endaqconfig.widgets.shared import parseIP
 from endaqconfig.widgets import events
@@ -64,15 +64,16 @@ class BrokerDialog(sc.SizedDialog):
         super().__init__(parent, -1, "Select MQTT Broker",
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
-        self.brokers: Dict[str, Dict[str, Any]] = {}
+        self.brokers: Dict[str, MDNSInfo] = {}
         self.names: List[str] = []
         self.thread = None
 
         # Arguments for `findBrokers()`. Rarely used, but could be.
-        self.patterns = patterns or (None,)
-        self.scanKwargs = {k: kwargs.pop(k)
+        broker_scanKwargs = {k: kwargs.pop(k)
                            for k in ('timeout', 'scantime', 'patterns')
                            if k in kwargs}
+        self.broker_finder = MDNSFinder(patterns, timeout=broker_scanKwargs.get('timeout', 5))
+        self.broker_finder.start()
 
         self.activeGroup = defaultField
 
@@ -163,8 +164,7 @@ class BrokerDialog(sc.SizedDialog):
             self.Enable(False)
             self.setMessage('')
 
-            # If findBrokers() lags, it might be better to do it in a thread and post an event
-            self.brokers = {b['name']: b for b in findBrokers(*self.patterns, **self.scanKwargs)}
+            self.brokers = {b.name: b for b in self.broker_finder.get_brokers()}
             self.names = sorted(self.brokers)
             self.brokerList.Set(self.names)
 
@@ -187,7 +187,7 @@ class BrokerDialog(sc.SizedDialog):
         if broker:
             info = self.brokers.get(broker)
             if info:
-                tt = "{name}.{serviceType}\nIP {host[0]}, port {port}".format(**info)
+                tt = f"{info.name}.{info.serviceType}\nIP {info.host}, port {info.port}"
         self.brokerList.SetToolTip(tt)
 
 
@@ -241,7 +241,7 @@ class BrokerDialog(sc.SizedDialog):
         info = None
         if self.brokerRB.GetValue():
             info = self.brokers.get(self.getSelectedName())
-            addr = '{host[0]}:{port}'.format(**info)
+            addr = f'{info.host}:{info.port}'
         else:
             addr = self.ipField.GetValue()
 
