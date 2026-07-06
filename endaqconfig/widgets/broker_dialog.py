@@ -201,7 +201,7 @@ class BrokerDialog(sc.SizedDialog):
         if broker:
             info = self.brokers.get(broker)
             if info:
-                tt = f"{info.name}.{info.serviceType}\nIP {info.host}, port {info.port}"
+                tt = f"{info.name}.{info.serviceType}\nIP {info.host[0]}, port {info.port}"
         self.brokerList.SetToolTip(tt)
 
 
@@ -266,7 +266,7 @@ class BrokerDialog(sc.SizedDialog):
             if not info:
                 self.setMessage("Can't connect, no broker selected", error=True)
                 return
-            addr = f'{info.host}:{info.port}'
+            addr = f'{info.host[0]}:{info.port}'
         else:
             addr = self.ipField.GetValue()
 
