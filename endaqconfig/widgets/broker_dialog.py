@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from typing import Any, Dict, Optional
 
 import wx
@@ -19,6 +20,7 @@ class BrokerDialog(sc.SizedDialog):
     advertised or 'manually' entering a broker IP address.
     """
 
+    _BROKER_UPDATE_TIME_MS = 2000
 
     # TODO: REMOVE NEXT COMMENT LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
     # noinspection PyUnresolvedReferences
@@ -92,6 +94,8 @@ class BrokerDialog(sc.SizedDialog):
         self.adpane.SetSizerProps(expand=True)
         self.brokerList = wx.Choice(self.adpane, -1, style=wx.BORDER_SUNKEN)
         self.brokerList.SetSizerProps(expand=True, proportion=1)
+        self.brokerListTimer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self.OnBrokerListTimer, self.brokerListTimer)
         self.scanBtn = wx.Button(self.adpane, -1, 'Rescan')
         self.scanBtn.Bind(wx.EVT_BUTTON, self.OnScanButton)
         self.scanBtn.SetToolTip('Update the list of advertised brokers')
@@ -133,11 +137,18 @@ class BrokerDialog(sc.SizedDialog):
         self.Bind(events.EVT_BROKER_SELECTED, self.OnBrokerSelected)
         self.Bind(events.EVT_MQTT_ERROR, self.OnMQTTError)
         self.Bind(wx.EVT_TIMER, self.OnConnectFailTimer, id=self.connectFailTimer.GetId())
+        # Call OnExit when we leave the dialog to make sure we properly close out the mDNS finder
+        self.Bind(wx.EVT_CLOSE, self.OnExit)
+        self.Bind(wx.EVT_BUTTON, self.OnExit, id=wx.ID_CANCEL)
 
         self.Fit()
         self.SetMinSize(self.GetSize())
         self.SetMaxSize((1000, self.GetSize().height))
         self.SetSize((500, self.GetSize().height))
+
+        # Initialize the broker list, start it scanning for more brokers, and start the list update
+        self.updateBrokerList()
+        self.brokerListTimer.Start(self._BROKER_UPDATE_TIME_MS)
 
 
     def enableGroup(self, groupNo):
@@ -145,6 +156,10 @@ class BrokerDialog(sc.SizedDialog):
             manually-entered IP address.
         """
         self.activeGroup = groupNo
+        if groupNo == 0:
+            self.brokerListTimer.Start(self._BROKER_UPDATE_TIME_MS)
+        else:
+            self.brokerListTimer.Stop()
         self.adpane.Enable(groupNo == 0)
         self.ipField.Enable(groupNo == 1)
 
@@ -156,16 +171,15 @@ class BrokerDialog(sc.SizedDialog):
         return None
 
 
-    def getBrokers(self):
+    def updateBrokerList(self):
         """ Get advertised brokers and update the list.
+        This all happens much faster than it used to, we can probably remove the cursor stuff
         """
         try:
             self.SetCursor(wx.Cursor(wx.CURSOR_ARROW))
             self.Enable(False)
-            self.setMessage('')
 
-            self.brokers = {b.name: b for b in self.broker_finder.get_brokers()}
-            self.names = sorted(self.brokers)
+            self.brokers, self.names = self.broker_finder.getBrokerDict()
             self.brokerList.Set(self.names)
 
             if self.defaultBroker in self.names:
@@ -208,14 +222,14 @@ class BrokerDialog(sc.SizedDialog):
         self.errorText.SetLabel(message)
 
 
-    def startConnectThread(self, info: Dict[str, Any]):
+    def startConnectThread(self, info: MDNSInfo):
         """ Kick off the `BrokerConnectThread` thread.
         """
         self.Enable(False)  # Doesn't look disabled; explicitly disable widgets?
 
         self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
         self.connectFailTimer.StartOnce(30000)
-        self.thread = BrokerConnectThread(self, self.root, info,
+        self.thread = BrokerConnectThread(self, self.root, asdict(info),
                                           connectArgs=self.connectArgs,
                                           clientArgs=self.clientArgs)
 
@@ -225,14 +239,22 @@ class BrokerDialog(sc.SizedDialog):
     # =======================================================================
 
     def OnScanButton(self, _evt):
-        """ Handle the 'Rescan' button press.
+        """ Handle the 'Rescan' button press, which should stop and restart the mDNS finder
+        This will get rid of mDNS services that have disappeared rudely
         """
         self.setMessage('')
+        self.brokerListTimer.Stop()
         current = self.getSelectedName()
         if current:
             self.defaultBroker = current
-        self.getBrokers()
+        self.broker_finder.restart()
+        self.updateBrokerList()
+        self.brokerListTimer.Start(self._BROKER_UPDATE_TIME_MS)
 
+    def OnBrokerListTimer(self, _evt):
+        """ Handle the periodic broker timer event
+        """
+        self.updateBrokerList()
 
     def OnConnectButton(self, _evt):
         """ Handle the 'Connect' button press.
@@ -241,6 +263,9 @@ class BrokerDialog(sc.SizedDialog):
         info = None
         if self.brokerRB.GetValue():
             info = self.brokers.get(self.getSelectedName())
+            if not info:
+                self.setMessage("Can't connect, no broker selected", error=True)
+                return
             addr = f'{info.host}:{info.port}'
         else:
             addr = self.ipField.GetValue()
@@ -251,11 +276,8 @@ class BrokerDialog(sc.SizedDialog):
             host, port = parseIP(addr, check=True)
             if self.ipRB.GetValue():
                 # Create broker info like `findBrokers()`
-                info = {'name': f'{addr}',
-                        'serviceType': '_endaq._tcp.local.',
-                        'host': [host],
-                        'port': port,
-                        'properties': {}}
+                info = MDNSInfo(name=f'{addr}', serviceType='_endaq._tcp.local.',
+                                host=[host], port=port, properties={})
             logger.debug(f'👍 Address valid: {host}:{port}')
 
         except ValueError as err:
@@ -269,7 +291,7 @@ class BrokerDialog(sc.SizedDialog):
         """ Handle dialog being shown/hidden.
         """
         if evt.IsShown():
-            self.getBrokers()
+            self.updateBrokerList()
         else:
             self.connectFailTimer.Stop()
             if self.thread and self.thread.is_alive():
@@ -328,6 +350,11 @@ class BrokerDialog(sc.SizedDialog):
         evt = events.EvtMQTTError("Timed out starting broker connection")
         wx.PostEvent(self, evt)
 
+    def OnExit(self, _evt):
+        """ Handle the window being closed
+        """
+        self.broker_finder.close()
+        _evt.Skip()
 
 # ===========================================================================
 # DIALOG TEST CODE. REMOVE LATER.
