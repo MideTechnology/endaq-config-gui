@@ -353,7 +353,7 @@ class BrokerDialog(sc.SizedDialog):
     def OnExit(self, _evt):
         """ Handle the window being closed
         """
-        self.broker_finder.close()
+        self.broker_finder.stop()
         _evt.Skip()
 
 # ===========================================================================
