@@ -1765,4 +1765,11 @@ def selectDevice(title: str = "Select Recorder",
         if dlg.ShowModal() == wx.ID_OK:
             result = dlg.getSelected()
 
+        # Disconnect from broker if no device selected and broker connection
+        # wasn't pre-existing (i.e., the same as the one provided as
+        # `connector` kwarg)
+        if (result is None and dlg.connector is not None
+                and kwargs.get('connector') != dlg.connector):
+            dlg.connector.disconnect()
+
     return result
