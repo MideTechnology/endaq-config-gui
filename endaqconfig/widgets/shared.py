@@ -925,3 +925,35 @@ def ExtraMessageBox(message: str,
                 wx.ID_YES: wx.YES,
                 wx.ID_NO: wx.NO,
                 wx.ID_HELP: wx.HELP}.get(result, wx.ID_OK)
+
+
+# ===============================================================================
+#
+# ===============================================================================
+
+def showError(msg: str,
+              caption: str,
+              style: int = wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR,
+              err: Optional[Exception] = None,
+              parent: Optional[wx.Window] = None):
+    """ Show an error message. Wraps the standard message box to add some
+        debugging stuff.
+    """
+    if not msg.endswith(('.', '!', '?')):
+        msg += "."
+
+    extra = ''
+    if isinstance(err, Exception):
+        extra = f'{type(err).__name__}: {err}'
+    elif isinstance(err, str):
+        extra = err
+
+    q = ExtraMessageBox(msg, caption, style=style, parent=parent,
+                        extra=extra)
+    if err is not None:
+        logger.debug("%s: %r" % (msg, err))
+        if wx.GetKeyState(wx.WXK_CONTROL) and wx.GetKeyState(wx.WXK_SHIFT):
+            raise
+
+    return q
+

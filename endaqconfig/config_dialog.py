@@ -34,12 +34,13 @@ import wx.lib.sized_controls as SC
 
 from ebmlite import loadSchema
 import endaq.device
-from endaq.device import Recorder, configio, ConfigError
+from endaq.device import Recorder, configio, ConfigError, CommunicationError
 from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface
 
 from endaqconfig import base
 from endaqconfig.common import isCompiled, isGateway
 from endaqconfig.widgets import icons
+from endaqconfig.widgets.shared import showError
 
 # Widgets. Even though some of these modules aren't used directly, they need
 # to be imported so that their contents can get into the `base.TAB_TYPES` and
@@ -407,9 +408,9 @@ class ConfigDialog(SC.SizedDialog):
                 self.device.setTime()
             except Exception as err:
                 logger.error(f"Error setting clock: {err!r}")
-                self.showError("The recorder's clock could not be set.",
-                               "Configure Device",
-                               style=wx.OK | wx.OK_DEFAULT | wx.ICON_WARNING)
+                showError("The recorder's clock could not be set.",
+                          "Configure Device", parent=self, err=err,
+                          style=wx.OK | wx.OK_DEFAULT | wx.ICON_WARNING)
 
 
     def _saveTabs(self):
@@ -462,17 +463,16 @@ class ConfigDialog(SC.SizedDialog):
                     configio.exportConfig(self.device, dlg.GetPath(), unknown=True)
 
                 except ConfigError as err:
-                    self.showError(str(err), "Configuration Export Failed",
-                                   style=wx.OK | wx.ICON_EXCLAMATION)
+                    showError(str(err), "Configuration Export Failed",
+                              parent=self, err=err, style=wx.OK | wx.ICON_EXCLAMATION)
 
                 except Exception as err:
                     # TODO: More specific error message
                     logger.error('Could not export configuration ({}: {})'
                                  .format(type(err).__name__, err))
-                    self.showError(
-                            "The configuration data could not be exported to the "
-                            "specified file.", "Configuration Export Failed",
-                            style=wx.OK | wx.ICON_EXCLAMATION)
+                    showError("The configuration data could not be exported to the "
+                              "specified file.", "Configuration Export Failed",
+                              parent=self, err=err, style=wx.OK | wx.ICON_EXCLAMATION)
 
 
     # ===========================================================================
@@ -552,7 +552,7 @@ class ConfigDialog(SC.SizedDialog):
                 else:
                     msg += " (error code {})".format(err.errno)
 
-            self.showError(msg, "Configuration Error")
+            showError(msg, "Configuration Error", parent=parent, err=err)
             # evt.Skip()
             return
 
@@ -565,7 +565,7 @@ class ConfigDialog(SC.SizedDialog):
             if self.showAdvanced:
                 msg += str(err).capitalize()
 
-            self.showError(msg, "Configuration Error", parent=parent)
+            showError(msg, "Configuration Error", parent=parent, err=err)
             # evt.Skip()
             return
 
@@ -583,36 +583,17 @@ class ConfigDialog(SC.SizedDialog):
             return
 
         if self.configChanged():
-            q = self.showError("Discard changes?\n\n"
-                               'Some configuration changes may not have been applied.',
-                               "Configure Device",
-                               style=(wx.YES_NO | wx.NO_DEFAULT | wx.ICON_INFORMATION))
+            q = showError("Discard changes?\n\n"
+                          'Some configuration changes may not have been applied.',
+                          "Configure Device",
+                          parent=self,
+                          style=(wx.YES_NO | wx.NO_DEFAULT | wx.ICON_INFORMATION))
             if q == wx.NO:
                 return
 
         # If cancelled, the returned configuration data is `None`
         self.configData = None
         evt.Skip()
-
-
-    def showError(self,
-                  msg: str,
-                  caption: str,
-                  style: int = wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR,
-                  err: Optional[Exception] = None,
-                  parent: Optional[wx.Window] = None):
-        """ Show an error message. Wraps the standard message box to add some
-            debugging stuff.
-        """
-        if not msg.endswith(('.', '!', '?')):
-            msg += "."
-
-        q = wx.MessageBox(msg, caption, style=style, parent=parent or self)
-        if wx.GetKeyState(wx.WXK_CONTROL) and wx.GetKeyState(wx.WXK_SHIFT):
-            raise
-        if err is not None:
-            logger.debug("%s: %r" % (msg, err))
-        return q
 
 
 # ===============================================================================
@@ -626,7 +607,6 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
                       saveOnOk: bool = True,
                       showAdvanced: bool = False,
                       icon: Optional[wx.Icon] = None,
-                      exceptions: bool = True,
                       debug: bool = __DEBUG__) -> Union[tuple, None]:
     """ Create the configuration dialog for a recording device.
 
@@ -644,9 +624,6 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
             as 'advanced.'
         :param icon: An icon to appear in the window's titlebar (not
             visible in all operating systems/window managers).
-        :param exceptions: If `True`, allow all exceptions to be raised. If
-            `False`, show descriptive message boxes when anticipated errors
-             occur, intended for standalong use.
         :param debug: If `True`, show/log debugging messages.
         :return: `None` if configuration was cancelled, else a tuple
             containing:
@@ -664,12 +641,10 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
 
     if not dev:
         msg = "Path '{}' does not appear to be a recorder".format(path)
-        if exceptions:
-            raise ValueError(msg)
 
-        wx.MessageBox(msg, "Configuration Error",
-                      parent=parent,
-                      style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
+        showError(msg, "Configuration Error",
+                  parent=parent,
+                  style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
         return None
 
     isWifi = isinstance(dev.command, MQTTCommandInterface)
@@ -680,14 +655,10 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
             dev.command.setLockID()
 
         if not dev.config.getConfigUI():
-            if exceptions:
-                raise endaq.device.DeviceError("The device appears to have corrupted configuration UI data.", dev)
-
-            wx.MessageBox("Could not configure recorder\n\n"
-                          "Valid configuration UI data could not be retrieved for the device.",
-                          "Configuration Error",
-                          parent=parent,
-                          style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
+            showError("Could not configure recorder\n\n"
+                      "Valid configuration UI data could not be retrieved for the device.",
+                      "Configuration Error",
+                      parent=parent)
             return None
 
         showWifi = not isWifi
@@ -707,14 +678,17 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
             msg = dlg.postConfigMessage or getattr(dev, "POST_CONFIG_MSG", None)
 
     except PermissionError:
-        if exceptions:
-            raise
+        showError("Another process appears to have control of the device.\n\n"
+                  "Close other application that could be using the recorder and try again.",
+                  "Configuration Error",
+                  parent=parent)
+        return None
 
-        wx.MessageBox("Another process appears to have control of the device.\n\n"
-                      "Close other application that could be using the recorder and try again.",
-                      "Configuration Error",
-                      parent=parent,
-                      style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
+    except CommunicationError as err:
+        showError("An error occurred communicating with the device.\n\n"
+                  "If any configuration changes were made, they may not have been applied.",
+                  "Configuration Error",
+                  err=err, parent=parent)
         return None
 
     finally:

@@ -1,2 +1,2 @@
-endaq-device @ git+https://github.com/MideTechnology/endaq-device.git@develop
+endaq-device @ git+https://github.com/MideTechnology/endaq-device.git@feature/gateway_interface
 wxPython>=4.2.2
