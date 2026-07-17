@@ -48,6 +48,7 @@ from endaqconfig.widgets.shared import showError
 from endaqconfig import special_tabs
 from endaqconfig import wifi_tab
 from endaqconfig import command_buttons
+from endaqconfig import special_fields
 
 # ===============================================================================
 #
