@@ -5,6 +5,11 @@ a device's "UI Hints" data (a/k/a CONFIG_UI).
 The dialog itself was split off to allow a more modular approach.
 """
 
+# TODO: Define all attributes in `__init__` using an 'unsupplied' value (not
+#  None) and check for that instead of `hasattr` and catching `AttributeError`.
+#  This will reduce the number of warnings flagged by the linter, which drown
+#  out real issues.
+
 __author__ = "dstokes"
 __copyright__ = "Copyright 2026 Mide Technology Corporation"
 
@@ -1065,7 +1070,6 @@ class EnumOption(ConfigBase):
             self.label = u"%s" % self.value
 
 
-
 # ===============================================================================
 
 @registerField
@@ -1272,7 +1276,6 @@ class CheckBinaryField(BinaryField):
     CHECK = True
 
 
-
 # ===============================================================================
 # --- Special-case fields/widgets
 # ===============================================================================
@@ -1345,8 +1348,8 @@ class Group(ConfigWidget):
             return FIELD_TYPES[el.name]
 
         # 'FieldSubType' is a backwards-compatible way to support new element types
-        # in very old versions of enDAQ Lab.
-        # XXX: Do we really need this? Can we just force users to upgrade?
+        # in very old versions of enDAQ Lab. Also for new fields that should default
+        # to something other than the base type if unknown.
         for child in el.value:
             if child.name == 'FieldSubtype':
                 if child.value in el.schema and (name := el.schema.get(child.value).name) in FIELD_TYPES:
