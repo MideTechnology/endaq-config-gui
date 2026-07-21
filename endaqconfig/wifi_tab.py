@@ -1327,7 +1327,7 @@ class WiFiSelectionTab(Tab):
 
         # FUTURE: Any SSIDs in self.deleted should be deleted here.
 
-        logger.debug(f'Setting STA mode: {data}')
+        # logger.debug(f'Setting STA mode: {data}')
         return self.setWifi({'AP': data})
 
 

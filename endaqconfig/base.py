@@ -1344,9 +1344,6 @@ class Group(ConfigWidget):
         if not isinstance(el, MasterElement):
             return None
 
-        if el.name in FIELD_TYPES:
-            return FIELD_TYPES[el.name]
-
         # 'FieldSubType' is a backwards-compatible way to support new element types
         # in very old versions of enDAQ Lab. Also for new fields that should default
         # to something other than the base type if unknown.
@@ -1355,6 +1352,9 @@ class Group(ConfigWidget):
                 if child.value in el.schema and (name := el.schema.get(child.value).name) in FIELD_TYPES:
                     return FIELD_TYPES[name]
                 break
+
+        if el.name in FIELD_TYPES:
+            return FIELD_TYPES[el.name]
 
         if el.id & 0xFF00 == 0x4000:
             # All field EBML IDs have 0x40 as their 2nd byte. Bits 0-3 denote

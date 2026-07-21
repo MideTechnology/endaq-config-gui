@@ -30,6 +30,7 @@ class ServiceNameField(TextField):
             :see: `ConfigWidget.__init__()`
         """
         self.setAttribDefault("label", "mDNS Instance Name")
+        self.oldvalue = ''
         super().__init__(*args, **kwargs)
 
 
@@ -40,12 +41,15 @@ class ServiceNameField(TextField):
 
         # Notice that this event is only supported by wxMSW, wxGTK with GTK+ 2.10 or later, and OSX/Cocoa.
         self.Bind(wx.EVT_COMBOBOX_DROPDOWN, self.OnDropDown)
+        self.Bind(wx.EVT_COMBOBOX_CLOSEUP, self.OnCloseUp)
 
         self.sizer.Add(self.field, 4, wx.EXPAND)
         return self.field
 
 
     def OnDropDown(self, evt):
+        self.oldvalue = self.field.GetValue()
+
         try:
             wx.SetCursor(wx.Cursor(wx.CURSOR_ARROWWAIT))
             brokers = findBrokers(None)
@@ -54,6 +58,13 @@ class ServiceNameField(TextField):
         finally:
             wx.SetCursor(wx.NullCursor)
 
+        evt.Skip()
+
+
+    def OnCloseUp(self, evt):
+        if not self.field.GetValue():
+            # Restore previous value if nothing selected
+            self.field.SetValue(self.oldvalue)
         evt.Skip()
 
 
