@@ -46,7 +46,7 @@ setuptools.setup(
         packages=setuptools.find_packages(),
         package_dir={'': '.'},
         package_data={
-            'endaqconfig': ['endaqconfig/widgets/password-dots.ttf',  # is this right?
+            'endaqconfig': ['widgets/password-dots.ttf',  # is this right?
                             ]
         },
         entry_points={'console_scripts': [

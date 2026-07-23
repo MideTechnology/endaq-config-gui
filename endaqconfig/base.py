@@ -1337,8 +1337,6 @@ class Group(ConfigWidget):
         """ Get the appropriate class for an EBML *Field element. Elements
             without a specialized subclass will get a generic widget for their
             basic data type.
-
-            Note: does not handle IDs not present in the schema!
         """
         # Tabs and groups can have non-field items; skip them
         if not isinstance(el, MasterElement):

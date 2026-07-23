@@ -48,6 +48,8 @@ class ServiceNameField(TextField):
 
 
     def OnDropDown(self, evt):
+        """ Handle list opening event.
+        """
         self.oldvalue = self.field.GetValue()
 
         try:
@@ -62,6 +64,8 @@ class ServiceNameField(TextField):
 
 
     def OnCloseUp(self, evt):
+        """ Handle list closing event.
+        """
         if not self.field.GetValue():
             # Restore previous value if nothing selected
             self.field.SetValue(self.oldvalue)

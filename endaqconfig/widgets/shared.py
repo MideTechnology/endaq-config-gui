@@ -31,6 +31,18 @@ logger = logging.getLogger(__name__)
 
 
 #===============================================================================
+# Resources: non-Python files.
+#===============================================================================
+
+# This can/will be modified when incorporated into other projects.
+# Always combine RESOURCES_PATH with resource filenames just before use.
+RESOURCES_PATH = os.path.dirname(__file__)
+
+FONTFILE = 'password-dots.ttf'
+FONTNAME = 'Password Dots'
+
+
+#===============================================================================
 # Custom widgets
 #===============================================================================
 
@@ -102,10 +114,6 @@ def wx_DateTime_FromTimeT(timet: int | float) -> wx.DateTime:
 #
 # ===========================================================================
 
-FONTFILE = os.path.join(os.path.dirname(__file__), 'password-dots.ttf')
-FONTNAME = 'Password Dots'
-
-
 class PasswordTextCtrl(wx.Panel):
     """
     Text field for passwords, with a show/hide clear text toggle button.
@@ -163,7 +171,7 @@ class PasswordTextCtrl(wx.Panel):
         self.staticbmp = wx.StaticBitmap(self, -1, self.bmp_hidden, pos=(5, 6))
         self.staticbmp.SetToolTip('Show Password')
 
-        wx.Font.AddPrivateFont(FONTFILE)
+        wx.Font.AddPrivateFont(os.path.join(RESOURCES_PATH, FONTFILE))
         self.fontVisible = self.text_ctrl.GetFont()
         self.fontHidden = wx.Font(self.fontVisible)
         self.fontHidden.SetFaceName(FONTNAME)
