@@ -36,6 +36,7 @@ from ebmlite import loadSchema
 import endaq.device
 from endaq.device import Recorder, configio, ConfigError, CommunicationError
 from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface
+import endaq.device.mqtt.discovery
 
 from endaqconfig import base
 from endaqconfig.common import isCompiled, isGateway
@@ -47,8 +48,9 @@ from endaqconfig.widgets.shared import showError
 # `base.FIELD_TYPES` dictionaries.
 from endaqconfig import special_tabs
 from endaqconfig import wifi_tab
-from endaqconfig import command_buttons
-from endaqconfig import special_fields
+
+# noinspection unused-imports
+from endaqconfig import command_buttons, special_fields
 
 # ===============================================================================
 #
@@ -79,6 +81,8 @@ class ConfigDialog(SC.SizedDialog):
     )
 
 
+    # XXX: REMOVE NEXT LINE LATER
+    # noinspection unresolved-references
     def __init__(self, *args, **kwargs):
         """ Constructor. Takes standard `SizedDialog` arguments, plus:
 
@@ -250,6 +254,7 @@ class ConfigDialog(SC.SizedDialog):
                 self.hasCal = self.hasCal or isinstance(tab, special_tabs.FactoryCalibrationTab)
 
                 if not tab.isAdvancedFeature or self.showAdvanced:
+                    # noinspection unresolved-references
                     self.notebook.AddPage(tab, str(tab.label))
                     self.tabs.append(tab)
 
@@ -342,6 +347,7 @@ class ConfigDialog(SC.SizedDialog):
         """
         maxVersion = max(self.device.config.supportedConfigVersions)
         version = self.device.config.configVersionRead or maxVersion
+
         if version < maxVersion:
             if version in self.device.config.supportedConfigVersions:
                 # Prompt to save in old version.
@@ -358,6 +364,7 @@ class ConfigDialog(SC.SizedDialog):
                     version = maxVersion
             else:
                 version = maxVersion
+                
         self.updateDeviceConfig()
         self.device.config.applyConfig(unknown=True, version=version)
 
@@ -571,6 +578,11 @@ class ConfigDialog(SC.SizedDialog):
             return
 
         finally:
+            # Shut down all persistent MDNSFinder instances
+            # XXX: (this should probably be a function in endaq.device.mqtt.discovery)
+            for finder in endaq.device.mqtt.discovery.MDNS_FINDERS:
+                finder.stop()
+
             wx.SetCursor(wx.NullCursor)
 
         # evt.Skip()

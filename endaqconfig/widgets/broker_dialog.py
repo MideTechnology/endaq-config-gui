@@ -1,9 +1,10 @@
+from dataclasses import asdict
 from typing import Any, Dict, Optional
 
 import wx
 import wx.lib.sized_controls as sc
 
-from endaq.device.mqtt.discovery import findBrokers
+from endaq.device.mqtt.discovery import findBrokers, MDNSInfo
 
 from endaqconfig.widgets.shared import parseIP
 from endaqconfig.widgets import events
@@ -64,7 +65,7 @@ class BrokerDialog(sc.SizedDialog):
         super().__init__(parent, -1, "Select MQTT Broker",
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
-        self.brokers: Dict[str, Dict[str, Any]] = {}
+        self.brokers: Dict[str, MDNSInfo] = {}
         self.names: List[str] = []
         self.thread = None
 
@@ -164,7 +165,8 @@ class BrokerDialog(sc.SizedDialog):
             self.setMessage('')
 
             # If findBrokers() lags, it might be better to do it in a thread and post an event
-            self.brokers = {b['name']: b for b in findBrokers(*self.patterns, **self.scanKwargs)}
+            self.brokers = {b.name: b for b in findBrokers(*self.patterns, **self.scanKwargs,
+                                                           persistent=True)}
             self.names = sorted(self.brokers)
             self.brokerList.Set(self.names)
 
@@ -187,7 +189,7 @@ class BrokerDialog(sc.SizedDialog):
         if broker:
             info = self.brokers.get(broker)
             if info:
-                tt = "{name}.{serviceType}\nIP {host[0]}, port {port}".format(**info)
+                tt = "{name}.{serviceType}\nIP {host[0]}, port {port}".format(**asdict(info))
         self.brokerList.SetToolTip(tt)
 
 

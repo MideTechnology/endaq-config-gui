@@ -639,7 +639,8 @@ class BrokerField(wx.Panel):
             name = self.GetString()
 
             if scan:
-                self.brokers = {b['name']: b for b in findBrokers(None, **self.scanKwargs)}
+                self.brokers = {b.name: b for b in findBrokers(None, **self.scanKwargs,
+                                                               persistent=True)}
 
             self.names = sorted(self.brokers)
             if self.userIp:
