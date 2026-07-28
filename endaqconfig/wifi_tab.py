@@ -19,13 +19,13 @@ import wx
 import wx.lib.sized_controls as SC
 import wx.lib.mixins.listctrl as listmix
 
-from .base import Tab
-from .base import logger, registerTab
-from .widgets import icons
-from .widgets.events import *
-from .widgets.shared import (TextValidator, FieldValidationError, KeepAliveCallback,
-                             PasswordTextCtrl)
-from .widgets.spinner import Spinner
+from endaqconfig.base import Tab
+from endaqconfig.base import logger, registerTab
+from endaqconfig.validators import TextValidator, FieldValidationError
+from endaqconfig.widgets import icons
+from endaqconfig.widgets.events import *
+from endaqconfig.widgets.shared import KeepAliveCallback, PasswordTextCtrl
+from endaqconfig.widgets.spinner import Spinner
 
 from endaq.device import DeviceError, DeviceTimeout, CommandError
 from endaq.device.config import RemoteConfigInterface
@@ -1417,6 +1417,7 @@ class WiFiSelectionTab(Tab):
         return True
 
 
+    # noinspection method-overriding
     def blockCancel(self) -> bool | str:
         """ Is the widget in a busy stat the should disallow/warn against
             cancelling?
@@ -1430,6 +1431,7 @@ class WiFiSelectionTab(Tab):
         return False
 
 
+    # noinspection method-overriding
     def blockOK(self) -> bool | str:
         """ Are the widget's contents or value valid enough to save?
 

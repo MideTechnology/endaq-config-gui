@@ -6,8 +6,9 @@ import wx.lib.sized_controls as sc
 
 from endaq.device.mqtt.discovery import findBrokers, MDNSInfo
 
-from endaqconfig.widgets.shared import parseIP
 from endaqconfig.widgets import events
+from endaqconfig.widgets.shared import parseIP
+from endaqconfig.widgets.spinner import Spinner
 from endaqconfig.widgets.threads import BrokerConnectThread
 
 import logging
@@ -72,8 +73,9 @@ class BrokerDialog(sc.SizedDialog):
         # Arguments for `findBrokers()`. Rarely used, but could be.
         self.patterns = patterns or (None,)
         self.scanKwargs = {k: kwargs.pop(k)
-                           for k in ('timeout', 'scantime', 'patterns')
+                           for k in ('timeout', 'patterns')
                            if k in kwargs}
+        # findBrokers(*self.patterns, **self.scanKwargs, scantime=1)
 
         self.activeGroup = defaultField
 
@@ -107,7 +109,7 @@ class BrokerDialog(sc.SizedDialog):
 
         # Connection error/bad address message
         self.errorText = wx.StaticText(outerpane, -1, ' '*40)
-        self.errorText.SetSizerProps(expand=True, border=(['all'], 8), halign='center')
+        self.errorText.SetSizerProps(expand=True, border=(['top'], 8), halign='center')
         self.textColorNormal = self.errorText.GetForegroundColour()
         self.textColorError = wx.RED
 
@@ -116,6 +118,8 @@ class BrokerDialog(sc.SizedDialog):
         buttonpane.SetSizerType("horizontal")
         buttonpane.SetSizerProps(expand=True)
         sc.SizedPanel(buttonpane, -1).SetSizerProps(proportion=1)  # Spacer
+        self.spinner = Spinner(buttonpane)
+        self.spinner.SetSizerProps(border=(['top', 'right'], 4))
         self.connectBtn = wx.Button(buttonpane, -1, 'Connect')
         self.connectBtn.SetSizerProps(halign="right")
         wx.Button(buttonpane, wx.ID_CANCEL).SetSizerProps(halign="right")
@@ -162,11 +166,12 @@ class BrokerDialog(sc.SizedDialog):
         try:
             self.SetCursor(wx.Cursor(wx.CURSOR_ARROW))
             self.Enable(False)
+            self.spinner.Start()
             self.setMessage('')
 
             # If findBrokers() lags, it might be better to do it in a thread and post an event
             self.brokers = {b.name: b for b in findBrokers(*self.patterns, **self.scanKwargs,
-                                                           persistent=True)}
+                                                           persistent=True, scantime=0)}
             self.names = sorted(self.brokers)
             self.brokerList.Set(self.names)
 
@@ -179,6 +184,7 @@ class BrokerDialog(sc.SizedDialog):
         finally:
             self.Enable(True)
             self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+            self.spinner.Stop()
 
 
     def _setBrokerTooltip(self):
@@ -214,6 +220,7 @@ class BrokerDialog(sc.SizedDialog):
         """ Kick off the `BrokerConnectThread` thread.
         """
         self.Enable(False)  # Doesn't look disabled; explicitly disable widgets?
+        self.spinner.Start()
 
         self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
         self.connectFailTimer.StartOnce(30000)
@@ -273,7 +280,9 @@ class BrokerDialog(sc.SizedDialog):
         if evt.IsShown():
             self.getBrokers()
         else:
+            logger.debug('Stopping BrokerDialog timer, spinner, etc.')
             self.connectFailTimer.Stop()
+            self.spinner.Stop()
             if self.thread and self.thread.is_alive():
                 logger.debug("BrokerDialog closing, but BrokerConnectThread still running!")
 
@@ -318,6 +327,7 @@ class BrokerDialog(sc.SizedDialog):
         self.connectFailTimer.Stop()
         self.Enable()
         self.connectBtn.Enable()
+        self.spinner.Stop()
         self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
 
         self.setMessage(evt.message, error=True)

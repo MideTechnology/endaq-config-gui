@@ -10,20 +10,17 @@ import os.path
 import re
 import socket
 from time import time
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 import wx
 import wx.adv
 import wx.lib.masked as wx_mc
-import wx.lib.sized_controls as sc
 
 from endaq.device import Recorder
-from endaq.device.mqtt.discovery import findBrokers
 
 from endaqconfig.common import isGateway
-from endaqconfig.validators import TextValidator, FieldValidationError
+from endaqconfig.validators import FieldValidationError
 from endaqconfig.widgets.threads import DeviceCommandThread
-from endaqconfig.widgets.events import EvtBrokerUpdate
 from endaqconfig.widgets.controls import getStatusDisplay
 from endaqconfig.widgets.icons import pw_show, pw_hide
 
@@ -225,7 +222,7 @@ class PasswordTextCtrl(wx.Panel):
         self.showPassword(None)
 
 
-    def showPassword(self, show=True):
+    def showPassword(self, show: Optional[bool] = True):
         """ Show, hide, or toggle the password visibility.
 
             :param show: `True` to show text, `False` to show dots, `None` to
@@ -274,7 +271,7 @@ class PasswordTextCtrl(wx.Panel):
         self.text_ctrl.SetToolTip(tt)
 
 
-    def GetToolTip(self) -> str:
+    def GetToolTip(self) -> wx.ToolTip:
         return self.text_ctrl.GetToolTip()
 
 
@@ -444,7 +441,7 @@ class DeviceToolTip(wx.Frame):
 def parseIP(val: str,
             defaultPort: int = 1883,
             check: bool = True,
-            timeout: float = 0.25) -> Tuple[str, int]:
+            timeout: float = 0.5) -> Tuple[str, int]:
     """
     Validate and parse an IP address or hostname, optionally with a port
     number separated by a colon. If the structure of the address is valid,
@@ -481,280 +478,19 @@ def parseIP(val: str,
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(timeout)
                 s.connect((ip, port))
+        except TimeoutError as err:
+            logger.error(f"Error validating '{ip}:{port}': {err!r}")
+            raise ValueError(f"Could not verify address '{ip}:{port}' (timed out)") from None
         except OSError as err:
+            logger.error(f"Error validating '{ip}:{port}': {err!r}")
             if err.errno == socket.EAI_NODATA:
-                raise ValueError(f"Could not resolve hostname: {ip}") from None
-            else:
+                raise ValueError(f"Could not resolve hostname: '{ip}'") from None
+            elif err.strerror:
                 raise ValueError(f"Could not verify address '{ip}:{port}': {err.strerror}") from None
-        except (TimeoutError, ConnectionRefusedError) as err:
-            raise ValueError(f"Could not verify address '{ip}:{port}': {err!r}") from None
+            else:
+                raise ValueError(f"Could not verify address '{ip}:{port}'") from None
 
     return ip, port
-
-
-# ===========================================================================
-#
-# ===========================================================================
-
-class IPDialog(sc.SizedDialog):
-    """ Simple dialog for entering a broker IP address.
-        TODO: OUTDATED, REMOVE THIS
-    """
-
-
-    # noinspection PyUnresolvedReferences
-    def __init__(self, *args, **kwargs):
-        kwargs.setdefault('style', wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
-        kwargs.setdefault('title', 'Enter Broker IP')
-        super().__init__(*args, **kwargs)
-
-        pane = self.GetContentsPane()
-        pane.SetSizerType("form")
-
-        label = wx.StaticText(pane, -1, "Address:")
-        label.SetSizerProps(valign='centre')
-        self.ipField = wx.TextCtrl(pane, -1,
-                                   validator=TextValidator(
-                                       validChar=lambda x: x in ('0123456789.:'),
-                                       validator=validateIP))
-        self.ipField.SetSizerProps(expand=True)
-
-        self.SetButtonSizer(self.CreateStdDialogButtonSizer(wx.OK | wx.CANCEL))
-
-        self.Fit()
-        size = (400, self.GetSize()[1])
-        self.SetSize(size)
-        self.SetMinSize(size)
-        self.ipField.SetFocus()
-
-
-    def GetValue(self):
-        try:
-            return parseIP(self.ipField.GetValue())
-        except ValueError as err:
-            logger.error(f'IPDialog.GetValue() error: {err}')
-            return None
-
-
-class BrokerField(wx.Panel):
-    """
-    A widget for selecting an MQTT broker, either from advertising or
-    a manually-entered IP address.
-
-    TODO: OUTDATED, REMOVE THIS
-
-    """
-
-    # Background/foreground color of selection field if the broker
-    # name/address is invalid. `None` means that color doesn't change.
-    BAD_COLOR = (wx.Colour(255, 200, 200), None)
-
-    ID_USER_BROKER = wx.NewIdRef()
-    ID_ADD_BROKER = wx.NewIdRef()
-
-
-    def __init__(self, *args, **kwargs):
-        """
-        A widget for selecting an MQTT broker, either from advertising or
-        a manually-entered IP address. Takes standard `wx.Panel` arguments,
-        plus:
-
-        :keyword selectedName: The default broker name/address
-        :keyword validate: If `True`, check that manually-entered IP addresses
-            are correctly formed.
-        :keyword verify: If `True`, test connecting the selected broker.
-        :keyword verifyTimeout: The time to wait before declaring verification failed.
-        :keyword scantime: The minimum time (in seconds) to scan for brokers. If
-            any brokers are discovered in this time, they will be returned.
-        :keyword timeout: The maximum time (in seconds) to scan for brokers, if
-            none were found in `scantime`.
-        :keyword callback: A function to call repeatedly while scanning. If the
-            callback returns `True`, the wait for a response will be cancelled.
-            The callback function should require no arguments.
-        """
-        self.selectedName = kwargs.pop('default', None)
-        self.validate = kwargs.pop('validate', True)
-        self.verify = kwargs.pop('verify', False)
-        self.verifyTimeout = kwargs.pop('verifyTimeout', 0.25)
-
-        try:
-            self.userIp = parseIP(self.selectedName, check=False)
-        except ValueError:
-            self.userIp = None
-
-        self.scanKwargs = {}
-        for k in ('scanTime', 'timeout', 'callback'):
-            if k in kwargs:
-                self.scanKwargs[k] = kwargs.pop(k)
-
-        super().__init__(*args, **kwargs)
-
-        # Supposedly, only Windows and GTK support text justification in buttons.
-        # Only add left padding if text aligned left.
-        self._justified = any(x in wx.PlatformInfo for x in ('__WXMSW__', '__WXGTK__'))
-
-        sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.brokerText = wx.StaticText(self, -1, "Broker:")
-        sizer.Add(self.brokerText, 0, wx.ALL, 4)
-        self.brokerBtn = wx.Button(self, label='', style=wx.BU_LEFT)
-        sizer.Add(self.brokerBtn, 4, wx.EXPAND)
-        self.brokerScanBtn = wx.Button(self, -1, "Rescan")
-        sizer.Add(self.brokerScanBtn, 1, wx.EXPAND)
-        self.SetSizer(sizer)
-
-        self.brokers: dict[str, dict] = {}  # Broker info dicts keyed by broker name
-        self.names: list[str] = []  # Broker names (sorted keys of `brokers`)
-        self.tooltip: str = ''
-
-        self.brokersByItemID = {}
-        self.itemIDsByBroker = {}
-
-        self.defaultColors = (self.brokerBtn.GetBackgroundColour(),
-                              self.brokerBtn.GetForegroundColour())
-
-        self.updateList()
-
-        self.Bind(wx.EVT_BUTTON, self.OnBrokerScan, self.brokerScanBtn)
-        self.Bind(wx.EVT_BUTTON, self.OnBrokerClick, self.brokerBtn)
-        self.Bind(wx.EVT_MENU, self.OnBrokerSelection)
-
-
-    def setSelectedName(self, name):
-        if self.names and not name:
-            name = self.names[0]
-        self.selectedName = name
-        prefix = '   ' if self._justified else ''
-        self.brokerBtn.SetLabel(f'{prefix}{self.selectedName}')
-        self._setSelectedToolTip()
-
-
-    def updateList(self, scan=True):
-        """ Scan for mDNS advertised brokers and update the display.
-        """
-        try:
-            self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
-            self.brokerBtn.Enable(False)
-            self.brokerScanBtn.Enable(False)
-
-            name = self.GetString()
-
-            if scan:
-                self.brokers = {b.name: b for b in findBrokers(None, **self.scanKwargs,
-                                                               persistent=True)}
-
-            self.names = sorted(self.brokers)
-            if self.userIp:
-                addr, port = self.userIp
-                self.brokers[f'{addr}:{port}'] = {
-                    'name': f'{addr}:{port}',
-                    'serviceType': '_endaq._tcp.local.',
-                    'host': [addr],
-                    'port': port,
-                    'properties': {}}
-                self.names.append(f'{addr}:{port}')
-
-            self.setSelectedName(name)
-
-        finally:
-            self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-            self.brokerBtn.Enable(True)
-            self.brokerScanBtn.Enable(True)
-
-
-    def _setSelectedToolTip(self):
-        """ Update the list tooktip for the currently selected broker name.
-        """
-        selected = self.GetString()
-        if not selected:
-            self.brokerBtn.SetToolTip('')
-            return
-
-        info = self.brokers.get(selected)
-        if not info:
-            logger.error(f'No broker info for {info!r} (should not happen!)')
-            self.brokerBtn.SetToolTip('')
-            return
-
-        self.brokerBtn.SetToolTip("{name}.{serviceType}\nIP {host[0]} port {port}".format(**info))
-
-
-    def postSelectionEvent(self):
-        """ Post a broker selection event to the main window.
-        """
-        logger.debug(f'Posting broker change: {self.selectedName} -> {self.GetValue()}')
-
-        # TODO: Make sure this works when called through enDAQ Lab, etc.
-        dest = wx.GetActiveWindow()
-        wx.PostEvent(dest, EvtBrokerUpdate(broker=self.GetValue()))
-
-
-    def showIpDialog(self):
-        with IPDialog(self) as dlg:
-            q = dlg.ShowModal()
-            if q != wx.ID_OK:
-                return
-            ip = dlg.GetValue()
-            if ip:
-                self.userIp = ip
-                self.setSelectedName(f'{ip[0]}:{ip[1]}')
-                self.updateList(scan=False)
-
-
-    def OnBrokerScan(self, _evt):
-        """ Handle the 'Rescan' button event.
-        """
-        logger.debug('OnBrokerScan')
-        self.selectedName = self.GetString()
-        self.updateList()
-
-
-    def OnBrokerClick(self, _evt):
-        """ Handle clicking of broker field. """
-        menu = wx.Menu()
-        self.itemIDsByBroker.clear()
-        for broker in self.names:
-            mid = self.itemIDsByBroker.get(broker, -1)
-            item = menu.AppendRadioItem(mid, broker)
-            item.Check(broker == self.selectedName)
-            self.brokersByItemID[item.GetId()] = broker
-            self.itemIDsByBroker[broker] = item.GetId()
-
-        menu.AppendSeparator()
-        menu.Append(self.ID_USER_BROKER, 'Enter IP Address')
-        self.PopupMenu(menu)
-        menu.Destroy()
-
-
-    def OnBrokerSelection(self, evt):
-        """ Handle broker selection.
-        """
-        mid = evt.GetId()
-        if mid == self.ID_USER_BROKER:
-            self.showIpDialog()
-        elif mid in self.brokersByItemID:
-            txt = self.brokersByItemID[mid]
-            if txt != self.selectedName:
-                self.setSelectedName(txt)
-                self.postSelectionEvent()
-
-
-    def GetValue(self) -> Dict[str, Any]:
-        """ Get the info dictionary for the selected broker.
-        """
-        return self.brokers.get(self.selectedName, None)
-
-
-    def GetString(self) -> str:
-        """ Get the currently selected broker name/IP.
-        """
-        return self.selectedName
-
-
-    def IsValid(self) -> bool:
-        """ Is the currently-selected broker name/address valid?
-        """
-        broker = self.GetValue()
-        return bool(broker)
 
 
 #===============================================================================
@@ -954,8 +690,8 @@ def showError(msg: str,
     extra = ''
     if isinstance(err, Exception):
         extra = f'{type(err).__name__}: {err}'
-    elif isinstance(err, str):
-        extra = err
+    elif err:
+        extra = str(err)
 
     q = ExtraMessageBox(msg, caption, style=style, parent=parent,
                         extra=extra)
@@ -965,4 +701,3 @@ def showError(msg: str,
             raise
 
     return q
-

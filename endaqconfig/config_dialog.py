@@ -364,7 +364,7 @@ class ConfigDialog(SC.SizedDialog):
                     version = maxVersion
             else:
                 version = maxVersion
-                
+
         self.updateDeviceConfig()
         self.device.config.applyConfig(unknown=True, version=version)
 

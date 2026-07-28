@@ -54,7 +54,7 @@ class ServiceNameField(TextField):
 
         try:
             wx.SetCursor(wx.Cursor(wx.CURSOR_ARROWWAIT))
-            brokers = findBrokers(None, persistent=True)
+            brokers = findBrokers(None, persistent=True, scantime=0)
             self.brokers = {broker.name: broker for broker in brokers}
             self.field.SetItems(sorted(self.brokers))
         finally:
