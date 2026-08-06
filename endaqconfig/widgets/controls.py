@@ -9,7 +9,7 @@ import wx
 from wx.lib.agw import ultimatelistctrl as ULC
 
 from endaq.device.response_codes import DeviceStatusCode
-from endaq.device import CommandError, UnsupportedFeature, Recorder
+from endaq.device import CommandError, UnsupportedFeature, Recorder, Gateway
 from endaq.device.command_interfaces import SerialCommandInterface
 
 from . import battery_icons
@@ -544,7 +544,10 @@ def populateStatusColumn(dev: Recorder,
     except (AttributeError, UnsupportedFeature):
         code, msg = DeviceStatusCode.IDLE, ''
 
-    if dev.hasCommandInterface and 'MQTT' not in str(dev.command) and not dev.command.available:
+    if (dev.hasCommandInterface
+            and not dev.command.available
+            and 'MQTT' not in str(dev.command)
+            and not isinstance(dev, Gateway)):
         # Non-MQTT devices only report state when queried, and do not
         # report as many states. Base status on the last command sent.
         t, cmd = dev.command.lastCommand
@@ -555,6 +558,7 @@ def populateStatusColumn(dev: Recorder,
             elif 'RecStop' in cmd:
                 code, msg = DeviceStatusCode.STOP_PENDING, ''
             elif 'Reset' in cmd:
+                # XXX: this causes problems with the gateway
                 code, msg = DeviceStatusCode.RESET_PENDING, ''
             elif 'FlashPackage' in cmd or 'SecureUpdateAll' in cmd:
                 # An update command. No DeviceStatusCode for 'upload pending'

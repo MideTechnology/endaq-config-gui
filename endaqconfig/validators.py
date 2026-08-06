@@ -3,13 +3,16 @@ Validation: `wx.Validator` subclasses and various validation functions
 used by them.
 """
 
-from typing import Any, Callable, TYPE_CHECKING
+import logging
+from typing import Any, Callable, Optional, TYPE_CHECKING
 import wx
 
 from .common import getClipboardText
 
 if TYPE_CHECKING:
     from .config_dialog import ConfigDialog
+
+logger = logging.getLogger(__name__)
 
 # ===========================================================================
 #
@@ -47,7 +50,11 @@ class TextValidator(wx.Validator):
                   wx.WXK_INSERT, wx.WXK_DELETE)
 
 
-    def __init__(self, validChar=None, validator=None, minLen=0, maxLen=float('inf')):
+    def __init__(self,
+                 validChar: Optional[Callable] = None,
+                 validator: Optional[Callable] = None,
+                 minLen=0, maxLen=float('inf'),
+                 blank=False):
         """ Instantiate a text field validator. It does basic validation of
             min/max length, and uses supplied functions to validate contents.
 
@@ -55,9 +62,12 @@ class TextValidator(wx.Validator):
             :param validator: A function that validates the entire string.
             :param minLen: Minimum length of the string.
             :param maxLen: Maximum length of the string.
+            :param blank: If `True`, allow length 0 strings, overriding `minLen`.
+                Non-zero length strings still get checked against `minLen`.
         """
         self.minLen = minLen or 0
         self.maxLen = maxLen or float('inf')
+        self.blank = blank
         self.isValidChar = validChar or (lambda x: True)
         self.isValidString = validator or (lambda x: True)
 
@@ -78,7 +88,7 @@ class TextValidator(wx.Validator):
     def Clone(self):
         """ Required in wx.PyValidator subclasses. """
         return TextValidator(self.isValidChar, self.isValidString,
-                             self.minLen, self.maxLen)
+                             self.minLen, self.maxLen, self.blank)
 
 
     def TransferToWindow(self):
@@ -91,7 +101,8 @@ class TextValidator(wx.Validator):
         return True
 
 
-    def Validate(self, win):
+    # noinspection method-overriding
+    def Validate(self, win: wx.TextCtrl):
         """ Perform validation. Changes the field background color and adds a
             message to the tooltip if invalid.
         """
@@ -101,8 +112,9 @@ class TextValidator(wx.Validator):
         txt = win.GetValue()
         msg = ''
 
-        # if self.minLen >= len(txt) > self.maxLen:
-        if not self.minLen <= len(txt) <= self.maxLen:
+        if self.blank and not txt:
+            valid = True
+        elif not self.minLen <= len(txt) <= self.maxLen:
             if self.maxLen == float('inf'):
                 msg = f'⚠ Length must be at least {self.minLen} characters!'
             elif self.minLen == 0:
@@ -121,6 +133,8 @@ class TextValidator(wx.Validator):
         win.SetToolTip(f'{tooltip}\n\n{msg}'.strip())
         win.SetBackgroundColour(self.colorValid if valid else self.colorInvalid)
         win.Refresh()
+
+        # logger.debug(f'validate {win.Name}: {self.blank=} {txt=!r} {valid=} {msg}')
         return valid
 
 

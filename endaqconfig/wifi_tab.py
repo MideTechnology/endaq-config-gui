@@ -666,14 +666,14 @@ class WiFiSelectionTab(Tab):
                 "Name (SSID):",
                 name="apNameField",
                 tt="The name of the Gateway's Wi-Fi access point",
-                val=TextValidator(validator=self.isUniqueSSID, minLen=1, maxLen=63),
+                val=TextValidator(validator=self.isUniqueSSID, minLen=1, maxLen=63, blank=True),
                 handler=self.OnAPModeText)
         sizer.Add(row1sizer, 0, wx.EXPAND | wx.ALL, 4)
         row2sizer, _, self.apPasswordField = labeledField(
                 "Password:", pw=True,
                 name="apPasswordField",
                 tt="The Gateway AP password",
-                val=TextValidator(maxLen=63),
+                val=TextValidator(maxLen=63, blank=True),
                 handler=self.OnAPModeText)
         sizer.Add(row2sizer, 0, wx.EXPAND | wx.ALL, 4)
 
@@ -685,14 +685,14 @@ class WiFiSelectionTab(Tab):
         row3sizer, wwan4gNameLbl, self.wwan4gNameField = labeledField(
                 "APN:",
                 name="wwan4gNameField",
-                val=TextValidator(minLen=8, maxLen=63),
+                val=TextValidator(minLen=8, maxLen=63, blank=True),
                 handler=self.OnAPModeText)
         sizer.Add(row3sizer, 0, wx.EXPAND | wx.WEST | wx.EAST, 12)
         row4sizer, wwan4gPwLabel, self.wwan4gPwField = labeledField(
                 "Password:", pw=True,
                 name="wwan4gPwField",
                 tt="The cellular data access PIN",
-                val=TextValidator(minLen=8, maxLen=63))
+                val=TextValidator(minLen=8, maxLen=63, blank=True))
         sizer.AddSpacer(8)
         sizer.Add(row4sizer, 0, wx.EXPAND | wx.WEST | wx.EAST, 12)
 
