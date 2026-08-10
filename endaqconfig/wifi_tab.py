@@ -305,7 +305,8 @@ class AddWifiDialog(SC.SizedDialog):
         evt.Skip()
 
 
-    def OnAuthCheck(self, _evt):
+    # noinspection unused-parameter
+    def OnAuthCheck(self, evt):
         """ Handle authorization selection checkbox, if `booleanAuth`.
         """
         # noinspection PyUnresolvedReferences
@@ -395,6 +396,13 @@ class WiFiSelectionTab(Tab):
         # Timer to temporarily suppress updates from status checker
         # No event handler; explicitly checked if running
         self.delay = wx.Timer()
+
+
+    def Validate(self):
+        """ Override of standard `wx.Window.Validate()` so Wi-Fi field
+            validators can't veto the dialog OK.
+        """
+        return True
 
 
     def startUpdateThreads(self):
@@ -666,14 +674,14 @@ class WiFiSelectionTab(Tab):
                 "Name (SSID):",
                 name="apNameField",
                 tt="The name of the Gateway's Wi-Fi access point",
-                val=TextValidator(validator=self.isUniqueSSID, minLen=1, maxLen=63, blank=True),
+                val=TextValidator(validator=self.isUniqueSSID, minLen=1, maxLen=32, blank=True),
                 handler=self.OnAPModeText)
         sizer.Add(row1sizer, 0, wx.EXPAND | wx.ALL, 4)
         row2sizer, _, self.apPasswordField = labeledField(
                 "Password:", pw=True,
                 name="apPasswordField",
                 tt="The Gateway AP password",
-                val=TextValidator(maxLen=63, blank=True),
+                val=TextValidator(minLen=8, maxLen=63, blank=True),
                 handler=self.OnAPModeText)
         sizer.Add(row2sizer, 0, wx.EXPAND | wx.ALL, 4)
 
@@ -1062,7 +1070,8 @@ class WiFiSelectionTab(Tab):
     # ===========================================================================
 
 
-    def OnRescan(self, _evt):
+    # noinspection unused-parameter
+    def OnRescan(self, evt):
         """ Handle "Rescan" button press.
         """
         self.getInfo()
@@ -1104,7 +1113,8 @@ class WiFiSelectionTab(Tab):
             self.populate()
 
 
-    def OnAddButton(self, _evt):
+    # noinspection unused-parameter
+    def OnAddButton(self, evt):
         """ Handle 'Add' button press (adds an unadvertised AP).
         """
         dlg = AddWifiDialog(self, -1, booleanAuth=self.booleanAuth)
@@ -1168,7 +1178,8 @@ class WiFiSelectionTab(Tab):
         self.selected = -1
 
 
-    def OnForgetChecked(self, _evt):
+    # noinspection unused-parameter
+    def OnForgetChecked(self, evt):
         """ Handle the 'Forget' checkbox changing.
             For future use, when multiple passwords are stored.
         """
@@ -1181,7 +1192,8 @@ class WiFiSelectionTab(Tab):
         self.populate()
 
 
-    def OnPasswordChecked(self, _evt):
+    # noinspection unused-parameter
+    def OnPasswordChecked(self, evt):
         """ Handle the 'Set/Change Password' checkbox changing.
         """
         if not self.pwCheck.GetValue():
@@ -1215,7 +1227,7 @@ class WiFiSelectionTab(Tab):
         evt.Skip()
 
 
-    def OnAPModeText(self, _evt):
+    def OnAPModeText(self, evt):
         """ Handle typing in one of the AP mode fields.
         """
         if not self.initialized:
@@ -1244,7 +1256,8 @@ class WiFiSelectionTab(Tab):
         evt.Skip()
 
 
-    def OnListRightClick(self, _evt):
+    # noinspection unused-parameter
+    def OnListRightClick(self, evt):
         """ Handle a list item being right-clicked.
             For future use.
         """
@@ -1261,7 +1274,8 @@ class WiFiSelectionTab(Tab):
         menu.Destroy()
 
 
-    def OnDelete(self, _evt):
+    # noinspection unused-parameter
+    def OnDelete(self, evt):
         """ Delete (forget) a saved AP.
             For future use (current HW doesn't keep multiple APs).
         """
@@ -1277,12 +1291,15 @@ class WiFiSelectionTab(Tab):
         evt.Skip()
 
 
-    def OnApplyButton(self, _evt):
+    # noinspection unused-parameter
+    def OnApplyButton(self, evt):
         """ Saves the current information, then does a new Wi-Fi scan.
         """
-        self.save()
-        # I removed this functionality given we now check for connection information periodically
-        # self.getInfo()
+        if super().Validate():
+            self.save()
+        else:
+            logger.debug('Validation failed, not applying changes')
+            # TODO: Display warnings?
 
 
     # ===========================================================================
