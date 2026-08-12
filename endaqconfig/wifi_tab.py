@@ -389,6 +389,8 @@ class WiFiSelectionTab(Tab):
         self.stationWidgets = []
         self.sharedWidgets = []
 
+        self.fieldNormalColor = wx.SystemSettings.GetColour(wx.SYS_COLOUR_WINDOW)
+
         super(WiFiSelectionTab, self).__init__(*args, **kwargs)
         if not getattr(self, 'label'):
             self.label = 'Wi-Fi'
@@ -663,7 +665,8 @@ class WiFiSelectionTab(Tab):
                 txt.SetToolTip(tt)
             if handler:
                 txt.Bind(wx.EVT_TEXT, handler)
-            txt.Bind(wx.EVT_KILL_FOCUS, self.OnExitField)
+            txt.Bind(wx.EVT_SET_FOCUS, self.OnFieldFocus)
+            txt.Bind(wx.EVT_KILL_FOCUS, self.OnFieldExit)
             rowsizer.Add(lbl, 0, wx.EXPAND | wx.NORTH, 4)
             rowsizer.Add(txt, 1, wx.EXPAND)
 
@@ -803,8 +806,17 @@ class WiFiSelectionTab(Tab):
         #     widget.Enable(True)
 
 
+    def OnFieldFocus(self, evt):
+        """ Handler for entering a text field; resets background color,
+            undoing any changes by the validator.
+        """
+        field = evt.GetEventObject()
+        if field.GetValidator():
+            field.SetBackgroundColour(self.fieldNormalColor)
+        evt.Skip()
 
-    def OnExitField(self, evt):
+
+    def OnFieldExit(self, evt):
         """ Handler for leaving a text field; does validation.
         """
         try:
@@ -1209,7 +1221,6 @@ class WiFiSelectionTab(Tab):
         if self.selected != self.lastSelected:
             self.pwField.SetValue('')
             self.lastSelected = self.selected
-
         evt.Skip()
 
 
@@ -1224,7 +1235,7 @@ class WiFiSelectionTab(Tab):
                 self.passwords.clear()
             self.passwords[ssid] = evt.GetString()
             self.updateApplyButton()
-        evt.Skip()
+        self.OnFieldFocus(evt)
 
 
     def OnAPModeText(self, evt):

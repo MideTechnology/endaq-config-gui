@@ -118,7 +118,7 @@ class TextValidator(wx.Validator):
             if self.maxLen == float('inf'):
                 msg = f'⚠ Length must be at least {self.minLen} characters!'
             elif self.minLen == 0:
-                msg = f'⚠ Length must be shorter than {self.minLen} characters!'
+                msg = f'⚠ Length must be shorter than {self.maxLen} characters!'
             else:
                 msg = f'⚠ Length must be between {self.minLen} and {self.maxLen} characters!'
             valid = False
