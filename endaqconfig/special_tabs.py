@@ -680,7 +680,7 @@ class DeviceInfoTab(Tab):
     """
 
     def __init__(self, *args, **kwargs):
-        self.setAttribDefault("label", "Recorder Info")
+        self.setAttribDefault("label", "Device Info")
         super(DeviceInfoTab, self).__init__(*args, **kwargs)
 
 

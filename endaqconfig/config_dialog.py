@@ -187,7 +187,8 @@ class ConfigDialog(SC.SizedDialog):
 
         if self.device.hasWifi and self.showWifi:
             self.applyWifiChangesCheck = wx.CheckBox(check_box_sizer, -1, "Apply Wi-Fi changes on exit")
-            self.applyWifiChangesCheck.SetSizerProps(halign='right', expand=True, border=(['top', 'bottom'], 8))
+            self.applyWifiChangesCheck.SetSizerProps(halign='right', expand=True,
+                                                     border=(['top', 'bottom'], 8))
             # self.applyWifiChangesCheck.SetValue(True)
         else:
             self.applyWifiChangesCheck = None

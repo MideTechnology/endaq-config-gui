@@ -222,7 +222,7 @@ class StatusCheckThread(threading.Thread):
 
             except IOError as E:
                 logger.warning(E)
-
+                # XXX: What is this?
                 evt = EvtClosingTemp()  # wx.CloseEvent(id=-1)
                 if bool(self.parent):
                     wx.PostEvent(self.parent, evt)
@@ -372,6 +372,7 @@ class WiFiSelectionTab(Tab):
         self.device = kwargs['root'].device
         self.mode = ''
         self.reportedMode = ''
+        self.lastStatus = 0  # Previously reported WiFiStatusCode
         self.ssid = self.apn = ''  # AP mode: the gateway's reported SSID and APN
         self.apChanged = False
         self.initialized = False  # Prevents premature update call triggered by EVT_TEXT
@@ -869,6 +870,7 @@ class WiFiSelectionTab(Tab):
             mode += '4g'
 
         if is_changing:
+            self.lastStatus = status
             self.startBusy()
             return
 
@@ -884,6 +886,11 @@ class WiFiSelectionTab(Tab):
 
         if self.show4GMode:
             self.wwan4gCheck.SetValue(bool(status & 0x20))
+
+        if self.lastStatus & WiFiConnectionStatus.CHANGING and mode.startswith('station'):
+            self.startUpdateThreads()
+
+        self.lastStatus = status
 
 
     def makeToolTip(self, ap: dict) -> str:
@@ -1376,7 +1383,7 @@ class WiFiSelectionTab(Tab):
     def setWifi(self, data):
         """ Call `Recorder.command.setWifi()` command and handle any errors.
         """
-        # logger.debug(f'Setting WIFI: {data}')
+        logger.debug(f'Setting WIFI: {data}')
         # Allow more time for remote devices to respond
         timeout = 45 if isinstance(self.device.config, RemoteConfigInterface) else 10
 
