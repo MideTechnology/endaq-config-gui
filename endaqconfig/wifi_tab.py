@@ -13,7 +13,7 @@ Created on Nov 13, 2019
 
 import threading
 from time import time, sleep
-from typing import Any, Literal
+from typing import Any, Dict, List, Literal
 
 import wx
 import wx.lib.sized_controls as SC
@@ -26,11 +26,11 @@ from endaqconfig.widgets import icons
 from endaqconfig.widgets.events import *
 from endaqconfig.widgets.shared import KeepAliveCallback, PasswordTextCtrl
 from endaqconfig.widgets.spinner import Spinner
+from endaqconfig.widgets.threads import StatusCheckThread, WiFiScanThread
 
-from endaq.device import DeviceError, DeviceTimeout, CommandError
+from endaq.device import DeviceError, DeviceTimeout
 from endaq.device.config import RemoteConfigInterface
-from endaq.device.response_codes import (DeviceStatusCode, CommandResponseCode,
-                                         WiFiConnectionStatus)
+from endaq.device.response_codes import WiFiConnectionStatus
 
 # ===============================================================================
 #
@@ -76,160 +76,6 @@ def connectionStatus2Str(result: dict[str, Any]) -> str:
             msg = f'{msg} (client+4G mode)'
 
     return msg
-
-
-# ===============================================================================
-#
-# ===============================================================================
-
-class WiFiScanThread(threading.Thread):
-    """ Thread for asynchronously retrieving a list of Wi-Fi APs from the
-        wireless-enabled device. Posts an `EVT_CONFIG_WIFI_SCAN` event when
-        complete. Can be cancelled by calling `cancel.set()`.
-    """
-
-    def __init__(self,
-                 parent: "WiFiSelectionTab",
-                 interval: float = .25,
-                 timeout: int = 30,
-                 pause: int = 0):
-        """ Thread for asynchronously retrieving a list of Wi-Fi APs from the
-            wireless-enabled device. Posts an `EVT_CONFIG_WIFI_SCAN` event when
-            complete. Can be cancelled by calling `cancel.set()`.
-
-            :param parent: The parent `WifiSelectionTab`
-            :keyword interval: Time (in seconds) between reads of the device's
-                RESPONSE file.
-            :keyword timeout: Time (in seconds) to wait for the device to
-                complete a Wi-Fi scan.
-            :keyword pause: A time (in seconds) to delay before the scan.
-        """
-        super(WiFiScanThread, self).__init__(name=type(self).__name__)
-        self.daemon = True
-
-        self.parent = parent
-        self.interval = interval
-        self.timeout = timeout
-        self.pause = pause
-        self.cancel = threading.Event()
-        self.cancel.clear()
-
-
-    def run(self):
-        """ The scanning thread's main loop.
-        """
-        data = None
-        E = None
-
-        sleep(self.pause)
-
-        try:
-            data = self.parent.device.command.scanWifi(timeout=self.timeout,
-                                                       interval=self.interval,
-                                                       callback=self.cancel.is_set)
-        except Exception as err:
-            E = err
-            logger.error(f'Error in Wi-Fi scan: {err!r}', stack_info=True)
-
-        evt = EvtConfigWiFiScan(data=data, error=E)
-
-        try:
-            wx.PostEvent(self.parent, evt)
-        except RuntimeError:
-            # Dialog probably closed during scan, which is okay.
-            pass
-
-
-class StatusCheckThread(threading.Thread):
-    """ Thread for continually checking the current status of the network
-        connection, done asynchronously.
-    """
-
-    def __init__(self, parent: 'WiFiSelectionTab',
-                 interval: float = 4,
-                 timeout: float = 20,
-                 extra: bool = False):
-        """ Thread for continually checking the current status of the network
-            connection, done asynchronously.
-
-            :param parent: The parent `WifiSelectionTab`
-            :param interval: Time (in seconds) between each check of the
-                network status
-            :param timeout: Time (in seconds) to wait for the device to
-                finish checking the network status
-            :param extra: If `True`, include additional information in the
-                update event.
-        """
-        super(StatusCheckThread, self).__init__(name=type(self).__name__)
-        self.daemon = True
-
-        self.parent = parent
-        self.interval = interval
-        self.timeout = timeout
-        self.extra = extra
-        self.cancel = threading.Event()
-        self.cancel.clear()
-
-
-    def run(self):
-        """ The main loop.
-        """
-        sleep(self.interval)
-
-        timeout = self.timeout
-        device = self.parent.device
-        extra = self.parent.parent.showAdvanced
-
-        while bool(self.parent) and not self.cancel.is_set():
-            result = {}
-
-            # if self.parent.working.is_set():
-            if self.parent.scanThread.is_alive():
-                sleep(self.interval)
-                continue
-
-            try:
-                result.update(device.command.queryWifi(timeout=timeout))
-
-                if extra and not result.get('WiFiConnectionStatus', 0) & WiFiConnectionStatus.CHANGING:
-                    try:
-                        mac, ip = device.command.getNetworkAddress(timeout=timeout)
-                        result['MACAddress'] = mac
-                        result['IPV4Address'] = ip
-                    except CommandError as err:
-                        if err.errno != CommandResponseCode.ERR_BUSY:
-                            raise
-
-            except DeviceTimeout:
-                logger.warning("Timed out when checking the network connection, retrying")
-                continue
-
-            except DeviceError as E:
-                if E.args and E.args[0] == DeviceStatusCode.ERR_BUSY:
-                    logger.info("Device reported ERR_BUSY, retrying")
-                    sleep(1)
-                    continue
-                else:
-                    logger.error(E)
-                    raise
-
-            try:
-                if result:
-                    evt = EvtConfigWiFiConnectionCheck(result=result)
-                    if bool(self.parent):
-                        wx.PostEvent(self.parent, evt)
-                sleep(self.interval)
-
-            except IOError as E:
-                logger.warning(E)
-                # XXX: What is this?
-                evt = EvtClosingTemp()  # wx.CloseEvent(id=-1)
-                if bool(self.parent):
-                    wx.PostEvent(self.parent, evt)
-
-                break
-
-        logger.debug(f'Exiting main loop of {self.name}')
 
 
 # ===============================================================================
@@ -367,7 +213,7 @@ class WiFiSelectionTab(Tab):
         """ Constructor. Will probably be completely replaced once this is
             integrated with the rest of the tabs.
         """
-        self.info = []
+        self.info: List[Dict[str, Any]] = []
         self.parent = kwargs['root']
         self.device = kwargs['root'].device
         self.mode = ''
@@ -1043,16 +889,18 @@ class WiFiSelectionTab(Tab):
         self.updateApplyButton()
 
 
-    def updateApplyButton(self):
+    def updateApplyButton(self) -> bool:
         """ Enable or disable the "Apply" button if any changes have been
             made.
         """
         enable = False
 
-        if self.mode == 'station':
+        if self.mode.startswith('station'):
             # Check for changes of selected AP
             # FUTURE: Do checks to other APs for multiple AP configuration
-            if self.selected != self.firstSelected:
+            if self.selected < 0:
+                enable = False
+            elif self.selected != self.firstSelected:
                 enable = True
             else:
                 try:
@@ -1245,6 +1093,7 @@ class WiFiSelectionTab(Tab):
         self.OnFieldFocus(evt)
 
 
+    # noinspection unused-parameter
     def OnAPModeText(self, evt):
         """ Handle typing in one of the AP mode fields.
         """
@@ -1363,6 +1212,10 @@ class WiFiSelectionTab(Tab):
         # FUTURE: Any SSIDs in self.deleted should be deleted here.
 
         # logger.debug(f'Setting STA mode: {data}')
+        if not data:
+            logger.debug('saveStationMode(): no AP data!')
+            return False
+
         return self.setWifi({'AP': data})
 
 

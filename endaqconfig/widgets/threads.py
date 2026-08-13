@@ -4,26 +4,26 @@ simple commands to devices in the background.
 """
 
 from functools import partial
+import logging
 import socket
 import threading
 from time import sleep, time
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 
 from endaq.device import (Recorder, getDevices, DeviceError, CommandError,
-                          CommunicationError, UnsupportedFeature)
+                          CommunicationError, DeviceTimeout, UnsupportedFeature)
 from endaq.device.command_interfaces import SerialCommandInterface
 from endaq.device.mqtt.mqtt_interface import MQTTConnector
-from endaq.device.response_codes import DeviceStatusCode
-
-import logging
-logger = logging.getLogger(__name__)
+from endaq.device.response_codes import (DeviceStatusCode, CommandResponseCode,
+                                         WiFiConnectionStatus)
 
 import wx
 
 from endaqconfig.common import isOnline, isSleeping
 from endaqconfig.widgets.events import (EvtMQTTConnecting, EvtMQTTConnected,
                                         EvtMQTTDisconnected, EvtMQTTError,
-                                        EvtBrokerSelected)
+                                        EvtBrokerSelected, EvtConfigWiFiConnectionCheck,
+                                        EvtClosingTemp, EvtConfigWiFiScan)
 
 # from .debug_lock import DebugRLock
 
@@ -31,6 +31,10 @@ from endaqconfig.widgets.events import (EvtMQTTConnecting, EvtMQTTConnected,
 if TYPE_CHECKING:
     from .device_dialog import DeviceSelectionDialog
     from .broker_dialog import BrokerDialog
+    from endaqconfig.wifi_tab import WiFiSelectionTab
+
+
+logger = logging.getLogger(__name__)
 
 
 # ===========================================================================
@@ -402,7 +406,10 @@ class BrokerConnectThread(threading.Thread):
         wx.PostEvent(self.parent, EvtMQTTConnecting(info=self.info))
         onConnect = partial(postCallbackEvent, EvtMQTTConnected, self.root)
         onDisconnect = partial(postCallbackEvent, EvtMQTTDisconnected, self.root)
+
+        # noinspection unresolved-references
         onConnect.__name__ = 'EvtMQTTConnected'
+        # noinspection unresolved-references
         onDisconnect.__name__ = 'EvtMQTTDisconnected'
 
         kwargs = self.connectorArgs
@@ -480,3 +487,162 @@ def postCallbackEvent(eventType: type[wx.Event],
         # which is (probably) okay.
         logger.debug(f'Ignoring failure posting {eventType.__name__} to {target}: {evt}')
         pass
+
+
+# ===============================================================================
+#
+# ===============================================================================
+
+class StatusCheckThread(threading.Thread):
+    """ Thread for continually checking the current status of the network
+        connection, done asynchronously. Used by `WiFiSelectionTab`.
+    """
+
+    def __init__(self, parent: 'WiFiSelectionTab',
+                 interval: float = 4,
+                 timeout: float = 20,
+                 extra: bool = False):
+        """ Thread for continually checking the current status of the network
+            connection, done asynchronously.
+
+            :param parent: The parent `WifiSelectionTab`
+            :param interval: Time (in seconds) between each check of the
+                network status
+            :param timeout: Time (in seconds) to wait for the device to
+                finish checking the network status
+            :param extra: If `True`, include additional information in the
+                update event.
+        """
+        super(StatusCheckThread, self).__init__(name=type(self).__name__)
+        self.daemon = True
+
+        self.parent = parent
+        self.interval = interval
+        self.timeout = timeout
+        self.extra = extra
+        self.cancel = threading.Event()
+        self.cancel.clear()
+
+
+    def run(self):
+        """ The main loop.
+        """
+        sleep(self.interval)
+
+        timeout = self.timeout
+        device = self.parent.device
+        extra = self.parent.parent.showAdvanced
+
+        while bool(self.parent) and not self.cancel.is_set():
+            result = {}
+
+            # if self.parent.working.is_set():
+            if self.parent.scanThread.is_alive():
+                sleep(self.interval)
+                continue
+
+            try:
+                result.update(device.command.queryWifi(timeout=timeout))
+
+                if extra and not result.get('WiFiConnectionStatus', 0) & WiFiConnectionStatus.CHANGING:
+                    try:
+                        mac, ip = device.command.getNetworkAddress(timeout=timeout)
+                        result['MACAddress'] = mac
+                        result['IPV4Address'] = ip
+                    except CommandError as err:
+                        if err.errno != CommandResponseCode.ERR_BUSY:
+                            raise
+
+            except DeviceTimeout:
+                logger.warning("Timed out when checking the network connection, retrying")
+                continue
+
+            except DeviceError as E:
+                if E.args and E.args[0] == DeviceStatusCode.ERR_BUSY:
+                    logger.info("Device reported ERR_BUSY, retrying")
+                    sleep(1)
+                    continue
+                else:
+                    logger.error(E)
+                    raise
+
+            try:
+                if result:
+                    evt = EvtConfigWiFiConnectionCheck(result=result)
+                    if bool(self.parent):
+                        wx.PostEvent(self.parent, evt)
+                sleep(self.interval)
+
+            except IOError as E:
+                logger.warning(E)
+                # XXX: What is this?
+                evt = EvtClosingTemp()  # wx.CloseEvent(id=-1)
+                if bool(self.parent):
+                    wx.PostEvent(self.parent, evt)
+
+                break
+
+        logger.debug(f'Exiting main loop of {self.name}')
+
+
+# ===============================================================================
+#
+# ===============================================================================
+
+class WiFiScanThread(threading.Thread):
+    """ Thread for asynchronously retrieving a list of Wi-Fi APs from the
+        wireless-enabled device. Posts an `EVT_CONFIG_WIFI_SCAN` event when
+        complete. Can be cancelled by calling `cancel.set()`. Used by
+        `WiFiSelectionTab`.
+    """
+
+    def __init__(self,
+                 parent: "WiFiSelectionTab",
+                 interval: float = .25,
+                 timeout: int = 30,
+                 pause: int = 0):
+        """ Thread for asynchronously retrieving a list of Wi-Fi APs from the
+            wireless-enabled device. Posts an `EVT_CONFIG_WIFI_SCAN` event when
+            complete. Can be cancelled by calling `cancel.set()`.
+
+            :param parent: The parent `WifiSelectionTab`
+            :keyword interval: Time (in seconds) between reads of the device's
+                RESPONSE file.
+            :keyword timeout: Time (in seconds) to wait for the device to
+                complete a Wi-Fi scan.
+            :keyword pause: A time (in seconds) to delay before the scan.
+        """
+        super(WiFiScanThread, self).__init__(name=type(self).__name__)
+        self.daemon = True
+
+        self.parent = parent
+        self.interval = interval
+        self.timeout = timeout
+        self.pause = pause
+        self.cancel = threading.Event()
+        self.cancel.clear()
+
+
+    def run(self):
+        """ The scanning thread's main loop.
+        """
+        data = None
+        E = None
+
+        sleep(self.pause)
+
+        try:
+            data = self.parent.device.command.scanWifi(timeout=self.timeout,
+                                                       interval=self.interval,
+                                                       callback=self.cancel.is_set)
+        except Exception as err:
+            E = err
+            logger.error(f'Error in Wi-Fi scan: {err!r}', stack_info=True)
+
+        evt = EvtConfigWiFiScan(data=data, error=E)
+
+        try:
+            wx.PostEvent(self.parent, evt)
+        except RuntimeError:
+            # Dialog probably closed during scan, which is okay.
+            pass
