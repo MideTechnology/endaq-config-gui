@@ -352,8 +352,9 @@ class ListContextMenu(wx.Menu):
                                                         DeviceStatusCode.STREAMING)
         available = isOnline(device)
         devstr = deviceString(self.device)
-        serial =  isinstance(self.device.command, SerialCommandInterface)
 
+        # TODO: Only show commands device supports? Makes it more consistent
+        #  (visible means the device is capable, disabled means not right now)
         config = self._addMI(f"Configure {devstr}...", self.OnConfig, icons[0][0])
         startRec = self._addMI(f"Start Recording", self.OnStartRecording, icons[1][0])
         startStream = self._addMI(f"Start Streaming", self.OnStartStreaming, icons[4][0])
@@ -375,12 +376,12 @@ class ListContextMenu(wx.Menu):
         startRec.Enable(available and self.device.command.canRecord and not anothers and not isRecording)
         startStream.Enable(available and self.device.command.canStream and not anothers and not isRecording)
         stopRec.Enable(available and not anothers and isRecording)
-        blink.Enable(available and serial)
+        blink.Enable(available and self.device.apiVersion >= 3)
         reboot.Enable(available and not anothers)
 
         self.clearLock = locked
         self.forceLock = anothers and wx.GetKeyState(wx.WXK_CONTROL)
-        lock.Enable(available and not locked or mine or self.forceLock)
+        lock.Enable(self.device.command.canLock and available and not locked or mine or self.forceLock)
 
         if locked:
             lock.SetBitmap(icons[5][0])

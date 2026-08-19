@@ -773,9 +773,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         #     logger.debug(f'recorder status error: {err!r}')
         #     status = 0
 
-        lockId = dev.command.lockId[1]
-        locked = lockId and any(lockId)
-        mine = lockId == dev.command.hostId
+        locked, mine = dev.command.isLocked()
         anothers = locked and not mine
         enabled = (enabled and isOnline(dev) and not anothers)
         sleeping = isSleeping(dev)

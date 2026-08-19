@@ -164,4 +164,4 @@ def isGateway(device: Recorder) -> bool:
     """
     # Gateway-ness determined by bits in the "recorder's" `RecorderTypeUID`.
     devtype = device.getInfo('RecorderTypeUID', 0)
-    return bool(devtype & 0xa0000000)  # bits 31 (non-recorder) and 29 (gateway)
+    return bool(devtype & 0x20000000)  # bit and 29 (gateway)
