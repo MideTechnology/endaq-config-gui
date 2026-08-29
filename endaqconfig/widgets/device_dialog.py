@@ -1,6 +1,9 @@
 """
 Dialog for selecting and/or controlling recording devices.
 
+TODO: Broker selection cosmetics
+TODO: Automatic connect to a default broker (if provided on init and 'use remote' starts checked)
+TODO: Automatically connect to the first broker found (if no default and 'use remote' starts checked)
 """
 
 from collections import namedtuple
@@ -10,27 +13,40 @@ import logging
 import os.path
 import threading
 from time import sleep, time
-from typing import Callable, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import wx
 import wx.lib.sized_controls as sc
 import wx.lib.mixins.listctrl as listmix
 from wx.lib.agw import ultimatelistctrl as ULC
+import wx.lib.filebrowsebutton as FBB
 
-from endaq.device import (Recorder, getDevices, RECORDERS,
-                          deviceChanged, UnsupportedFeature, DeviceError,
-                          CommandError, DeviceTimeout)
+from endaq.device import (Recorder, RECORDERS, UnsupportedFeature,
+                          CommandError, DeviceError, deviceChanged,
+                          _module_busy)
 from endaq.device.base import os_specific
-from endaq.device.response_codes import DeviceStatusCode
+from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface, MQTTConnector
 
-from .shared import DeviceToolTip
-from . import icons
-from . import battery_icons
-from . import controls
-from .events import (EvtDeviceListUpdate, EVT_DEVICE_LIST_UPDATE,
-                     EvtRecordButton, EVT_RECORD_BUTTON)
+from endaqconfig.common import isGateway, isOnline, isSleeping
+from endaqconfig.widgets import battery_icons
+from endaqconfig.widgets import icons
+from endaqconfig.widgets.broker_dialog import BrokerDialog
+from endaqconfig.widgets.controls import (
+    _attribFormatter, populateStatusColumn, populateButtonColumn,
+    populateBatteryColumn, NewControlButtons, ListContextMenu,
+    STATUS_DISPLAY)
+from endaqconfig.widgets.events import (
+    EVT_RECORD, EVT_STREAM, EVT_CONFIG, EVT_LOCK_DEVICE, EVT_BLINK,
+    EVT_BROKER_SELECTED, EVT_MQTT_CONNECTING, EVT_MQTT_CONNECTED,
+    EVT_MQTT_DISCONNECTED, EVT_MQTT_ERROR, EVT_RESET, EVT_SHUTDOWN,
+    EvtMQTTError)
+from endaqconfig.widgets.threads import (DeviceScanThread, DeviceCommandThread, BrokerConnectThread)
+from endaqconfig.widgets.shared import DeviceToolTip, promptDeviceReboot, promptDeviceShutdown
 
-logger = logging.getLogger('endaqconfig')
+logger = logging.getLogger(__name__)
+
+import endaq.device
+endaq.device.logger.setLevel(logging.DEBUG)
 
 # ===========================================================================
 # Threshold values for showing warning or error icons
@@ -46,351 +62,10 @@ SPACE_WARN_MB = SPACE_MIN_MB * 4
 CAL_WARN_DAYS = datetime.timedelta(days=120)
 DEV_WARN_DAYS = datetime.timedelta(days=182)
 
+DEFAULT_BROKER = "DRS Test Broker"  # TODO: REMOVE/CHANGE
 
-# ===========================================================================
-#
-# ===========================================================================
-
-class DeviceScanThread(threading.Thread):
-    """
-    A background thread for finding devices and their states. It can be
-    stopped by calling `DeviceScanThread.stop()`.
-    """
-
-    def __init__(self,
-                 parent: "DeviceSelectionDialog",
-                 devFilter: Optional[Callable] = None,
-                 interval: Union[int, float] = 3,
-                 oneshot: bool = False,
-                 timeout: Optional[float] = 4,
-                 **getDevicesArgs):
-        """ A background thread for finding devices and their states. It can be
-            stopped by calling `DeviceScanThread.stop()`.
-
-            :param parent: The parent dialog.
-            :param devFilter: A filter function to exclude devices.
-            :param interval: Time (in milliseconds) between each full scan
-                for changes to available devices (MSD, serial, etc.). Checks
-                for drive changes are cheaper, and are run at half this
-                interval.
-            :param oneshot: If True, the thread will terminate after one
-                scan. For doing manual updates.
-            :param timeout: Seconds to retain devices that have disconnected
-                and no longer appears in `getDevices()`. Prevents devices
-                that momentarily disconnect when starting/stopping recording
-                or resetting from disappearing and reappearing in the list.
-
-            Additional keyword arguments are used when calling `getDevices()`.
-        """
-        super().__init__(name=type(self).__name__)
-        self.daemon = True
-
-        self.parent = parent
-        self.interval = interval / 1000
-        self.filter = devFilter
-        self.oneshot = oneshot
-        self.getDevicesArgs = getDevicesArgs
-
-        self._cancel = threading.Event()
-        self._cancel.clear()
-        self._pause = threading.Event()
-        self._pause.clear()
-
-        self.timeout = timeout
-        self.timeouts = {}
-
-
-    def stop(self):
-        logger.debug('Stopping scanning thread')
-        self._cancel.set()
-
-
-    def pause(self):
-        logger.debug('Pausing scanning thread')
-        self._pause.set()
-
-
-    def resume(self):
-        logger.debug('Resuming scanning thread')
-        self._pause.clear()
-
-
-    def paused(self):
-        return self._pause.is_set()
-
-
-    def run(self):
-        """ The main loop.
-        """
-        logger.debug('Started scanning thread')
-
-        updates = -1
-        cancelSet = self._cancel.is_set
-        pauseSet = self._pause.is_set
-        updatingSet = self.parent.updating.is_set
-        timeout = self.timeout
-
-        while bool(self.parent) and not cancelSet():
-            updates += 1
-
-            if pauseSet() or updatingSet():
-                sleep(self.interval / 4)
-                continue
-
-            # Only do `getDevices()` every other time, or if the drives have
-            # changed (`deviceChanged()` is cheap, `getDevices()` less so)
-            if not self.oneshot and updates % 2 != 0 and not deviceChanged(recordersOnly=False):
-                sleep(self.interval / 2)
-                continue
-
-            try:
-                devices = getDevices()
-                self.timeouts.update({dev: time() + timeout for dev in devices})
-                result = [dev for dev, t in self.timeouts.items() if t > time()]
-
-                status = {}
-                if self.filter:
-                    result = list(filter(self.filter, result))
-
-                # TODO: Put status-getting for each device in its own thread
-                #  and report only current `status` in the `EvtDeviceListUpdate`.
-                #  Each thread would send a single event on completion.
-                for dev in result:
-                    # Not present, but not expired. Will show as disabled.
-                    # Prevents devices disappearing and reappearing when
-                    # starting/ending recordings.
-                    if dev not in devices:
-                        status[dev] = None, (None, None)
-                        continue
-
-                    elif not dev.hasCommandInterface:
-                        status[dev] = None, (DeviceStatusCode.IDLE, None)
-                        continue
-
-                    try:
-                        bat = dev.command.getBatteryStatus(callback=cancelSet)
-                        stat = dev.command.status[1:]
-                    except (NotImplementedError, UnsupportedFeature):
-                        # Very old firmware and/or no serial command interface.
-                        bat = None
-                        stat = DeviceStatusCode.IDLE, None
-                    except CommandError:
-                        # Older FW that doesn't support GetBatteryStatus returns
-                        # ERR_INVALID_COMMAND. Try to ping to get status.
-                        try:
-                            dev.command.ping(callback=cancelSet)
-                            bat = None
-                            stat = dev.command.status[1:]
-                        except (DeviceError, AttributeError, IOError):
-                            bat = None
-                            stat = DeviceStatusCode.IDLE, None
-
-                    # logger.debug(f'{dev} {bat=} {stat=}')
-                    status[dev] = bat, stat, dev.path
-
-                evt = EvtDeviceListUpdate(devices=result, status=status)
-
-                # Check parent again to avoid a race condition during shutdown
-                if bool(self.parent):
-                    wx.PostEvent(self.parent, evt)
-                else:
-                    logger.debug('Parent gone, did not post update event!')
-
-            except DeviceTimeout:
-                logger.warning("Timed out when scanning for devices, retrying")
-
-            except DeviceError as E:
-                if E.args and E.args[0] == DeviceStatusCode.ERR_BUSY:
-                    logger.info("Device repoted ERR_BUSY, retrying")
-                else:
-                    logger.error(E)
-                    raise
-
-            except IOError as E:
-                # TODO: Catch serial error(s), too?
-                logger.warning(E)
-
-            if self.oneshot:
-                break
-
-            sleep(self.interval)
-
-        logger.debug('Scanning thread stopped')
-
-
-class DeviceCommandThread(threading.Thread):
-    """
-    A slightly safer-than-normal thread for asynchronously calling simple
-    `Recorder` methods. Exceptions are caught and kept for later handing.
-
-    Note: Threads start immediately upon instantiation!
-    """
-
-    def __init__(self,
-                 device: Recorder,
-                 command: Callable,
-                 *args,
-                 **kwargs):
-        """ A slightly safer-than-normal thread for asynchronously calling
-            simple `Recorder` methods. Note that threads start immediately
-            upon instantiation!
-
-            :param device: The device running the command.
-            :param command: The function/method to call.
-
-            Other arguments/keyword arguments are used when calling `command`
-            (like `functools.partial`).
-        """
-        self.device = device
-        self.command = command
-        self.args = args
-        self.kwargs = kwargs
-        self.failed = threading.Event()  # Set if command raises an exception
-        self.completed = threading.Event()  # Set upon successful completion
-        self.failure = None  # Exception raised by the command (if any)
-
-        super().__init__(daemon=True)
-        self.start()
-
-
-    def run(self):
-        try:
-            self.command(*self.args, **self.kwargs)
-            self.completed.set()
-            logger.debug(f'{self.command} succeeded')
-        except Exception as err:
-            self.failed.set()
-            self.failure = err
-            logger.error(f'{self.command} failed: {err!r}')
-
-
-# ===========================================================================
-# Column 'formatters.' They actually set the column display and return the
-# value for the list sorting (usually the same as the display text, if any).
-# Standard arguments are the `Recorder`, the index (row), the column number,
-# and the root window/dialog.
-# ===========================================================================
-
-def _attribFormatter(attrib: str, 
-                     default: str, 
-                     dev: Recorder, 
-                     index: int, 
-                     column: int, 
-                     root: "DeviceSelectionDialog") -> str:
-    """ Adds a column populated with a Recorder's attribute. Meant to be used
-        with `partial()` to supply the first 2 arguments.
-
-        :param attrib: The device's attribute name.
-        :param default: The default value to display if the attribute is `None`.
-        :param dev: The device beind displayed.
-        :param index: The list index (row).
-        :param column: The index of the column being populated.
-        :param root: The parent window/dialog.
-        :return: A string for use in column sorting (same as what's shown).
-    """
-    val = str(getattr(dev, attrib, default) or '')
-    root.list.SetStringItem(index, column, f" {val} ", [])
-
-    return val
-
-
-def populateButtonColumn(dev: Recorder,
-                         index: int,
-                         column: int,
-                         root: "DeviceSelectionDialog") -> str:
-    """ Add a column containing buttons.
-
-        :param dev: The device beind displayed.
-        :param index: The list index (row).
-        :param column: The index of the column being populated.
-        :param root: The parent window/dialog.
-        :return: A string for use in column sorting ("" in this case).
-    """
-    pan = controls.ControlButtons(root, root.list, dev, index, column)
-    root.list.SetItemWindow(index, column, pan, expand=True)
-    root.minWidths[root.buttonCol] = pan.GetSize()[0]
-    return ""
-
-
-def populateBatteryColumn(dev: Recorder,
-                          index: int,
-                          column: int,
-                          root: "DeviceSelectionDialog") -> str:
-    """ Add/update a column containing the battery status icon.
-
-        :param dev: The device beind displayed.
-        :param index: The list index (row).
-        :param column: The index of the column being populated.
-        :param root: The parent window/dialog.
-        :return: A string for use in column sorting.
-    """
-    if column is None:
-        return ''
-
-    batIcon, batDesc = 0, ''
-
-    try:
-        batStat = root.recorderStatus[dev][0]
-        batName, batDesc = battery_icons.batStat2name(batStat)
-        batIcon = root.batteryIconIndices.get(batName, 0)
-    except KeyError:
-        # Probably old, doesn't support getBatteryState()
-        pass
-
-    root.list.SetStringItem(index, column, '', batIcon)
-    return batDesc
-
-
-def populateStatusColumn(dev: Recorder,
-                         index: int,
-                         column: int,
-                         root: "DeviceSelectionDialog") -> str:
-    """ Add/update a column displaying the device status.
-
-        :param dev: The device beind displayed.
-        :param index: The list index (row).
-        :param column: The index of the column being populated.
-        :param root: The parent window/dialog.
-        :return: A string for use in column sorting.
-    """
-    if column is None:
-        return ''
-
-    try:
-        code, msg = dev.command.status[1:]
-    except (AttributeError, UnsupportedFeature):
-        code, msg = None, ''
-
-    code = code or DeviceStatusCode.IDLE
-
-    if code is None:
-        color = None
-        text = None
-        code = 1000
-
-    else:
-        # Find specific color, or round to lowest multiple of 10
-        displayCode = code if code in root.STATUS_COLORS else code // 10
-        color = root.STATUS_COLORS.get(displayCode, None)
-        text = root.STATUS_TEXT.get(displayCode, "")
-
-        if code < 0:
-            color = color or root.STATUS_COLORS.get(-10)
-            text = text or root.STATUS_TEXT.get(-10)
-
-    root.list.SetStringItem(index, column, text)
-
-    if not color:
-        color = root.list.GetTextColour()
-
-    font = root.list.GetFont()
-    item = root.list.GetItem(index, column)
-    item.SetMask(ULC.ULC_MASK_FONTCOLOUR | ULC.ULC_MASK_FONT)
-    item.SetTextColour(color)
-    item.SetFont(font)
-    root.list.SetItem(item)
-
-    return code
+DISCONNECT_TIMEOUT = 10
+CONNECT_FAIL_TIMEOUT = 30
 
 
 # ===========================================================================
@@ -404,7 +79,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     ID_SET_TIME = wx.NewIdRef()
     ID_START_RECORDING = wx.NewIdRef()
 
-    # Indices of icons. Proportional to severity.
+    # Indices of icons in the `PyImageList`. Proportional to severity.
     # Icons after these are battery level, etc.
     ICON_NONE, ICON_INFO, ICON_WARN, ICON_ERROR = range(4)
 
@@ -442,35 +117,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     RECORD_UNSUPPORTED = "Device does not support recording via software"
     RECORD_ENABLED = "Initiate recording on all capable devices"
 
-    # Text colors for the Status column
-    STATUS_COLORS = {
-        0: None,  # Idle
-        10: wx.BLUE,  # Recording
-        20: wx.YELLOW,  # Reset pending
-        30: wx.YELLOW,  # Start Pending
-        40: wx.YELLOW,  # Triggering
-        50: wx.BLUE,  # Uploading
-        100: wx.Colour(200, 200, 200),  # Sleeping
-        -10: wx.RED  # Error (default for all negative status codes)
-    }
+    SERIAL_TIMEOUT = 10
+    MQTT_TIMEOUT = 125
 
-    # Status text
-    # DeviceStatusCode seems to get cast to int, so enum names not available
-    STATUS_TEXT = {
-        0: "Ready",
-        10: "Recording",
-        20: "Resetting",
-        30: "Starting Recording",
-        40: "Awaiting Trigger",
-        50: "Uploading",
-        100: "Sleeping",
-        -10: "Error"
-    }
 
     # ==============================================================================
     #
     # ==============================================================================
-
 
     def GetListCtrl(self):
         # Required by ColumnSorterMixin
@@ -487,6 +140,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             :keyword autoUpdate: A number of milliseconds to delay between
                 checks for changes to attached recorders. 0 will never
                 automatically refresh. Default is 500 ms.
+            :keyword scanInterval: The number of milliseconds between
+                scans for new devices. Default is 4000 ms.
             :keyword showWarnings: If `False`, battery age and calibration
                 expiration warnings will not be shown for selected devices.
                 Default is `True`.
@@ -512,46 +167,86 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             :keyword tooltips: If `True` (default), show list tooltips
                 containing all important device infomation.
             :keyword checks: If `True`, show checkboxes for each device.
+            :keyword allowDoubleClick: If `True`, double-clicking a list item
+                will be the same as selecting it and clicking OK. Defaults
+                to `False` if `checks` is `True`.
             :keyword mustConfig: If `True`, the 'OK' button will only become
                 enabled if the device can be configured.
+            :keyword remote: If `True`, show the MQTT broker selection field.
+            :keyword remoteChecked: The initial state of the 'use remote'
+                checkbox, if `remote` is `True`. `True` by default.
+            :keyword broker: The name of the default, initially selected
+                broker. `None` will select the first found.
+            :keyword connector: An existing `endaq.device.mqtt.MQTTConnector`
+                instance, if one was already created.
+            :keyword showSave: If `True`, show the save path selector.
+            :keyword savePath: The default save path for streams.
+
         """
         # Clear cached devices
         RECORDERS.clear()
 
-        style = (wx.DEFAULT_DIALOG_STYLE |
-                 wx.RESIZE_BORDER |
-                 wx.MAXIMIZE_BOX |
-                 wx.MINIMIZE_BOX |
-                 wx.DIALOG_EX_CONTEXTHELP |
-                 wx.SYSTEM_MENU)
+        self.autoUpdate: Union[int, bool] = kwargs.pop('autoUpdate', 750)
+        self.scanInterval: Union[int, bool] = kwargs.pop('scanInterval', 4000)
+        self.hideClock: bool = kwargs.pop('hideClock', False)
+        self.hideRecord: bool = kwargs.pop('hideRecord', True)
+        self.showWarnings: bool = kwargs.pop('showWarnings', True)
+        self.showConnection: bool = kwargs.pop('showConnection', True)
+        self.showAdvanced: bool = kwargs.pop('showAdvanced', False)
+        self.filter: Callable = kwargs.pop('filter', lambda x: True)
+        self.checks: bool = kwargs.pop('checks', True)
+        self.allowDoubleClick: bool = kwargs.pop('allowDoubleClick', not self.checks)
+        self.mustConfigure: bool = kwargs.pop('mustConfig', True)
+        self.remote: bool = kwargs.pop('remote', True)
+        self.remoteChecked: bool = kwargs.pop('remoteChecked', self.remote)
+        self.showSave: bool = kwargs.pop('showSave', True)
+        self.savePath: str = kwargs.pop('savePath', '')
+        self.connector: MQTTConnector = kwargs.pop('connector', None)
 
-        self.autoUpdate = kwargs.pop('autoUpdate', 500)
-        self.hideClock = kwargs.pop('hideClock', False)
-        self.hideRecord = kwargs.pop('hideRecord', True)
-        self.showWarnings = kwargs.pop('showWarnings', True)
-        self.showConnection = kwargs.pop('showConnection', True)
-        self.showAdvanced = kwargs.pop('showAdvanced', False)
-        self.filter = kwargs.pop('filter', lambda x: True)
-        self.checks = kwargs.pop('checks', False)
-        self.mustConfigure = kwargs.pop('mustConfig', True)
+        self.ownConnector = self.connector is not None
+        self.oldUpdateCallback = None
+
+        self.defaultBroker: Optional[str] = kwargs.pop('broker', DEFAULT_BROKER)
         okText = kwargs.pop('okText', "Configure")
         okHelp = kwargs.pop('okHelp', 'Configure the selected device')
         cancelText = kwargs.pop('cancelText', "Close")
         icon = kwargs.pop('icon', None)
         tooltips = kwargs.pop('tooltips', True)
-        kwargs.setdefault('style', style)
+        kwargs.setdefault('style', (wx.DEFAULT_DIALOG_STYLE
+                                    | wx.RESIZE_BORDER
+                                    | wx.MAXIMIZE_BOX
+                                    | wx.MINIMIZE_BOX
+                                    | wx.DIALOG_EX_CONTEXTHELP
+                                    | wx.SYSTEM_MENU
+                                    ))
 
         # Not currently used, but consistent with the main dialog.
         self.DEBUG = kwargs.pop('debug', False)
 
         sc.SizedDialog.__init__(self, *args, **kwargs)
 
-        if icon or icon is None:
-            icon = icon or icons.icon.GetIcon()
-            self.SetIcon(icon)
+        icon = icon or icons.icon.GetIcon()
+        self.SetIcon(icon)
 
-        self.thread = None  # Device scanning thread
-        self.updating = threading.Event()  # Set while updating, so other calls skip.
+        self.updateTimer = wx.Timer(self)
+        self.updateCount: int = 0
+        self.updateCancelled = threading.Event()  # Use as callback for getBatteryStatus/ping commands
+        self.scanThread: DeviceScanThread = None
+
+        self.disconnectTimer = wx.Timer(self)  # Timer to remove MQTT devices after disconnection
+        self.connectFailTimer = wx.Timer(self)  # Failsafe to re-enable broker selection if connect thread fails
+
+        self.updatingDisplay = threading.Event()  # Set while updating, so other calls skip.
+        self.menuOpen = threading.Event()  # Set while context menu open, preventing list updates.
+
+        self.recorders: List[Recorder] = []  # The currently-displayed recorders.
+        self.recorderStatus: Dict[Recorder, Tuple] = {}  # Recorder status, battery state, and path, keyed by `Recorder`
+        self.recorderTimeouts: Dict[Recorder, float] = {}  # Time to remove a recorder from `recorderStatus` if not in `getDevices()`
+        self.recordersByIndex: Dict[int, Recorder] = {}  # `Recorder` instances keyed by list index.
+        self.indicesByRecorder: Dict[Recorder, int] = {}  # List index keyed by `Recorder`
+        self.checkedRecorders: set[Recorder] = set()  # Checked items/recorders (to keep checks after list updates)
+
+        self.brokerInfo: Optional[dict] = None  # Selected MQTT broker's mDNS info
 
         # TODO: Better column collection (assemble piecemeal based on parameters)
         cols = self.ADVANCED_COLUMNS if self.showAdvanced else self.COLUMNS
@@ -563,11 +258,160 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.initList(pane, tooltips)
 
+        if self.checks:
+            self._addSelectButtons(pane)
+
         # Selected device info
         self.infoText = wx.StaticText(pane, -1, " \n \n \n")
+        # noinspection PyUnresolvedReferences
         self.infoText.SetSizerProps(expand=True)
         self.infoText.Show(self.showWarnings)
 
+        self.textColorNormal = self.infoText.GetForegroundColour()
+        self.textColorError = wx.RED
+
+        if self.remote is not None:
+            self._addBrokerSelect(pane)
+
+        # if self.showSave:
+        #     self._addStreamTo(pane, default=self.savePath)
+
+        self._addButtons(pane, okText, okHelp, cancelText)
+
+        self.populateList()
+        self.Fit()
+        self.SetMinSize((640, 300))
+        self.SetMaxSize((1500, 600))
+        self.SetSize((640, 440 if self.checks else 300))
+
+        self.Layout()
+        self.Centre()
+
+        self.Bind(wx.EVT_SHOW, self.OnShow)
+        self.Bind(EVT_RECORD, self.OnStartRecording)
+        self.Bind(EVT_STREAM, self.OnStartStreaming)
+        self.Bind(EVT_CONFIG, self.OnConfigButton)
+        self.Bind(EVT_BLINK, self.OnBlink)
+        self.Bind(EVT_LOCK_DEVICE, self.OnLockDevice)
+        self.Bind(EVT_RESET, self.OnRebootDevice)
+        self.Bind(EVT_SHUTDOWN, self.OnShutdownDevice)
+
+        self.Bind(wx.EVT_TIMER, self.OnUpdateTimerTick, id=self.updateTimer.GetId())
+        self.Bind(wx.EVT_TIMER, self.OnConnectFailTimer, id=self.connectFailTimer.GetId())
+        self.Bind(wx.EVT_TIMER, self.OnDisconnectTimer, id=self.disconnectTimer.GetId())
+
+
+    # TODO: REMOVE NEXT COMMENT LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
+    # xnoinspection PyUnresolvedReferences
+    def _addBrokerSelect(self, pane):
+        """ Add MQTT Broker selection widgets.
+        """
+        selpane = self.brokerPane = sc.SizedPanel(pane, -1)
+        selpane.SetSizerType("horizontal")
+        selpane.SetSizerProps(expand=True)
+        self.remoteCheck = wx.CheckBox(selpane, -1, "Show Remote Devices")
+        self.remoteCheck.SetSizerProps(valign='centre')
+
+        self.brokerLabel = wx.StaticText(selpane, -1, "Broker:")
+        self.brokerLabel.SetSizerProps(valign='centre', border=(['top', 'left'], 2))
+        self.brokerNameField = wx.TextCtrl(selpane, style=wx.TE_READONLY)
+        self.brokerNameField.SetSizerProps(expand=True, proportion=1)
+        self.brokerSelectBtn = wx.Button(selpane, -1, "Select...")
+        self.brokerSelectBtn.SetSizerProps(valign='centre', border=(['right'], 16))
+        self.brokerMessageText = wx.StaticText(selpane, -1, ' '*40, style=wx.ST_ELLIPSIZE_END)
+        self.brokerMessageText.SetSizerProps(expand=True, proportion=1, valign='centre',
+                                             border=(['top'], 2))
+
+        self.remoteCheck.Bind(wx.EVT_CHECKBOX, self.OnRemoteCheckChanged)
+        self.brokerSelectBtn.Bind(wx.EVT_BUTTON, self.OnBrokerSelect)
+        self.Bind(EVT_BROKER_SELECTED, self.OnBrokerSelected)
+        self.Bind(EVT_MQTT_CONNECTING, self.OnMQTTConnecting)
+        self.Bind(EVT_MQTT_CONNECTED, self.OnMQTTConnected)
+        self.Bind(EVT_MQTT_DISCONNECTED, self.OnMQTTDisconnected)
+        self.Bind(EVT_MQTT_ERROR, self.OnMQTTError)
+
+
+    def showBrokerSelection(self, show=True):
+        """ Show or hide the broker name/button/etc.
+        """
+        self.brokerLabel.Enable(show)
+        self.brokerNameField.Enable(show)
+        self.brokerSelectBtn.Enable(show)
+        self.brokerMessageText.Enable(show)
+        # self.brokerLabel.Show(show)
+        # self.brokerNameField.Show(show)
+        # self.brokerSelectBtn.Show(show)
+        # self.brokerMessageText.Show(show)
+
+
+    # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
+    # noinspection PyUnresolvedReferences
+    def _addSelectButtons(self, pane, defaultPath=''):
+        """ Add buttons for selecting and controlling selected items.
+        """
+        NewControlButtons._loadImages()
+        startIcons = NewControlButtons.ICONS[1]
+        stopIcons = NewControlButtons.ICONS[2]
+        streamIcons = NewControlButtons.ICONS[3]
+
+        buttonpane = sc.SizedPanel(pane, -1)
+        buttonpane.SetSizerType("horizontal")
+        buttonpane.SetSizerProps(expand=True)
+
+        def _add(label, icons, tooltip, handler):
+            """ Helper to do the button-adding busy work. """
+            btn = wx.Button(buttonpane, -1, label)
+            btn.SetBitmap(icons[0], wx.LEFT)
+            btn.SetBitmapCurrent(icons[1])
+            btn.SetBitmapPressed(icons[2])
+            btn.SetBitmapDisabled(icons[3])
+            btn.SetBitmapMargins((0, 0))
+            btn.SetToolTip(tooltip)
+            btn.Enable(False)
+            btn.Bind(wx.EVT_BUTTON, handler)
+            return btn
+
+        self.selectAllBtn = wx.BitmapButton(buttonpane, -1, icons.select_all.GetBitmap())
+        self.selectAllBtn.SetToolTip('Check All')
+        self.selectNoneBtn = wx.BitmapButton(buttonpane, -1, icons.select_none.GetBitmap())
+        self.selectNoneBtn.SetToolTip('Check None')
+
+        self.multiStartBtn = _add('Start Checked', startIcons,
+                                  "Send the start recording command to all checked devices",
+                                  self.OnStartSelected)
+        self.multiStreamBtn = _add('Stream from Checked', streamIcons,
+                                   "Send the start command to all checked devices, "
+                                   "saving output to the specified directory",
+                                   self.OnStreamSelected)
+        self.multiStopBtn = _add('Stop Checked', stopIcons,
+                                   "Send the stop command to all checked devices",
+                                   self.OnStopSelected)
+
+        self.savePathField = FBB.DirBrowseButton(buttonpane,
+                                                 labelText="Save to:",
+                                                 initialValue=defaultPath,
+                                                 changeCallback=self.OnSavePathPicked)
+        self.savePathField.SetSizerProps(valign='center', expand=True, proportion=1)
+
+        # Note: setting the width of the all/none buttons wasn't taking for some reason.
+        #  The `SetBitmapMargins` fixes it, but may have cosmetic issues on different
+        #  platforms and/or screen resolutions.
+        h = self.multiStreamBtn.GetSize().height
+        size = wx.Size(h, h)
+        self.selectAllBtn.SetSize(size)
+        self.selectAllBtn.SetBitmapMargins((4, 2))
+        self.selectNoneBtn.SetSize(size)
+        self.selectNoneBtn.SetBitmapMargins((4, 2))
+
+        self.Bind(wx.EVT_BUTTON, self.OnSelectAllButton, self.selectAllBtn)
+        self.Bind(wx.EVT_BUTTON, self.OnSelectNoneButton, self.selectNoneBtn)
+
+
+    # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
+    # noinspection PyUnresolvedReferences
+    def _addButtons(self, pane, okText, okHelp, cancelText):
+        """ Add device selection dialog bottom buttons.
+        """
         buttonpane = sc.SizedPanel(pane, -1)
         buttonpane.SetSizerType("horizontal")
         buttonpane.SetSizerProps(expand=True)
@@ -597,19 +441,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.cancelButton = wx.Button(buttonpane, wx.ID_CANCEL, cancelText)
         self.cancelButton.SetSizerProps(halign="right")
 
-        self.populateList()
-        self.Fit()
-        self.SetMinSize((640, 300))
-        self.SetMaxSize((1500, 600))
 
-        self.Layout()
-        self.Centre()
-
-        self.Bind(wx.EVT_SHOW, self.OnShow)
-        self.Bind(EVT_RECORD_BUTTON, self.OnStartRecording)
-        self.Bind(EVT_DEVICE_LIST_UPDATE, self.OnDeviceListUpdate)
-
-
+    # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
+    # noinspection PyUnresolvedReferences
     def initList(self,
                  parent: wx.Panel,
                  tooltips: bool):
@@ -618,9 +452,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             :param parent: The parent Panel.
             :param tooltips: Show tooltips if `True`.
         """
-        self.batteryCol = None
-        self.buttonCol = None
-        self.statusCol = None
+        self.listToolTips: list[str] = []
+        self.batteryCol: int = None
+        self.buttonCol: int = None
+        self.statusCol: int = None
 
         for i, col in enumerate(self.columns):
             if col.formatter == populateBatteryColumn:
@@ -630,11 +465,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             elif col.formatter == populateStatusColumn:
                 self.statusCol = i
 
-        self.recorders = []  # Results of previous `getDevices()`.
-        self.recorderStatus = {}  # Recorder status, battery state, and path, keyed by `Recorder`
-        self.recordersByIndex = {}  # `Recorder` instances keyed by list index.
-        self.indicesByRecorder = {}  # List index keyed by `Recorder`
-        # self.recorderBusy = defaultdict(threading.Event)  # Events indicating a recorder is updating, keyed by `Recorder`
         self.selected = None
         self.selectedIdx = None
         self.firstDrawing = True
@@ -646,21 +476,30 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.list = ULC.UltimateListCtrl(parent, -1,
                                          agwStyle=(wx.LC_REPORT
-                                                   # | wx.LC_NO_HEADER
                                                    | wx.BORDER_NONE
                                                    | wx.LC_HRULES
                                                    | wx.LC_SINGLE_SEL
                                                    | ULC.ULC_NO_ITEM_DRAG
                                                    # | wx.LC_VRULES
+                                                   | ULC.ULC_HOT_TRACKING
+                                                   # | ULC.ULC_BORDER_SELECT
                                                    ))
 
         self.list.AssignImageList(self.loadIcons(), wx.IMAGE_LIST_SMALL)
         self.list.SetSizerProps(expand=True, proportion=1)
+        self.defaultColor = self.list.GetForegroundColour()
+        self.defaultFont = self.list.GetFont()
+        self.sleepingListFont = self.defaultFont.Italic()
+        self.boldListFont = self.defaultFont.Bold()
 
         self.Bind(wx.EVT_LIST_ITEM_SELECTED, self.OnItemSelected, self.list)
         self.Bind(wx.EVT_LIST_ITEM_DESELECTED, self.OnItemDeselected, self.list)
         self.list.Bind(wx.EVT_LEFT_DCLICK, self.OnItemDoubleClick)
         self.Bind(wx.EVT_LIST_COL_CLICK, self.OnColClick, self.list)
+        self.list.Bind(wx.EVT_RIGHT_DOWN, self.OnListRightClick)
+
+        if self.checks:
+            self.Bind(ULC.EVT_LIST_ITEM_CHECKED, self.OnItemChecked, self.list)
 
         # For doing per-item tool tips in the list
         self.lastToolTipItem = -1
@@ -669,8 +508,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         # Manual tool tip generation (ULC tooltips seem broken)
         self.tooltipFrame = DeviceToolTip(self) if tooltips else None
-
-        self.updateTimerCalls = 0
 
         listmix.ColumnSorterMixin.__init__(self, len(self.columns))
 
@@ -714,8 +551,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """ Get the index of the appropriate connection type icon.
         """
         if dev.available:
+            # Mounted as a drive
             return self.ICON_CONNECTION_MSD
 
+        # TODO: Special-case icon for Gateway
         try:
             # This is a primitive mechanism based on the `ConfigInterface`
             # subclass name. Also, all but USB are currently hypothetical.
@@ -725,6 +564,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             elif 'mqtt' in configname:
                 return self.ICON_CONNECTION_WIFI
             elif any(n in configname for n in ('bluetooth', 'bt', 'ble')):
+                # For future use
                 return self.ICON_CONNECTION_BT
         except (AttributeError, NotImplementedError, UnsupportedFeature):
             pass
@@ -757,15 +597,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         else:
             age = lifeleft = None
 
-        calExp = dev.getCalExpiration()
-        if calExp:
-            calExp = calExp.replace(tzinfo=datetime.timezone.utc)
-
         pathtext = dev.path
         if dev.path and os.path.exists(dev.path):
             freeSpace = os_specific.getFreeSpace(dev.path) / 1048576
             if freeSpace < SPACE_WARN_MB:
-                tip = f"This device is nearly full ({freeSpace:.2f} MB available)."
+                tip = f"⚠ This device is nearly full ({freeSpace:.2f} MB available)."
                 icon = self.ICON_INFO
                 if freeSpace < SPACE_MIN_MB:
                     tip += " This may prevent configuration."
@@ -779,33 +615,37 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         if lifeleft is not None and lifeleft < DEV_WARN_DAYS:
             icon = max(icon, self.ICON_INFO)
-            tips.append(f"This devices is {age.days} days old; battery life may be limited.")
-            if lifeleft.days < 0:
+            if lifeleft.days > 0:
+                tips.append(f"🛈 This devices is {age.days} days old; battery life may be limited.")
+            else:
+                tips.append(f"⚠ This devices is {age.days} days old; battery life may be significantly limited.")
                 icon = max(icon, self.ICON_WARN)
 
-        if calExp:
-            if calExp < now:
-                tips.append(f"This device's calibration has expired on {calExp.date()}.")
-                icon = max(icon, self.ICON_WARN)
-            elif now - calExp < CAL_WARN_DAYS:
-                tips.append(f"This device's calibration will expire on {calExp.date()}.")
-                icon = max(icon, self.ICON_INFO)
+        # Check for cached cal data, skip if not present. As it can be slow
+        # on MQTT devices (endaq.device circa 2025-09), reading this is done
+        # in a separate thread.
+        if dev._calibration:
+            calExp = dev.getCalExpiration()
+            if calExp:
+                calExp = calExp.replace(tzinfo=datetime.timezone.utc)
+                if calExp < now:
+                    tips.append(f"⚠ This device's calibration has expired on {calExp.date()}.")
+                    icon = max(icon, self.ICON_WARN)
+                elif now - calExp < CAL_WARN_DAYS:
+                    tips.append(f"🛈 This device's calibration will expire on {calExp.date()}.")
+                    icon = max(icon, self.ICON_INFO)
 
         if self.showConnection:
             self.list.SetItemImage(index, [icon, self.getConnectionIcon(dev)])
         else:
             self.list.SetItemImage(index, [icon])
 
-        if len(tips) == 0:
-            self.listToolTips[index] = bat or None
-            self.listMsgs[index] = bat or None
-            return
-        else:
-            # Popup tool tips show battery status and each message on its own
-            # line. In-dialog help message under list shows battery on one,
-            # all other messages on the other.
-            self.listToolTips[index] = bat + '\n'.join(tips)
-            self.listMsgs[index] = bat + ' '.join(tips)
+        tips.insert(0, bat)
+        # Popup tool tips show battery status and each message on its own
+        # line. In-dialog help message under list shows battery on one,
+        # all other messages on the other.
+        self.listMsgs[index] = ' '.join(tips)
+        self.listToolTips[index] = '\n'.join(tips)
 
 
     def createColumns(self):
@@ -813,16 +653,26 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             (before starting the updating thread, so there's an initial
             display) and at the beginning of `populateList()`.
         """
+        # NOTE: 1st column width way too narrow for Linux/macOS device paths!
+        #  Maybe just let it truncate in display by default; it usually isn't
+        #  critical info, and the user can resize the columns.
         self.minWidths = []
 
-        for i, c in enumerate(self.columns):
+        start = 0
+        cols = self.columns
+
+        for i, c in enumerate(cols, start):
             self.list.InsertColumn(i, c[0])
-            if c.name == 'Name':
-                width = self.list.GetTextExtent('X' * 25)[0]
+            if c.name == 'Path' and self.checks:
+                width = 50
+            elif c.name == 'Name':
+                width = self.list.GetTextExtent('W' * 20)[0]
             elif c.formatter == populateStatusColumn:
                 width = self.list.GetTextExtent('Awaiting Trigger')[0]
             elif i == self.batteryCol:
                 width = 40
+            elif c.name == 'Type':
+                width = self.list.GetTextExtent('W8-R5000D40')[0] + 16
             else:
                 width = self.list.GetTextExtent(c.name)[0]
 
@@ -832,17 +682,17 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def populateList(self):
         """ Find recorders and add them to the list.
         """
-        if self.updating.is_set():
-            return
-
         try:
             logger.debug('populating list')
-            self.updating.set()
             self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
+
+            # Get checked devices (may have different list indices)
+            checked = self.checkedRecorders.copy()
 
             self.list.ClearAll()
             self.recordersByIndex.clear()
             self.indicesByRecorder.clear()
+            self.checkedRecorders.clear()
             self.itemDataMap.clear()
             self.listWidth = 0
 
@@ -855,9 +705,17 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             for idx, dev in enumerate(self.recorders):
                 path = dev.path or ''
                 index = self.list.InsertImageStringItem(idx, path, [0], int(self.checks))
+                self.list.EnableItem(index, enable=isOnline(dev))
+                # print(f'{dev} {dev.command.status} {isOnline(dev)=} {isSleeping(dev)=}')
+
+                # update dict of checked recorders with new list indices
+                if dev in checked:
+                    self.checkedRecorders.add(dev)
+
                 self.itemDataMap[index] = [dev.path]
                 self.recordersByIndex[index] = dev
                 self.indicesByRecorder[dev] = index
+
                 for i, col in enumerate(self.columns[1:], 1):
                     try:
                         val = col.formatter(dev, index, i, self)  # populates item and returns data map value
@@ -875,6 +733,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 if self.showWarnings:
                     self.setItemIcon(index, dev)
 
+                self.updateRow(dev)
+
             for i, w in enumerate(self.minWidths):
                 w = w + 8
                 if self.list.GetColumnWidth(i) < w:
@@ -889,14 +749,14 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         finally:
             self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-            self.updating.clear()
+            logger.debug('populating list complete')
 
 
     def updateRow(self, dev: Recorder, enabled: bool = True):
         """ Update one device (row) in the list.
 
             :param dev: The device being updated.
-            :param enabled:
+            :param enabled: Use `False` to force a device to appear disabled.
         """
 
         if dev not in self.indicesByRecorder:
@@ -907,16 +767,35 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         if self.showWarnings:
             self.setItemIcon(index, dev)
 
-        # Status code `None` means device is (temporarily) unavailable
-        # (i.e., not present but not yet expired)
-        status = self.recorderStatus.get(dev, (None, (DeviceStatusCode.IDLE, '')))[1][0]
-        enabled = enabled and status is not None
+        # try:
+        #     status = self.recorderStatus[dev][1][0]
+        # except (KeyError, IndexError) as err:
+        #     logger.debug(f'recorder status error: {err!r}')
+        #     status = 0
+
+        locked, mine = dev.command.isLocked()
+        anothers = locked and not mine
+        enabled = (enabled and isOnline(dev) and not anothers)
+        sleeping = isSleeping(dev)
 
         # enable or disable the row
         # excludes button panel - do that explicitly
         item = self.list.GetItem(index)
         item.Enable(enabled)
+        item.Check(dev in self.checkedRecorders)
         self.list.SetItem(item)
+
+        font = self.defaultFont
+        color = self.defaultColor
+
+        if sleeping:
+            # Sleeping/periodically online devices not disabled, but
+            # drawn in gray as if they were (so checkbox still accessible)
+            color = STATUS_DISPLAY[100][1]
+            font = self.sleepingListFont
+        elif isGateway(dev):
+            # DCB/HDS Gateway device; highlight it.
+            font = self.boldListFont
 
         for i, col in enumerate(self.columns[1:], 1):
             # Don't rebuild button panel in update
@@ -929,29 +808,40 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                     logger.error(f'Could not get button panel for index {index}')
             else:
                 val = col.formatter(dev, index, i, self)
+
+            self.list.SetItemTextColour(index, color)
+            self.list.SetItemFont(index, font)
             self.itemDataMap[index][i] = val or ''
 
 
-    def updateList(self):
+    def updateList(self, skip: bool = True):
         """ Update the statuses in the displayed list of devices. Called in
             response to a message from the device scanning thread if no
             devices have been added or removed.
 
             :see: OnDeviceListUpdate()
+
+            :param skip: If `True` and `updatingDisplay` is set, return
+                immediately. If `False`, ignore `updatingDisplay`.
         """
-        # Bail if an update is already being handled
+        # Bail (not block) if an update is already being handled
         # (e.g., called from a different thread)
-        if self.updating.is_set():
+        if skip and self.updatingDisplay.is_set():
+            logger.debug('Bailing on updateList - updatingDisplay is set')
             return
 
-        try:
-            self.updating.set()
-            # logger.debug('Updating display')
-            for dev in self.recorders:
+        # logger.debug('entered updateList')
+        for dev in self.recorders:
+            try:
                 self.updateRow(dev)
+            except IndexError:
+                # Possible error in row population, or race condition
+                logger.debug(f'IndexError updating row for device {dev.serial}')
 
-        finally:
-            self.updating.clear()
+        checked = self.list.GetCheckedItemCount() > 0
+        self.multiStreamBtn.Enable(checked)
+        self.multiStartBtn.Enable(checked)
+        self.multiStopBtn.Enable(checked)
 
 
     def getSelected(self) -> Optional[Recorder]:
@@ -962,21 +852,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         return self.recordersByIndex.get(self.selected, None)
 
 
-    def isDead(self) -> bool:
-        """ Callback function that indicates the dialog is still working.
-            Primarily for use as a callback in threads sending commands
-            to devices.
-        """
-        try:
-            if not self.thread or not self.thread.is_alive():
-                return True
-            return self.thread._cancel.is_set()
-        except (AttributeError, RuntimeError) as err:
-            # Window probably deleted, and/or app exiting.
-            logger.debug(f'Sign-of-life check failed: {err!r}')
-            return True
-
-
     def enableButtons(self, enabled=True):
         """ Disable/enable main dialog buttons while a command executes.
         """
@@ -985,9 +860,373 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             b.Enable(enabled)
 
 
+    def startUpdater(self):
+        """ Start the display updating threads and timers.
+        """
+        if not self.scanThreadRunning():
+            interval = self.scanInterval / 1000 if self.autoUpdate else 0
+            self.scanThread = DeviceScanThread(self, interval)
+            self.scanThread.start()
+
+        self.scanThread.paused.clear()
+        self.updateCancelled.clear()
+
+        if self.autoUpdate:
+            self.updateTimer.Start(self.autoUpdate)
+
+
+    def stopUpdater(self):
+        """ Terminate the display updating threads and timers.
+        """
+        self.updateTimer.Stop()
+        self.updateCancelled.set()
+
+        if self.scanThreadRunning():
+            self.scanThread.stop.set()
+
+
+    def pauseUpdater(self):
+        """ Temporarily pause the display updating. Resume it with
+            `startUpdater()`.
+        """
+        self.updateTimer.Stop()
+        if self.scanThreadRunning():
+            self.scanThread.paused.set()
+
+
+    def scanThreadRunning(self) -> bool:
+        """ Is the device scan thread running?
+        """
+        return self.scanThread and self.scanThread.is_alive()
+
+
+    def startThreads(self,
+                     what: str,
+                     devlist: list[tuple[Recorder, Callable, tuple, dict]],
+                     timeout: float = 5.0,
+                     dialog: bool = True,
+                     ignore: Optional[type] = None) -> tuple[list, list, list]:
+        """ Run commands on multiple devices, each in its own thread.
+
+            :param what: Description of the command being run. For display
+                purposes.
+            :param devlist: A list of tuples containing the device, the
+                function to execute, a tuple of positional arguments for
+                the function, and a dictionary of keyword arguments.
+            :param timeout: How long to wait for all threads to complete.
+            :param dialog: If `True`, show a modal error dialog if
+                any devices failed.
+            :param ignore: A class of exception to exclude from the list of
+                failures.
+            :return: Three lists: successful executions, failures, and
+                ones that failed to complete before the timeout.
+        """
+        self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
+        self.enableButtons(False)
+
+        successes = []
+        failures = []
+        timeouts = []
+
+        try:
+            self.updateTimer.Stop()
+            threads = []
+            for dev, cmd, args, kwargs in devlist:
+                if 'callback' in kwargs and kwargs['callback'] is None:
+                    kwargs.pop('callback', None)
+                else:
+                    kwargs.setdefault('callback', self.isDead)
+                threads.append(DeviceCommandThread(dev, cmd, *args, **kwargs))
+
+            if timeout:
+                deadline = time() + timeout
+                while any(t.is_alive() for t in threads):
+                    if time() > deadline:
+                        break
+                    if self.isDead():
+                        break
+                    sleep(0.05)
+
+            names = []
+
+            for t in threads:
+                if t.failed.is_set():
+                    if ignore and isinstance(t.failure, ignore):
+                        continue
+                    logger.error(f'{t.command.__name__} failed on {t.device}: {t.failure!r}')
+                    failures.append(t)
+                    names.append(f"{t.device.productName} SN:{t.device.serial} (error)")
+                elif t.is_alive():
+                    logger.error(f'{t.command.__name__} did not complete on {t.device} within {timeout} seconds')
+                    timeouts.append(t)
+                    names.append(f"{t.device.productName} SN:{t.device.serial} (timed out)")
+                else:
+                    successes.append(t)
+
+            if dialog and (failures or (timeouts and timeout)) and not self.isDead():
+                if names:
+                    names = '\u2022 ' + ('\n\u2022 '.join(sorted(names)))
+                    msg = (f"Could not {what} on all devices\n\n"
+                           "The action was unsuccessful on these recorders:\n\n"
+                           f"{names}")
+
+                    wx.MessageBox(msg, "Device Error", parent=self,
+                                  style=wx.OK | wx.ICON_ERROR)
+
+        finally:
+            if not self.isDead():
+                self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+                self.enableButtons(True)
+
+                if self.autoUpdate:
+                    self.updateTimer.Start(self.autoUpdate)
+
+        return successes, failures, timeouts
+
+
+    def getChecked(self) -> List[Recorder]:
+        """ Get the devices for all checked, enabled list items.
+        """
+        return [rec for rec in list(self.checkedRecorders)
+                if self.list.GetItem(self.indicesByRecorder[rec]).IsEnabled()]
+
+
+    def startRecording(self, *devices):
+        """ Start one or more devices recording (assuming they can record).
+        """
+        # TODO: Better identification of valid devices (correct status, etc.)
+        recorders = [(dev, dev.command.startRecording, (), {})
+                     for dev in devices if dev.command.canRecord]
+
+        # TODO: Handle errors better
+        self.startThreads('start recording', recorders)
+
+
+    def startStreaming(self, *devices):
+        """ Start one or more devices streaming (assuming they can stream).
+        """
+        def _startStreaming(dev, path, **kwargs):
+            dev.command.saveStream(path)
+            dev.command.startRecording(**kwargs)
+
+        path = os.path.abspath(self.savePathField.GetValue())
+        if not os.path.isdir(path):
+            wx.MessageBox(f'Invalid output path\n\nThe directory "{path}"\n'
+                          'does not exist.', style=wx.ICON_ERROR)
+            return
+
+        # TODO: Better identification of valid devices (correct status, etc.)
+        streamers = [(dev, _startStreaming, (dev, path), {})
+                     for dev in devices if dev.command.canStream]
+
+        # TODO: Handle errors better
+        self.startThreads('start streaming', streamers)
+
+
+    def clearRecorderCache(self):
+        """ Clear cached recorder information and remove remote recorders
+            from the caches.
+        """
+        try:
+            self.pauseUpdater()
+            if self.scanThreadRunning():
+                self.scanThread.clearCache()
+            with _module_busy:
+                self.recorders = [dev for dev in self.recorders
+                                  if not isinstance(dev._command, MQTTCommandInterface)]
+                self.recordersByIndex.clear()
+                self.indicesByRecorder.clear()
+                self.recorderStatus.clear()
+                self.recorderTimeouts.clear()
+                # RECORDERS.clear()
+        finally:
+            self.startUpdater()
+
+
+    def selectBroker(self):
+        """ Open the broker selection dialog. The selected `MQTTConnector`
+            is communicated back via an `EVT_BROKER_SELECTED` event.
+        """
+        self.connectFailTimer.Stop()
+        self.disconnectTimer.Stop()
+        self.setBrokerMessage('')
+
+        try:
+            self.SetCursor(wx.Cursor(wx.CURSOR_ARROWWAIT))
+            self.pauseUpdater()
+            with BrokerDialog(self) as dlg:
+                dlg.ShowModal()
+        finally:
+            self.startUpdater()
+            self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+
+
+    def getDefaultBroker(self):
+        """ Start a `BrokerConnectThread` to find the default broker. The
+            `MQTTConnector` is communicated back via an `EVT_BROKER_SELECTED`
+            event.
+        """
+        _thread = BrokerConnectThread(self, self, self.defaultBroker)
+
+
+    def setBrokerMessage(self, message: str, error=False):
+        """ Set the broker status message text.
+
+            :param message: Message text.
+            :param error: If `True`, use the error font color and show
+                message with a warning icon.
+        """
+        if error:
+            color = self.textColorError
+            message = f'⚠ {message}'
+        else:
+            color = self.textColorNormal
+
+        self.brokerMessageText.SetForegroundColour(color)
+        self.brokerMessageText.SetLabel(message)
+
+
+    def setBroker(self,
+                  connector: Optional[MQTTConnector],
+                  info: Dict[str, Any] = None):
+        """ Set the broker to use.
+
+            :param connector: A `MQTTConnector` connected to a broker.
+            :param info: A copy of the data returned by `findBrokers()` or
+                `getBroker()`
+        """
+        try:
+            logger.debug(f'selected broker: {connector}')
+            self.pauseUpdater()
+            self.updatingDisplay.set()
+
+            if self.connector:
+                self.connector.connectCallback = None
+                self.connector.disconnectCallback = None
+                self.connector.updateCallback = None
+                self.connector.disconnect()
+
+            if connector:
+                self.brokerNameField.SetValue(connector.name)
+                connector.updateCallback = self.onMqttUpdate
+
+                tt = ''
+                if info is not None:
+                    tt = "{name}.{serviceType}\nIP {host[0]}, port {port}".format(**info)
+                self.brokerNameField.SetToolTip(tt)
+            else:
+                self.brokerNameField.SetValue('')
+                self.brokerNameField.SetToolTip('')
+
+            self.connector = connector
+            self.brokerInfo = info
+            self.clearRecorderCache()
+            self.recorders = [dev for dev in self.recorders
+                              if not isinstance(dev._command, MQTTCommandInterface)]
+
+        finally:
+            self.updatingDisplay.clear()
+            self.startUpdater()
+
+        wx.CallAfter(self.populateList)
+
+
     # =======================================================================
-    # Event handling
+    # Callbacks (not wxPython events)
     # =======================================================================
+
+    def isDead(self) -> bool:
+        """ Callback function that indicates the dialog is still working.
+            Primarily for use as a callback in threads sending commands
+            to devices.
+        """
+        # TODO: This may need more work
+        return (not self.updateTimer.IsRunning()
+                and not self.scanThreadRunning())
+
+
+    def onMqttUpdate(self, data, connector: Optional[MQTTConnector] = None):
+        """ Callback function executed when the `MQTTConnector` receives
+            a state update from the Device Manager.
+        """
+        logger.debug(f'onMqttUpdate({data!r}, {connector!r})')
+        if self.scanThreadRunning() and connector == self.connector:
+            self.scanThread.onUpdate(data)
+
+
+    # =======================================================================
+    # wxPython Event handling
+    # =======================================================================
+
+    def _updateTimeouts(self):
+        now = time()
+        for dev in self.scanThread.getDevices():
+            self.recorderTimeouts[dev] = (
+                now + self.MQTT_TIMEOUT if isinstance(dev._command, MQTTCommandInterface)
+                else now + self.SERIAL_TIMEOUT
+            )
+            wx.Yield()
+        self.recorderTimeouts = {k: v for k, v in self.recorderTimeouts.items() if now < v}
+
+
+    def OnUpdateTimerTick(self, _evt: Optional[wx.TimerEvent] = None):
+        """ Handle the device-scanning timer ticking.
+
+            todo: move most of the work where lags occur into `DeviceScanThread.scan()`?
+        """
+        # A lag in this method longer than the update interval can result in
+        # this getting called multiple times. Don't block, just bail.
+        if self.updatingDisplay.is_set():
+            logger.debug('Bailing from DeviceDialog.OnUpdateTimerTick - updatingDisplay is set')
+            return
+
+        try:
+            # logger.debug('>>> entering updateTimer tick handler')
+            now = time()
+            self.updatingDisplay.set()
+
+            drivesChanged = deviceChanged(recordersOnly=False)
+            # logger.debug(f'=== 0: in updateTimer tick handler after {time() - now:.4f} seconds (post deviceChanged)')
+
+            # wx.Yield()
+
+            self._updateTimeouts()
+            # logger.debug(f'=== 1: in updateTimer tick handler after {time() - now:.4f} seconds (post scanThread.getDevices)')
+
+            # wx.Yield()
+
+            new = list(self.recorderTimeouts)
+            foundChanged = set(new) != set(self.recorders)
+            self.recorders = new
+            # logger.debug(f'=== 2: in updateTimer tick handler after {time() - now:.4f} seconds (post timeout filter)')
+
+            newStatus = self.scanThread.getDeviceStatuses()
+            statusChanged = newStatus != self.recorderStatus or now - self.lastUpdate > 10
+            self.recorderStatus = newStatus
+            # logger.debug(f'=== 3: in updateTimer tick handler after {time() - now:.4f} seconds (post getDeviceStatus)')
+
+            if foundChanged:
+                # Repopulate list
+                logger.debug(f'scan {self.updateCount}: (re-)building list')
+                self.populateList()
+
+            elif drivesChanged or statusChanged:
+                # update list
+                logger.debug(f'scan {self.updateCount}: updating list')
+                self.lastUpdate = now
+                self.updateList(skip=False)
+
+            if self.updateCount == 0:
+                # First update; resize to fit list contents
+                logger.debug('first update, fitting list to width')
+                # noinspection PyUnresolvedReferences
+                self.SetSize((self.listWidth + (self.GetDialogBorder() * 4), -1))
+        finally:
+            self.updatingDisplay.clear()
+
+        self.updateCount += 1
+        # logger.debug(f'<<< exiting updateTimer tick handler after {time() - now:.4f} seconds')
+
 
     def OnColClick(self, evt):
         # Required by ColumnSorterMixin
@@ -997,14 +1236,18 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnItemSelected(self, evt):
         """ Handle list item (row) selection.
         """
+        logger.debug('OnItemSelected')
         self.selected = self.list.GetItemData(evt.Index)
         if self.listMsgs[self.selected] is not None:
             self.infoText.SetLabel(self.listMsgs[self.selected])
 
-        recorder = self.recordersByIndex.get(self.selected, None)
-        if not recorder:
-            logger.error('Could not get selected recorder!')
+        if self.selected not in self.recordersByIndex:
+            logger.error(f'Could not get selected recorder with index {self.selected}!')
             self.okButton.Enable(False)
+            evt.Skip()
+            return
+
+        recorder = self.recordersByIndex[self.selected]
         if recorder.canRecord:
             self.recordButton.SetToolTip(self.RECORD_ENABLED)
             self.recordButton.Enable(True)
@@ -1043,11 +1286,13 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     def OnItemDoubleClick(self, evt):
-        """ Hande lsit item (row) double-click.
+        """ Hande list item (row) double-click.
         """
-        if self.list.GetSelectedItemCount() > 0 and self.okButton.IsEnabled():
+        if (self.allowDoubleClick and self.list.GetSelectedItemCount() > 0
+                and self.okButton.IsEnabled()):
             # Close the dialog
             self.EndModal(wx.ID_OK)
+
         evt.Skip()
 
 
@@ -1056,26 +1301,57 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             This determines the list item under the mouse and shows the
             appropriate tool tip, if any
         """
-        if not self.recordersByIndex or not self.tooltipFrame:
+        if not self.recordersByIndex or not self.tooltipFrame or self.menuOpen.is_set():
             evt.Skip()
             return
 
-        # Part of workaround for broken ULC tooltips. It can probably be removed
-        # if/when ULC tooltips get fixed.
         self.tooltipFrame.timer.Stop()
         self.tooltipFrame.Hide()
 
         index, _ = self.list.HitTest(evt.GetPosition())
         if index != wx.NOT_FOUND:
-            if index != self.lastToolTipItem:
-                item = self.list.GetItemData(index)
-                text = self.listToolTips[item]
+            item = self.list.GetItemData(index)
 
-                # Everything here on is part of ULC tooltip workaround.
-                self.tooltipFrame.setText(text)
-                self.lastToolTipItem = index
+            # Everything here on is part of ULC tooltip workaround.
+            self.tooltipFrame.device = self.recordersByIndex[index]
+            self.tooltipFrame.setText(self.listToolTips[item])
+            self.lastToolTipItem = index
             if not self.tooltipFrame.IsShown():
                 self.tooltipFrame.timer.StartOnce(self.tooltipFrame.TOOLTIP_TIME)
+
+        evt.Skip()
+
+
+    def OnListRightClick(self, evt):
+        if not self.recordersByIndex or not self.tooltipFrame:
+            evt.Skip()
+            return
+
+        index, _ = self.list.HitTest(evt.GetPosition())
+        if index != wx.NOT_FOUND:
+            try:
+                self.pauseUpdater()
+                self.updatingDisplay.set()
+                self.menuOpen.set()
+
+                self.tooltipFrame.timer.Stop()
+                self.tooltipFrame.Hide()
+
+                try:
+                    device = self.recordersByIndex[index]
+                except IndexError:
+                    logger.error(f'OnListRightClick: No Recorder at index {index}, '
+                                 f'list coordinates {evt.GetPosition()}!')
+                    return
+
+                menu = ListContextMenu(self, device, self.list, index)
+                self.PopupMenu(menu)
+                menu.Destroy()
+
+            finally:
+                self.menuOpen.clear()
+                self.updatingDisplay.clear()
+                self.startUpdater()
 
         evt.Skip()
 
@@ -1092,80 +1368,47 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """ Handle dialog being shown/hidden.
         """
         if evt.IsShown():
-            if self.autoUpdate:
-                if not self.thread or not self.thread.is_alive():
-                    self.thread = DeviceScanThread(self, self.filter, self.autoUpdate)
-                    self.thread.start()
+            if self.remote:
+                checked = self.remoteCheck.GetValue()
+                self.showBrokerSelection(checked)
+
+            wx.CallAfter(self.OnUpdateTimerTick)
+            self.startUpdater()
+
         else:
-            if self.thread and self.thread.is_alive():
-                self.thread.stop()
+            if self.connector:
+                self.connector.updateCallback = None
+                self.connector.connectCallback = None
+                self.connector.disconnectCallback = None
+                # if self.ownConnector:
+                #     self.connector.disconnect()
+            self.stopUpdater()
             if self.tooltipFrame:
                 self.tooltipFrame.timer.Stop()
                 self.tooltipFrame.Hide()
+
         evt.Skip()
         
 
     def OnSetClocks(self, _evt=None):
         """ Set all clocks. Used as an event handler.
         """
-        self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
-        self.enableButtons(False)
-
-        try:
-            if self.thread and self.thread.is_alive():
-                self.thread.pause()
-
-            deadline = time() + 5
-            threads = [DeviceCommandThread(rec, rec.setTime)
-                       for rec in self.recordersByIndex.values()]
-
-            while any(t.is_alive() for t in threads):
-                if time() > deadline:
-                    break
-                sleep(0.05)
-
-            fails = []
-            for t in threads:
-                rec = t.device
-                name = f"{rec.productName} SN:{rec.serial}"
-                if t.failed.is_set():
-                    logger.error(f"Error setting clock on {rec}: {t.failure!r}")
-                    fails.append(name)
-                elif not t.completed.is_set():
-                    logger.error(f"Timed out setting clock on {rec}")
-                    fails.append(f"{name} (timed out)")
-
-            if fails:
-                if len(fails) > 1:
-                    names = "\u2022 " + ('\n\u2022 '.join(fails))
-                    msg = ("Could not set recorder clocks.\n\n"
-                           "Errors prevented the clocks being set on these recorders:\n\n"
-                           f"{names}")
-                else:
-                    msg = ("Could not set recorder clock.\n\n"
-                           "An error prevented the clock from being set on "
-                           f"recorder {fails[0]}.")
-
-                wx.MessageBox(msg, "Device Error", parent=self,
-                              style=wx.OK | wx.ICON_ERROR)
-
-        finally:
-            self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-            self.enableButtons(True)
-
-            if self.thread and self.thread.is_alive():
-                self.thread.resume()
+        devices = [(rec, rec.setTime, (), {'callback': None})
+                   for rec in self.recordersByIndex.values()]
+        self.startThreads('set the clock', devices)
 
 
-    def OnStartRecording(self,
-                         evt: Union[wx.CommandEvent, EvtRecordButton, None] = None):
+    def OnStartRecording(self, evt):
         """ Initiate a recording.
 
             :param evt: The event generated by a dialog 'Record' button, or
                 an `EVT_RECORD_BUTTON` event from a row in the list.
         """
-        if self.thread and self.thread.is_alive():
-            self.thread.pause()
+        # XXX: CLEAN THIS UP, USE startRecording()
+        logger.debug('starting recording...')
+
+        self.updateTimer.Stop()
+        # TODO: Make sure updating threads all stopped?
 
         try:
             # If EVT_RECORD_BUTTON, get device from event, otherwise use selected
@@ -1174,22 +1417,95 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if not recorder:
                 recorder = self.recordersByIndex.get(self.selected, None)
             if recorder and recorder.canRecord:
-                self.updateRow(recorder, enabled=False)
                 if stop:
-                    # recorder.command.stopRecording()
-                    DeviceCommandThread(recorder, recorder.command.stopRecording,
+                    DeviceCommandThread(recorder,
+                                        recorder.command.stopRecording,
                                         callback=self.isDead)
                 else:
-                    # recorder.command.startRecording()
-                    DeviceCommandThread(recorder, recorder.command.startRecording,
+                    DeviceCommandThread(recorder,
+                                        recorder.command.startRecording,
                                         callback=self.isDead)
+                self.updateRow(recorder, enabled=False)
         finally:
-            if self.thread and self.thread.is_alive():
-                self.thread.resume()
+            # self.updateList()
+            if self.autoUpdate:
+                self.updateTimer.Start(self.autoUpdate)
 
 
-    def OnStartAllRecorders(self,
-                            evt: Union[wx.CommandEvent, EvtRecordButton, None] = None):
+    def OnStartStreaming(self, evt):
+        """ Handle a device list 'stream' button or menu item selection.
+        """
+        logger.debug('starting stream...')
+        self.updateTimer.Stop()
+        # TODO: Make sure updating threads all stopped?
+
+        try:
+            # If EVT_STREAM, get device from event, otherwise use selected
+            dev = getattr(evt, 'device', None)
+            if not dev:
+                dev = self.recordersByIndex.get(self.selected, None)
+            if dev and dev.command.canStream:
+                self.startStreaming(dev)
+                self.updateRow(dev, enabled=False)
+        finally:
+            # self.updateList()
+            if self.autoUpdate:
+                self.updateTimer.Start(self.autoUpdate)
+
+
+    def OnLockDevice(self, evt):
+        """ Handle a device list 'lock' button or menu item selection.
+        """
+        device = evt.device
+        clear = getattr(evt, 'clear', False)
+        force = getattr(evt, 'force', False)
+
+        # TODO: this whole thing might need to go into a thread, as
+        #  `isLocked()` could potentially take time to execute.
+        locked, mine = device.command.isLocked()
+        current = device.command.getLockID() if force else None
+
+        if locked and not mine and not force:
+            logger.debug(f'Tried to unlock {device.serial}, claimed by another')
+            return
+        elif clear:
+            logger.debug(f'Clearing lock on device {device.serial}')
+            DeviceCommandThread(device, device.command.clearLockID, current=current)
+        else:
+            logger.debug(f'Setting lock on device {device.serial}')
+            DeviceCommandThread(device, device.command.setLockID, current=current)
+
+        wx.CallAfter(self.updateList)
+
+
+    def OnBlink(self, evt):
+        """ Handle a device list 'blink LEDs' button or menu item selection.
+        """
+        logger.debug(f'Sending Blink to {evt.device}')
+        DeviceCommandThread(evt.device, evt.device.command.blink)
+
+
+    def OnConfigButton(self, evt):
+        """ Handle a device list 'configure' button or menu item selection.
+        """
+        logger.debug(f'Handling config event for {evt.device}')
+        if self.okButton.IsEnabled():
+            self.EndModal(wx.ID_OK)
+
+
+    def OnRebootDevice(self, evt):
+        """ Handle the 'reboot' button or menu item selection.
+        """
+        promptDeviceReboot(evt.device, self)
+
+
+    def OnShutdownDevice(self, evt):
+        """ Handle the 'shutdown' button or menu item selection.
+        """
+        promptDeviceShutdown(evt.device, self)
+
+
+    def OnStartAllRecorders(self, evt):
         """ Send the 'start recording' command to all devices.
 
             This is placeholder for future functionality. It may or may not
@@ -1200,35 +1516,185 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         evt.Skip()
 
 
-    def OnDeviceListUpdate(self, evt):
-        """ Handle an event generated by the thread scanning for new and
-            changed devices.
+    def OnStartSelected(self, _evt):
+        """ Handle the 'Start Checked' button press event.
         """
-        now = time()
-        new = evt.devices
-        stat = evt.status
-        devicesChanged = new != self.recorders
-        statsChanged = stat != self.recorderStatus
+        devices = [(rec, rec.command.startRecording, (), {})
+                   for rec in self.getChecked()
+                   if rec.command.canRecord]
 
-        self.recorders = new
-        self.recorderStatus = stat
+        # TODO: Handle errors better
+        self.startThreads('start recording', devices)
 
-        if devicesChanged:
-            self.populateList()
-        elif statsChanged or now - self.lastUpdate > 10:
-            # Same devices, different status (or time to force an update,
-            # making sure nothing in the list has gotten 'stuck')
-            self.lastUpdate = now
-            self.updateList()
 
-        if self.updateTimerCalls == 0:
-            # First update; resize to fit list contents
-            logger.debug('first update')
-            self.SetSize((self.listWidth + (self.GetDialogBorder() * 4), -1))
-            # self.list.Fit()
-            # self.Centre()
+    def OnStreamSelected(self, _evt):
+        """ Handle the 'Stream from Checked' button press event.
+        """
+        devs = [dev for dev in self.getChecked() if dev.command.canStream]
+        self.startStreaming(*devs)
 
-        self.updateTimerCalls += 1
+
+    def OnStopSelected(self, _evt):
+        """ Stop all checked devices.
+        """
+        def _stopRecording(dev, **kwargs):
+            dev.command.stopRecording(**kwargs)
+            dev.command.closeStream()
+
+        # TODO: Better identification of valid devices (correct status, etc.)
+        devices = [(rec, _stopRecording, (rec,), {})
+                   for rec in self.getChecked()
+                   if rec.command.canRecord]
+
+        # TODO: Handle errors better
+        self.startThreads('stop recording/streaming', devices, ignore=CommandError)
+
+
+    def OnItemChecked(self, evt):
+        """ Handle an item check.
+        """
+        item = evt.GetItem()
+        idx = evt.GetIndex()
+        if idx < 0:
+            logger.debug(f'{idx=} (bad)')
+            evt.Skip()
+            return
+        dev = self.recordersByIndex[idx]
+        if item.IsChecked():
+            self.checkedRecorders.add(dev)
+        else:
+            try:
+                self.checkedRecorders.remove(dev)
+            except KeyError:
+                pass
+        self.updateList()
+        evt.Skip()
+
+
+    def OnSavePathPicked(self, _evt):
+        """ Handle an output directory being chosen.
+            Note: called with every keystroke in the `DirBrowseButton`
+        """
+        pass
+        # self.saveCheck.SetValue(True)
+
+
+    def OnSelectAllButton(self, _evt):
+        logger.debug('Check all')
+        self.checkedRecorders.clear()
+        for idx, dev in self.recordersByIndex.items():
+            if self.list.IsItemEnabled(idx):
+                self.checkedRecorders.add(dev)
+        self.updateList()
+
+
+    def OnSelectNoneButton(self, _evt):
+        logger.debug('Check none')
+        self.checkedRecorders.clear()
+        self.updateList()
+
+
+    # =======================================================================
+    # MQTT-related events
+    # =======================================================================
+
+    def OnRemoteCheckChanged(self, _evt):
+        """ Handle the 'remote' checkbox changing. Also used to update
+            things on startup.
+        """
+        self.connectFailTimer.Stop()
+        self.disconnectTimer.Stop()
+        self.setBrokerMessage('')
+
+        checked = self.remoteCheck.GetValue()
+        self.showBrokerSelection(checked)
+        if checked:
+            self.selectBroker()
+        else:
+            self.setBroker(None)
+
+
+    def OnBrokerSelect(self, _evt):
+        """ Handle the broker 'Select...' button press.
+        """
+        self.selectBroker()
+
+
+    def OnBrokerSelected(self, evt):
+        """ Handle an MQTT broker selection.
+        """
+        # self.brokerPane.Enable()
+        self.showBrokerSelection()
+        connector = getattr(evt, 'connector', None)
+        info = getattr(evt, 'info', None)
+
+        logger.debug(f'OnSetBrokerSelected() -> {info}')
+        self.setBroker(connector, info)
+
+
+    def OnMQTTConnecting(self, _evt):
+        """ Handle the `BrokerConnectThread` starting.
+        """
+        # self.brokerPane.Disable()
+        self.showBrokerSelection(False)
+        self.disconnectTimer.Stop()
+        self.setBrokerMessage('Connecting...')
+        self.connectFailTimer.StartOnce(CONNECT_FAIL_TIMEOUT)
+
+
+    def OnMQTTConnected(self, _evt):
+        """ Handle a MQTT client connection event, posted by
+            `MQTTConnector.connectCallback`.
+        """
+        self.connectFailTimer.Stop()
+        self.disconnectTimer.Stop()
+        # self.brokerPane.Enable()
+        self.showBrokerSelection()
+        self.setBrokerMessage('Connected')
+
+
+    def OnMQTTDisconnected(self, _evt):
+        """ Handle a MQTT client disconnection event, posted by
+            `MQTTConnector.disconnectCallback`.
+        """
+        self.connectFailTimer.Stop()
+        # self.brokerPane.Enable()
+        self.showBrokerSelection()
+        self.setBrokerMessage('Disconnected')
+        self.disconnectTimer.StartOnce(DISCONNECT_TIMEOUT)
+
+
+    def OnMQTTError(self, evt):
+        """ Handle a MQTT error event.
+        """
+        self.connectFailTimer.Stop()
+        self.disconnectTimer.Stop()
+        # self.brokerPane.Enable()
+        self.showBrokerSelection()
+        self.setBrokerMessage(evt.message, error=True)
+
+
+    def OnDisconnectTimer(self, _evt):
+        try:
+            logger.debug(f'Broker disconnected too long, removing MQTT devices')
+            self.pauseUpdater()
+            self.updatingDisplay.set()
+            self.clearRecorderCache()
+            self.recorders = [dev for dev in self.recorders
+                              if not isinstance(dev._command, MQTTCommandInterface)]
+        finally:
+            self.updatingDisplay.clear()
+            self.startUpdater()
+
+        wx.CallAfter(self.populateList)
+
+
+    def OnConnectFailTimer(self, _evt):
+        """ Handle a contingency timeout event (i.e., the `BrokerConnectThread`
+            failed in some unexpected way).
+        """
+        evt = EvtMQTTError("Timed out starting broker connection")
+        wx.PostEvent(self, evt)
 
 
 # ===========================================================================
@@ -1242,25 +1708,29 @@ def selectDevice(title: str = "Select Recorder",
         The dialog will (optionally) update automatically when devices are
         added or removed.
 
-        :param title: A title string for the dialog.
-        :param parent: The parent window, if any.
         :keyword filter: An optional function to exclude devices from the
             list. It should take a `Recorder` as an argument, and return a
             boolean.
-        :keyword autoUpdate: A number of milliseconds to delay between checks
-            for changes to attached recorders. 0 will never automatically
-            refresh. Default is 500 ms.
+        :keyword autoUpdate: A number of milliseconds to delay between
+            checks for changes to attached recorders. 0 will never
+            automatically refresh. Default is 500 ms.
+        :keyword scanInterval: The number of milliseconds between
+            scans for new devices. Default is 4000 ms.
         :keyword showWarnings: If `False`, battery age and calibration
             expiration warnings will not be shown for selected devices.
             Default is `True`.
+        :keyword showConnection: If `True`, the connection type icon
+            (USB, Wi-Fi, Bluetooth) will be shown on the left side of
+            each devices' row.
         :keyword showAdvanced: If `True`, show additional columns of
-            information (hardware/firmware version, etc.). Default is `False`.
+            information (hardware/firmware version, etc.). Default is
+            `False`.
         :keyword hideClock: If `True`, the "Set all clocks" button will be
             hidden. Default is `False`.
         :keyword hideRecord: If `True`, the "Start Recording" button will be
             hidden. Default is `False`.
-        :keyword okText: Alternate text to display on the OK/Configure button.
-            Defaults to `"Configure"`.
+        :keyword okText: Alternate text to display on the OK/Configure
+            button. Defaults to `"Configure"`.
         :keyword okHelp: Alternate tooltip for the OK/Configure button.
             Defaults to `"Configure the selected device"`.
         :keyword cancelText: Alternate text to display on the Cancel/Close
@@ -1270,16 +1740,34 @@ def selectDevice(title: str = "Select Recorder",
             `False` will show no icon.
         :keyword tooltips: If `True` (default), show list tooltips containing
             all important device infomation.
+        :keyword checks: If `True`, show checkboxes for each device.
+        :keyword allowDoubleClick: If `True`, double-clicking a list item
+            will be the same as selecting it and clicking OK. Defaults to
+            `False` if `checks` is `True`.
+        :keyword mustConfig: If `True`, the 'OK' button will only become
+            enabled if the device can be configured.
+        :keyword remote: If `True`, show the MQTT broker selection field.
+        :keyword remoteChecked: The initial state of the 'use remote'
+            checkbox, if `remote` is `True`. `True` by default.
+        :keyword broker: The name of the default, initially selected broker.
+            `None` will select the first found.
+        :keyword connector: An existing `endaq.device.mqtt.MQTTConnector`
+            instance, if one was already created.
+        :keyword showSave: If `True`, show the save path selector.
+        :keyword savePath: The default save path for streams.
         :return: The path of the selected device.
     """
     result = None
 
-    dlg = DeviceSelectionDialog(parent, -1, title, **kwargs)
+    with DeviceSelectionDialog(parent, -1, title, **kwargs) as dlg:
+        if dlg.ShowModal() == wx.ID_OK:
+            result = dlg.getSelected()
 
-    if dlg.ShowModal() == wx.ID_OK:
-        result = dlg.getSelected()
+        # Disconnect from broker if no device selected and broker connection
+        # wasn't pre-existing (i.e., the same as the one provided as
+        # `connector` kwarg)
+        if (result is None and dlg.connector is not None
+                and kwargs.get('connector') != dlg.connector):
+            dlg.connector.disconnect()
 
-    dlg.Destroy()
-    if isinstance(result, dict):
-        result = result.get('_PATH', None)
     return result

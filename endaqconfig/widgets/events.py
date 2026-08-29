@@ -10,13 +10,25 @@ from wx.lib.newevent import NewEvent
 # ===========================================================================
 
 # Configure a device. Carries `device` as attribute.
-EvtConfigButton, EVT_CONFIG_BUTTON = NewEvent()
+EvtConfig, EVT_CONFIG = NewEvent()
 
 # Start (or stop) a recording. Carries `device` as attribute.
-EvtRecordButton, EVT_RECORD_BUTTON = NewEvent()
+EvtRecord, EVT_RECORD = NewEvent()
 
-# Called when the `getDevices()` thread completes
-EvtDeviceListUpdate, EVT_DEVICE_LIST_UPDATE = NewEvent()
+# Start (or stop) a stream. Carries `device` as attribute.
+EvtStream, EVT_STREAM = NewEvent()
+
+# Lock (or unlock) a device
+EvtLockDevice, EVT_LOCK_DEVICE = NewEvent()
+
+# Blink the recorder's LED.
+EvtBlink, EVT_BLINK = NewEvent()
+
+# Reset the device
+EvtReset, EVT_RESET = NewEvent()
+
+# Power down the device (i.e., a Gateway)
+EvtShutdown, EVT_SHUTDOWN = NewEvent()
 
 # ===========================================================================
 # Wi-Fi events
@@ -34,3 +46,29 @@ EvtConfigWiFiConnectionCheck, EVT_CONFIG_WIFI_CONNECTION_CHECK = NewEvent()
 
 # A custom event to be called when the Wi-Fi tab is closed
 EvtClosingTemp, EVT_CLOSING_TEMP = NewEvent()
+
+
+# ===========================================================================
+# Remote/MQTT-related events
+# ===========================================================================
+
+# New broker selected in UI. Events should have an `info` attribute
+# containing the info from the advertiser. OUTDATED, TO BE REMOVED.
+EvtBrokerUpdate, EVT_BROKER_UPDATE = NewEvent()
+
+# New broker selected in UI. Events should have a `connector` attribute
+# containing a `MQTTConnector`.
+EvtBrokerSelected, EVT_BROKER_SELECTED = NewEvent()
+
+# Connection/disconnection events. `EvtMQTTDisconnected`
+EvtMQTTConnecting, EVT_MQTT_CONNECTING = NewEvent()
+EvtMQTTConnected, EVT_MQTT_CONNECTED = NewEvent()
+
+# Disconnect event. Posted after normal disconnection and disconnections
+# that are (or are caused by) errors. All events should have an `error`
+# attribute, and errors should have a `message`.
+EvtMQTTDisconnected, EVT_MQTT_DISCONNECTED = NewEvent()
+
+# An MQTT-related error, but not one that dropped the connection. Events
+# should have a `message` attribute.
+EvtMQTTError, EVT_MQTT_ERROR = NewEvent()

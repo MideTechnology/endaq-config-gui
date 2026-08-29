@@ -20,8 +20,10 @@ import wx
 from wx.html import HtmlWindow
 import wx.lib.wxpTag  # @UnusedImport - simply importing it does the work.
 
-from .widgets.calibration_editor import PolyEditDialog
+from endaq.device import CommandError
+from endaq.device.response_codes import CommandResponseCode
 
+from .widgets.calibration_editor import PolyEditDialog
 from .base import Tab, logger, registerTab
 
 
@@ -34,7 +36,7 @@ def n_choose_k(n, k):
 
 
 def get_reduced_polynomial_coefficients(coefficients, references):
-    """
+    r"""
     Reduces any univariate or bivariate polynomial to one where the references values are all zero.
 
     The guiding math used to calculate the coefficients can be given as the following LaTeX code,
@@ -678,7 +680,7 @@ class DeviceInfoTab(Tab):
     """
 
     def __init__(self, *args, **kwargs):
-        self.setAttribDefault("label", "Recorder Info")
+        self.setAttribDefault("label", "Device Info")
         super(DeviceInfoTab, self).__init__(*args, **kwargs)
 
 
@@ -691,9 +693,14 @@ class DeviceInfoTab(Tab):
 
         info = dev.getInfo()
 
-        info['CalibrationSerialNumber'] = dev.getCalSerial()
-        info['CalibrationDate'] = dev.getCalDate()
-        info['CalibrationExpirationDate'] = dev.getCalExpiration()
+        try:
+            info['CalibrationSerialNumber'] = dev.getCalSerial()
+            info['CalibrationDate'] = dev.getCalDate()
+            info['CalibrationExpirationDate'] = dev.getCalExpiration()
+        except CommandError as err:
+            # Non-recorders don't (necessarily) have calibration
+            if err.errno == CommandResponseCode.ERR_BAD_INFO_INDEX:
+                pass
 
         info['HwRev'] = dev.hardwareVersion
         if info.pop('UniqueChipIDLong', None):
