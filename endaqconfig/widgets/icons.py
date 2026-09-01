@@ -402,6 +402,17 @@ connection_wifi = PyEmbeddedImage(
     b'2iqoKPmalyw9iHn233gNNzS50l+5eOkAAAAASUVORK5CYII=')
 
 #----------------------------------------------------------------------
+connection_ethernet = PyEmbeddedImage(
+    b'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAnXAAAJ1wGxbhe3'
+    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAATlJREFUOI2t0j9LFlAU'
+    b'BvDfY5YNgtESkr34AYqGBiGX1oY+QE7REH0AwUlXP0NLtEVzUEuroWPQ6jtUNgRKiYsGnYbu'
+    b'ixd9g0IPHO4553k49/xLVTmLTI6MJFdxpcN2quqwYVO43mHfq2oPUlWS3McLHHSk4GazP6Iv'
+    b'dRqPquqt1sI6lqvKSLGJO003T2DLWK8qE2fpn+MZ7GIxyX6HzbY4zCZ5gss4wiI2YFTSDNbw'
+    b'Ep/wDA+7kpdabBevsIqZqjKZ5B4WcIivuIghBklWuoqG7fcv7X2aZOsC5jHXSL/wA9+afwvX'
+    b'On+IvcaDnYw7pCS38Rh3W+g9nlfVh1PcvyTYwmvHdzGNB1W1cIrc77cb2jYGnT/A9jjuud3B'
+    b'SXmHjSRHzb+EN+OIY2cASW74s1L4WVWf/yvBv8pvCUmiVFiTkx4AAAAASUVORK5CYII=')
+
+#----------------------------------------------------------------------
 
 control_buttons = PyEmbeddedImage(
     b'iVBORw0KGgoAAAANSUhEUgAAANwAAABYCAYAAACee5lPAAAACXBIWXMAAANoAAADaAGQSN74'

@@ -543,6 +543,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         images.Add(icons.connection_usb.GetBitmap())
         self.ICON_CONNECTION_WIFI = images.GetImageCount()
         images.Add(icons.connection_wifi.GetBitmap())
+        self.ICON_CONNECTION_ETHERNET = images.GetImageCount()
+        images.Add(icons.connection_ethernet.GetBitmap())
 
         return images
 
@@ -554,10 +556,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             # Mounted as a drive
             return self.ICON_CONNECTION_MSD
 
-        # TODO: Special-case icon for Gateway
         try:
             # This is a primitive mechanism based on the `ConfigInterface`
-            # subclass name. Also, all but USB are currently hypothetical.
+            # subclass name. Some are for future use.
             configname = dev.command.__class__.__name__.lower()
             if 'serial' in configname:
                 return self.ICON_CONNECTION_USB
@@ -566,6 +567,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             elif any(n in configname for n in ('bluetooth', 'bt', 'ble')):
                 # For future use
                 return self.ICON_CONNECTION_BT
+            elif 'http' in configname:
+                # NOTE: the HTTPS Gateway connection may be over Wi-Fi
+                # Future: Consider better test and use Wi-Fi when appropriate.
+                return self.ICON_CONNECTION_ETHERNET
         except (AttributeError, NotImplementedError, UnsupportedFeature):
             pass
 
