@@ -1,10 +1,10 @@
 from dataclasses import asdict
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import wx
 import wx.lib.sized_controls as sc
 
-from endaq.device.mqtt.discovery import findBrokers, MDNSInfo
+from endaq.device.mqtt.discovery import MDNSFinder, MDNSInfo, MDNS_FINDERS
 
 from endaqconfig.widgets import events
 from endaqconfig.widgets.shared import parseIP
@@ -22,15 +22,12 @@ class BrokerDialog(sc.SizedDialog):
     """
 
 
-    # TODO: REMOVE NEXT COMMENT LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
-    # noinspection PyUnresolvedReferences
     def __init__(self,
                  parent,
                  root=None,
                  defaultBroker=None,
                  defaultAddress='localhost:1883',
                  defaultField=0,
-                 patterns: Optional[tuple[str]] = None,
                  clientArgs: Dict[str, Any] = None,
                  connectArgs: Dict[str, Any] = None,
                  **kwargs):
@@ -47,9 +44,6 @@ class BrokerDialog(sc.SizedDialog):
         :param defaultAddress: The default text in the broker address field.
         :param defaultField: The initial radio button selected, 0 for advertised,
             1 for manually-entered IP address.
-        :param patterns: Zero or more MQTT Broker names (multiple positional
-            arguments). Glob-like wildcards may be used (case-insensitive).
-            `None` will return all MQTT brokers.
         :param scantime: The minimum time (in seconds) to scan for brokers. If
             any brokers are discovered in this time, they will be returned.
         :param timeout: The maximum time (in seconds) to scan for brokers, if
@@ -66,19 +60,20 @@ class BrokerDialog(sc.SizedDialog):
         super().__init__(parent, -1, "Select MQTT Broker",
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
+        self.finder = MDNSFinder(keepalive=1200)
+        self.finder.start()
+
         self.brokers: Dict[str, MDNSInfo] = {}
         self.names: List[str] = []
         self.thread = None
 
-        # Arguments for `findBrokers()`. Rarely used, but could be.
-        self.patterns = patterns or (None,)
-        self.scanKwargs = {k: kwargs.pop(k)
-                           for k in ('timeout', 'patterns')
-                           if k in kwargs}
-        # findBrokers(*self.patterns, **self.scanKwargs, scantime=1)
-
         self.activeGroup = defaultField
+        self.initUI()
 
+
+    # TODO: REMOVE NEXT COMMENT LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
+    # _noinspection PyUnresolvedReferences
+    def initUI(self):
         outerpane = self.GetContentsPane()
         outerpane.SetSizerType('vertical')
         pane = sc.SizedPanel(outerpane, -1)
@@ -92,11 +87,13 @@ class BrokerDialog(sc.SizedDialog):
         self.adpane = sc.SizedPanel(pane, -1)
         self.adpane.SetSizerType('horizontal')
         self.adpane.SetSizerProps(expand=True)
-        self.brokerList = wx.Choice(self.adpane, -1, style=wx.BORDER_SUNKEN)
+        # self.brokerList = wx.Choice(self.adpane, -1, style=wx.BORDER_SUNKEN)
+        self.brokerList = wx.ListBox(self.adpane, -1,
+                                     style=wx.LB_SINGLE | wx.LB_OWNERDRAW)
         self.brokerList.SetSizerProps(expand=True, proportion=1)
-        self.scanBtn = wx.Button(self.adpane, -1, 'Rescan')
-        self.scanBtn.Bind(wx.EVT_BUTTON, self.OnScanButton)
-        self.scanBtn.SetToolTip('Update the list of advertised brokers')
+        # self.scanBtn = wx.Button(self.adpane, -1, 'Rescan')
+        # self.scanBtn.Bind(wx.EVT_BUTTON, self.OnScanButton)
+        # self.scanBtn.SetToolTip('Update the list of advertised brokers')
 
         # Second group: Enter IP address explicitly
         self.ipRB = wx.RadioButton(pane, -1, 'Broker Address:')
@@ -128,7 +125,7 @@ class BrokerDialog(sc.SizedDialog):
         self.connectBtn.Bind(wx.EVT_BUTTON, self.OnConnectButton)
         self.Bind(wx.EVT_CHOICE, self.OnBrokerChoice)
         self.Bind(wx.EVT_RADIOBUTTON, self.OnRadioButton)
-        self.enableGroup(defaultField)
+        self.enableGroup(self.activeGroup)
 
         self.connectFailTimer = wx.Timer(self)
         self.connectThread = None
@@ -137,10 +134,11 @@ class BrokerDialog(sc.SizedDialog):
         self.Bind(events.EVT_BROKER_SELECTED, self.OnBrokerSelected)
         self.Bind(events.EVT_MQTT_ERROR, self.OnMQTTError)
         self.Bind(wx.EVT_TIMER, self.OnConnectFailTimer, id=self.connectFailTimer.GetId())
+        self.Bind(events.EVT_BROKER_UPDATE, self.OnBrokerUpdate)
 
         self.Fit()
         self.SetMinSize(self.GetSize())
-        self.SetMaxSize((1000, self.GetSize().height))
+        # self.SetMaxSize((1000, self.GetSize().height))
         self.SetSize((500, self.GetSize().height))
 
 
@@ -160,7 +158,22 @@ class BrokerDialog(sc.SizedDialog):
         return None
 
 
-    def getBrokers(self):
+    def brokerUpdateCallback(self, brokers):
+        print(f'{brokers=}')
+        evt = events.EvtBrokerUpdate(brokers=brokers)
+        wx.PostEvent(self, evt)
+
+
+    def OnBrokerUpdate(self, evt):
+        # XXX: MOVE THIS TO OTHER HANDLERS
+        self.setMessage('')
+        current = self.getSelectedName()
+        if current:
+            self.defaultBroker = current
+        self.setBrokers(evt.brokers)
+
+
+    def setBrokers(self, brokers):
         """ Get advertised brokers and update the list.
         """
         try:
@@ -169,9 +182,7 @@ class BrokerDialog(sc.SizedDialog):
             self.spinner.Start()
             self.setMessage('')
 
-            # If findBrokers() lags, it might be better to do it in a thread and post an event
-            self.brokers = {b.name: b for b in findBrokers(*self.patterns, **self.scanKwargs,
-                                                           persistent=True, scantime=0)}
+            self.brokers = {b.name: b for b in brokers}
             self.names = sorted(self.brokers)
             self.brokerList.Set(self.names)
 
@@ -233,14 +244,14 @@ class BrokerDialog(sc.SizedDialog):
     #
     # =======================================================================
 
-    def OnScanButton(self, _evt):
-        """ Handle the 'Rescan' button press.
-        """
-        self.setMessage('')
-        current = self.getSelectedName()
-        if current:
-            self.defaultBroker = current
-        self.getBrokers()
+    # def OnScanButton(self, _evt):
+    #     """ Handle the 'Rescan' button press.
+    #     """
+    #     self.setMessage('')
+    #     current = self.getSelectedName()
+    #     if current:
+    #         self.defaultBroker = current
+    #     self.getBrokers()
 
 
     def OnConnectButton(self, _evt):
@@ -278,9 +289,11 @@ class BrokerDialog(sc.SizedDialog):
         """ Handle dialog being shown/hidden.
         """
         if evt.IsShown():
-            self.getBrokers()
+            self.setBrokers(self.finder.getBrokerList())
+            self.finder.addCallback(self.brokerUpdateCallback)
         else:
             logger.debug('Stopping BrokerDialog timer, spinner, etc.')
+            self.finder.stop()  # FUTURE: change to removeCallback if a root MDNSFinder is used
             self.connectFailTimer.Stop()
             self.spinner.Stop()
             if self.thread and self.thread.is_alive():

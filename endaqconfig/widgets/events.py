@@ -53,7 +53,7 @@ EvtClosingTemp, EVT_CLOSING_TEMP = NewEvent()
 # ===========================================================================
 
 # New broker selected in UI. Events should have an `info` attribute
-# containing the info from the advertiser. OUTDATED, TO BE REMOVED.
+# containing the `MDNSInfo` from the `MDNSFinder`.
 EvtBrokerUpdate, EVT_BROKER_UPDATE = NewEvent()
 
 # New broker selected in UI. Events should have a `connector` attribute
