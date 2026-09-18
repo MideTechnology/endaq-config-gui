@@ -914,7 +914,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """ Run commands on multiple devices, each in its own thread.
 
             :param what: Description of the command being run. For display
-                purposes.
+                purposes (mostly error dialogs).
             :param devlist: A list of tuples containing the device, the
                 function to execute, a tuple of positional arguments for
                 the function, and a dictionary of keyword arguments.
@@ -1544,7 +1544,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """
         def _stopRecording(dev, **kwargs):
             dev.command.stopRecording(**kwargs)
-            dev.command.closeStream()
+            try:
+                dev.command.closeStream()
+            except TimeoutError:
+                logger.warning(f'Timed out waiting for stream from {dev.serial} to close')
 
         # TODO: Better identification of valid devices (correct status, etc.)
         devices = [(rec, _stopRecording, (rec,), {})
