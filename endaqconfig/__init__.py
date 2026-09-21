@@ -3,7 +3,7 @@ A GUI for configuring enDAQ data recoders. This can be run standalone, or
 imported into another script.
 """
 
-__version__ = "2.0.4b5"
+__version__ = "2.0.4b6"
 __author__ = "David Stokes"
 __copyright__ = "Copyright 2026 Mide Technology Corporation"
 

@@ -78,7 +78,7 @@ class BrokerDialog(sc.SizedDialog):
         outerpane.SetSizerType('vertical')
         pane = sc.SizedPanel(outerpane, -1)
         pane.SetSizerType('form')
-        pane.SetSizerProps(expand=True)
+        pane.SetSizerProps(expand=True, proportion=1)
 
         # First group: Select mDNS-advertised broker
         self.brokerRB = wx.RadioButton(pane, -1, 'Advertised Broker:', style=wx.RB_GROUP)
@@ -86,7 +86,7 @@ class BrokerDialog(sc.SizedDialog):
         self.brokerRB.SetToolTip('Select an mDNS advertised broker by name')
         self.adpane = sc.SizedPanel(pane, -1)
         self.adpane.SetSizerType('horizontal')
-        self.adpane.SetSizerProps(expand=True)
+        self.adpane.SetSizerProps(expand=True, proportion=1)
         # self.brokerList = wx.Choice(self.adpane, -1, style=wx.BORDER_SUNKEN)
         self.brokerList = wx.ListBox(self.adpane, -1,
                                      style=wx.LB_SINGLE | wx.LB_OWNERDRAW)
@@ -115,7 +115,7 @@ class BrokerDialog(sc.SizedDialog):
         buttonpane.SetSizerType("horizontal")
         buttonpane.SetSizerProps(expand=True)
         sc.SizedPanel(buttonpane, -1).SetSizerProps(proportion=1)  # Spacer
-        self.spinner = Spinner(buttonpane)
+        self.spinner = Spinner(buttonpane, timeout=1000)
         self.spinner.SetSizerProps(border=(['top', 'right'], 4))
         self.connectBtn = wx.Button(buttonpane, -1, 'Connect')
         self.connectBtn.SetSizerProps(halign="right")
@@ -137,7 +137,7 @@ class BrokerDialog(sc.SizedDialog):
         self.Bind(events.EVT_BROKER_UPDATE, self.OnBrokerUpdate)
 
         self.Fit()
-        self.SetMinSize(self.GetSize())
+        self.SetMinSize((400, 240))
         # self.SetMaxSize((1000, self.GetSize().height))
         self.SetSize((500, self.GetSize().height))
 
@@ -151,7 +151,9 @@ class BrokerDialog(sc.SizedDialog):
         self.ipField.Enable(groupNo == 1)
 
 
-    def getSelectedName(self):
+    def getSelectedName(self) -> Optional[str]:
+        """ Get the name of the selected broker.
+        """
         idx = self.brokerList.GetSelection()
         if idx != wx.NOT_FOUND:
             return self.brokerList.GetString(idx)
@@ -159,12 +161,15 @@ class BrokerDialog(sc.SizedDialog):
 
 
     def brokerUpdateCallback(self, brokers):
-        print(f'{brokers=}')
+        """ Function called by the `MDNSFinder` when the broker list changes.
+        """
         evt = events.EvtBrokerUpdate(brokers=brokers)
         wx.PostEvent(self, evt)
 
 
     def OnBrokerUpdate(self, evt):
+        """ Handle a broker list update event.
+        """
         # XXX: MOVE THIS TO OTHER HANDLERS
         self.setMessage('')
         current = self.getSelectedName()
@@ -182,7 +187,8 @@ class BrokerDialog(sc.SizedDialog):
             self.spinner.Start()
             self.setMessage('')
 
-            self.brokers = {b.name: b for b in brokers}
+            self.brokers = {b.name: b for b in brokers
+                            if b.properties.get(b'protocol', b'mqtt') == b'mqtt'}
             self.names = sorted(self.brokers)
             self.brokerList.Set(self.names)
 
@@ -195,7 +201,7 @@ class BrokerDialog(sc.SizedDialog):
         finally:
             self.Enable(True)
             self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-            self.spinner.Stop()
+            # self.spinner.Stop()
 
 
     def _setBrokerTooltip(self):
@@ -231,7 +237,7 @@ class BrokerDialog(sc.SizedDialog):
         """ Kick off the `BrokerConnectThread` thread.
         """
         self.Enable(False)  # Doesn't look disabled; explicitly disable widgets?
-        self.spinner.Start()
+        self.spinner.Start(timeout=30000)
 
         self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
         self.connectFailTimer.StartOnce(30000)
@@ -290,6 +296,7 @@ class BrokerDialog(sc.SizedDialog):
         """
         if evt.IsShown():
             self.setBrokers(self.finder.getBrokerList())
+            self.spinner.Start(timeout=5000)
             self.finder.addCallback(self.brokerUpdateCallback)
         else:
             logger.debug('Stopping BrokerDialog timer, spinner, etc.')
@@ -363,3 +370,4 @@ if __name__ == '__main__':
     app = wx.App()
     with BrokerDialog(None) as dlg:
         dlg.ShowModal()
+        print(dlg.GetSize())

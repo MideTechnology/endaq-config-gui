@@ -3,6 +3,7 @@ Animated 'busy' image, like `wx.lib.throbber.Throbber` but transparent
 and auto-hides when inactive.
 """
 from itertools import cycle
+import time
 
 import wx
 from wx.lib.embeddedimage import PyEmbeddedImage
@@ -118,7 +119,17 @@ class Spinner(wx.Panel):
     and auto-hides when inactive.
     """
 
-    def __init__(self, parent, id=wx.ID_ANY, frameDelay=100, **kwargs):
+    def __init__(self, parent, id=wx.ID_ANY, frameDelay=100, timeout=0, **kwargs):
+        """
+        Animated 'busy' indicator.
+
+        :param parent: Parent window (standard for `wx.Panel`)
+        :param id: Widget UID (standard for `wx.Panel`)
+        :param frameDelay: Time (ms) between frames of the animation.
+        :param timeout: Time (ms) for the spinner to remain visible. 0 will
+            remain until `Stop()` explicitly called.
+        :param kwargs: Other `wx.Panel` arguments.
+        """
         self.frameDelay = frameDelay
         super().__init__(parent, id, **kwargs)
 
@@ -137,9 +148,20 @@ class Spinner(wx.Panel):
         self.timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self.OnTimer)
 
+        self.timeout = timeout / 1000
+        self.deadline = 0
 
-    def Start(self):
-        """ Start the animation. """
+
+    def Start(self, timeout=None):
+        """ Start the animation.
+
+            :param timeout: Time (ms) for the spinner to remain visible.
+                0 will remain until `Stop()` explicitly called. Overrides
+                the `timeout` set in init.
+        """
+        timeout = timeout if timeout is not None else self.timeout
+        if timeout:
+            self.deadline = timeout + time.time()
         if not self.timer.IsRunning():
             self.timer.Start(self.frameDelay)
 
@@ -156,4 +178,7 @@ class Spinner(wx.Panel):
 
 
     def OnTimer(self, _event):
+        if self.timeout and time.time() > self.deadline:
+            self.Stop()
+            return
         self.image.SetBitmap(next(self.cycle))
