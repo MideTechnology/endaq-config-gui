@@ -13,6 +13,7 @@ from endaqconfig.base import EnumField, EnumOption, FloatField, TextField
 from endaqconfig.base import registerField
 from endaqconfig.common import getUtcOffset
 from endaqconfig.validators import TextValidator
+from endaqconfig.widgets.broker_dialog import BrokerNameDialog
 from endaqconfig.widgets.shared import PasswordTextCtrl
 
 logger = logging.getLogger(__file__)
@@ -29,47 +30,33 @@ class ServiceNameField(TextField):
 
             :see: `ConfigWidget.__init__()`
         """
-        self.setAttribDefault("label", "mDNS Instance Name")
+        self.setAttribDefault("label", "mDNS Service Name")
         self.oldvalue = ''
         super().__init__(*args, **kwargs)
 
 
-    def addField(self):
-        """ Class-specific method for adding the appropriate type of widget.
+    def initUI(self):
+        """ Build the user interface, adding the item label and/or checkbox,
+            and the broker select button.
         """
-        self.field = wx.ComboBox(self, -1, style=wx.CB_DROPDOWN)
+        super().initUI()
 
-        # Notice that this event is only supported by wxMSW, wxGTK with GTK+ 2.10 or later, and OSX/Cocoa.
-        self.Bind(wx.EVT_COMBOBOX_DROPDOWN, self.OnDropDown)
-        self.Bind(wx.EVT_COMBOBOX_CLOSEUP, self.OnCloseUp)
+        self.selectBtn = wx.Button(self, -1, "Select")
+        self.selectBtn.SetSize(-1, self.field.GetSize()[1])
+        self.selectBtn.Bind(wx.EVT_BUTTON, self.OnSelectButton)
+        self.sizer.Add(self.selectBtn, 0)
 
-        self.sizer.Add(self.field, 4, wx.EXPAND)
-        return self.field
-
-
-    def OnDropDown(self, evt):
-        """ Handle list opening event.
-        """
-        self.oldvalue = self.field.GetValue()
-
-        try:
-            wx.SetCursor(wx.Cursor(wx.CURSOR_ARROWWAIT))
-            brokers = findBrokers(None, persistent=True, scantime=0)
-            self.brokers = {broker.name: broker for broker in brokers}
-            self.field.SetItems(sorted(self.brokers))
-        finally:
-            wx.SetCursor(wx.NullCursor)
-
-        evt.Skip()
+        if self.tooltip:
+            self.selectBtn.SetToolTip(self.tooltip)
 
 
-    def OnCloseUp(self, evt):
-        """ Handle list closing event.
-        """
-        if not self.field.GetValue():
-            # Restore previous value if nothing selected
-            self.field.SetValue(self.oldvalue)
-        evt.Skip()
+    def OnSelectButton(self, evt):
+        with BrokerNameDialog(self.root) as dlg:
+            q = dlg.ShowModal()
+            if q == wx.ID_OK:
+                broker = dlg.getSelectedName()
+                if broker:
+                    self.field.SetValue(broker)
 
 
 @registerField

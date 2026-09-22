@@ -1,10 +1,11 @@
+from contextlib import suppress
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
 import wx
 import wx.lib.sized_controls as sc
 
-from endaq.device.mqtt.discovery import MDNSFinder, MDNSInfo, MDNS_FINDERS
+from endaq.device.mqtt.discovery import MDNSFinder, MDNSInfo
 
 from endaqconfig.widgets import events
 from endaqconfig.widgets.shared import parseIP
@@ -22,9 +23,11 @@ class BrokerDialog(sc.SizedDialog):
     """
 
 
+    # noinspection unused-parameter
     def __init__(self,
                  parent,
                  root=None,
+                 finder=None,
                  defaultBroker=None,
                  defaultAddress='localhost:1883',
                  defaultField=0,
@@ -60,7 +63,13 @@ class BrokerDialog(sc.SizedDialog):
         super().__init__(parent, -1, "Select MQTT Broker",
                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
 
-        self.finder = MDNSFinder(keepalive=1200)
+        if finder is None:
+            self.finder = MDNSFinder(keepalive=1200)
+            self.ownFinder = True
+        else:
+            self.finder = finder
+            self.ownFinder = False
+
         self.finder.start()
 
         self.brokers: Dict[str, MDNSInfo] = {}
@@ -71,9 +80,10 @@ class BrokerDialog(sc.SizedDialog):
         self.initUI()
 
 
-    # TODO: REMOVE NEXT COMMENT LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
-    # _noinspection PyUnresolvedReferences
+    # noinspection PyUnresolvedReferences
     def initUI(self):
+        """ Construct the UI.
+        """
         outerpane = self.GetContentsPane()
         outerpane.SetSizerType('vertical')
         pane = sc.SizedPanel(outerpane, -1)
@@ -87,13 +97,9 @@ class BrokerDialog(sc.SizedDialog):
         self.adpane = sc.SizedPanel(pane, -1)
         self.adpane.SetSizerType('horizontal')
         self.adpane.SetSizerProps(expand=True, proportion=1)
-        # self.brokerList = wx.Choice(self.adpane, -1, style=wx.BORDER_SUNKEN)
         self.brokerList = wx.ListBox(self.adpane, -1,
                                      style=wx.LB_SINGLE | wx.LB_OWNERDRAW)
         self.brokerList.SetSizerProps(expand=True, proportion=1)
-        # self.scanBtn = wx.Button(self.adpane, -1, 'Rescan')
-        # self.scanBtn.Bind(wx.EVT_BUTTON, self.OnScanButton)
-        # self.scanBtn.SetToolTip('Update the list of advertised brokers')
 
         # Second group: Enter IP address explicitly
         self.ipRB = wx.RadioButton(pane, -1, 'Broker Address:')
@@ -165,17 +171,6 @@ class BrokerDialog(sc.SizedDialog):
         """
         evt = events.EvtBrokerUpdate(brokers=brokers)
         wx.PostEvent(self, evt)
-
-
-    def OnBrokerUpdate(self, evt):
-        """ Handle a broker list update event.
-        """
-        # XXX: MOVE THIS TO OTHER HANDLERS
-        self.setMessage('')
-        current = self.getSelectedName()
-        if current:
-            self.defaultBroker = current
-        self.setBrokers(evt.brokers)
 
 
     def setBrokers(self, brokers):
@@ -250,14 +245,14 @@ class BrokerDialog(sc.SizedDialog):
     #
     # =======================================================================
 
-    # def OnScanButton(self, _evt):
-    #     """ Handle the 'Rescan' button press.
-    #     """
-    #     self.setMessage('')
-    #     current = self.getSelectedName()
-    #     if current:
-    #         self.defaultBroker = current
-    #     self.getBrokers()
+    def OnBrokerUpdate(self, evt):
+        """ Handle a broker list update event.
+        """
+        self.setMessage('')
+        current = self.getSelectedName()
+        if current:
+            self.defaultBroker = current
+        self.setBrokers(evt.brokers)
 
 
     def OnConnectButton(self, _evt):
@@ -300,8 +295,11 @@ class BrokerDialog(sc.SizedDialog):
             self.finder.addCallback(self.brokerUpdateCallback)
         else:
             logger.debug('Stopping BrokerDialog timer, spinner, etc.')
-            self.finder.stop()  # FUTURE: change to removeCallback if a root MDNSFinder is used
             self.connectFailTimer.Stop()
+            with suppress(KeyError):
+                self.finder.removeCallback(self.brokerUpdateCallback)
+            if self.ownFinder:
+                self.finder.stop()
             self.spinner.Stop()
             if self.thread and self.thread.is_alive():
                 logger.debug("BrokerDialog closing, but BrokerConnectThread still running!")
@@ -362,12 +360,72 @@ class BrokerDialog(sc.SizedDialog):
 
 
 # ===========================================================================
+#
+# ===========================================================================
+
+class BrokerNameDialog(BrokerDialog):
+    """
+    A simpler dialog for selecting an advertised broker name. It does not
+    allow entering an IP. Selecting a broker not connect.
+    """
+
+    # noinspection PyUnresolvedReferences
+    def initUI(self):
+        outerpane = self.GetContentsPane()
+        outerpane.SetSizerType('vertical')
+        pane = sc.SizedPanel(outerpane, -1)
+        pane.SetSizerType('form')
+        pane.SetSizerProps(expand=True, proportion=1)
+
+        self.brokerList = wx.ListBox(pane, -1,
+                                     style=wx.LB_SINGLE | wx.LB_OWNERDRAW)
+        self.brokerList.SetSizerProps(expand=True, proportion=1)
+
+        # Bottom buttons: Connect (OK) and Cancel
+        buttonpane = sc.SizedPanel(outerpane, -1)
+        buttonpane.SetSizerType("horizontal")
+        buttonpane.SetSizerProps(expand=True)
+        sc.SizedPanel(buttonpane, -1).SetSizerProps(proportion=1)  # Spacer
+        self.spinner = Spinner(buttonpane, timeout=1000)
+        self.spinner.SetSizerProps(border=(['top', 'right'], 4))
+        self.connectBtn = wx.Button(buttonpane, wx.ID_OK)
+        self.connectBtn.SetSizerProps(halign="right")
+        wx.Button(buttonpane, wx.ID_CANCEL).SetSizerProps(halign="right")
+
+        self.Bind(wx.EVT_SHOW, self.OnShow)
+        self.Bind(wx.EVT_CHOICE, self.OnBrokerChoice)
+        self.Bind(events.EVT_BROKER_UPDATE, self.OnBrokerUpdate)
+
+
+    def setMessage(self, message: str, error=False):
+        pass
+
+
+    def OnShow(self, evt):
+        """ Handle dialog being shown/hidden.
+        """
+        if evt.IsShown():
+            self.setBrokers(self.finder.getBrokerList())
+            self.spinner.Start(timeout=5000)
+            self.finder.addCallback(self.brokerUpdateCallback)
+        else:
+            with suppress(KeyError):
+                self.finder.removeCallback(self.brokerUpdateCallback)
+            if self.ownFinder:
+                self.finder.stop()
+            self.spinner.Stop()
+
+
+# ===========================================================================
 # DIALOG TEST CODE. REMOVE LATER.
 # ===========================================================================
 
 if __name__ == '__main__':
     logger.setLevel(logging.DEBUG)
     app = wx.App()
-    with BrokerDialog(None) as dlg:
-        dlg.ShowModal()
-        print(dlg.GetSize())
+    with BrokerNameDialog(None) as dlg:
+        q = dlg.ShowModal()
+        if q == wx.ID_OK:
+            print(dlg.getSelectedName())
+        elif q == wx.ID_CANCEL:
+            print('cancelled')
