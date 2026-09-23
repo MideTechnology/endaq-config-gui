@@ -996,6 +996,16 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 if self.list.GetItem(self.indicesByRecorder[rec]).IsEnabled()]
 
 
+    def _stopRecording(self, dev, **kwargs):
+        """ Helper method called from a thread.
+        """
+        dev.command.stopRecording(**kwargs)
+        try:
+            dev.command.closeStream()
+        except TimeoutError:
+            logger.warning(f'Timed out waiting for stream from {dev.serial} to close')
+
+
     def startRecording(self, *devices):
         """ Start one or more devices recording (assuming they can record).
         """
@@ -1424,7 +1434,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if recorder and recorder.canRecord:
                 if stop:
                     DeviceCommandThread(recorder,
-                                        recorder.command.stopRecording,
+                                        self._stopRecording,
+                                        recorder,
                                         callback=self.isDead)
                 else:
                     DeviceCommandThread(recorder,
@@ -1542,15 +1553,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnStopSelected(self, _evt):
         """ Stop all checked devices.
         """
-        def _stopRecording(dev, **kwargs):
-            dev.command.stopRecording(**kwargs)
-            try:
-                dev.command.closeStream()
-            except TimeoutError:
-                logger.warning(f'Timed out waiting for stream from {dev.serial} to close')
-
         # TODO: Better identification of valid devices (correct status, etc.)
-        devices = [(rec, _stopRecording, (rec,), {})
+        devices = [(rec, self._stopRecording, (rec,), {})
                    for rec in self.getChecked()
                    if rec.command.canRecord]
 
