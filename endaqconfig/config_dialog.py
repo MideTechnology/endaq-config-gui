@@ -34,23 +34,31 @@ import wx.lib.sized_controls as SC
 
 from ebmlite import loadSchema
 import endaq.device
-from endaq.device import Recorder, configio, ConfigError
+from endaq.device import Recorder, configio, ConfigError, CommunicationError
+from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface
+import endaq.device.mqtt.discovery
 
-from .base import logger
-from . import base
-from .common import isCompiled
-from .widgets import icons
+from endaqconfig import base
+from endaqconfig.common import isCompiled, isGateway
+from endaqconfig.widgets import icons
+from endaqconfig.widgets.shared import showError
 
-# Widgets. Even though these modules aren't used directly, they need to be
-# imported so that their contents can get into the `base.TAB_TYPES` dictionary.
-from . import special_tabs
-from . import wifi_tab
+# Widgets. Even though some of these modules aren't used directly, they need
+# to be imported so that their contents can get into the `base.TAB_TYPES` and
+# `base.FIELD_TYPES` dictionaries.
+from endaqconfig import special_tabs
+from endaqconfig import wifi_tab
+
+# noinspection unused-imports
+from endaqconfig import command_buttons, special_fields
 
 # ===============================================================================
 #
 # ===============================================================================
 
 __DEBUG__ = False
+
+logger = logging.getLogger(__name__)
 
 # ===============================================================================
 #
@@ -73,6 +81,8 @@ class ConfigDialog(SC.SizedDialog):
     )
 
 
+    # XXX: REMOVE NEXT LINE LATER
+    # noinspection unresolved-references
     def __init__(self, *args, **kwargs):
         """ Constructor. Takes standard `SizedDialog` arguments, plus:
 
@@ -82,18 +92,31 @@ class ConfigDialog(SC.SizedDialog):
                 checkbox will be checked by default.
             :param saveOnOk: If `False`, exiting the dialog with OK will not
                 save to the recorder. Primarily for debugging.
+            :param useUtc: If `True`, the 'in UTC' checkbox for wake times
+                will be checked by default.
+            :param showAdvanced: If `True`, show configuration options flagged
+                as 'advanced.'
+            :param wifi: If `False`, hide configuration options relevant to
+                Wi-Fi. Default is `True` (show Wi-Fi widgets, if present
+                in the `CONFIG.UI`).
         """
         self.schema = loadSchema('mide_config_ui.xml')
 
         self.setTime: bool = kwargs.pop('setTime', True)
-        self.device: Optional[Recorder] = kwargs.pop('device', None)
+        self.device: Recorder = kwargs.pop('device', None)
         self.saveOnOk: bool = kwargs.pop('saveOnOk', True)
         self.useUtc: bool = kwargs.pop('useUtc', True)
         self.showAdvanced: bool = kwargs.pop('showAdvanced', False)
+        self.showWifi: bool = kwargs.pop('wifi', True)
         self.DEBUG: bool = kwargs.pop('debug', __DEBUG__)
         icon = kwargs.pop('icon', None)
 
         self.postConfigMessage = None
+
+        if not self.showWifi:
+            self.excludeIds = [0x18ff7f]
+        else:
+            self.excludeIds = []
 
         if self.DEBUG:
             # May be redundant when running standalone, but just in case:
@@ -132,6 +155,7 @@ class ConfigDialog(SC.SizedDialog):
 
         self.configData = {}
         self.origConfigData = {}
+        self.unknownConfigData = {}  # config.cfg items not in CONFIG.UI
 
         self.configItems = {}
         self.configValues = base.ConfigContainer(self)
@@ -161,9 +185,10 @@ class ConfigDialog(SC.SizedDialog):
 
         SC.SizedPanel(check_box_sizer, -1).SetSizerProps(proportion=1)  # Spacer
 
-        if self.device.hasWifi:
+        if self.device.hasWifi and self.showWifi:
             self.applyWifiChangesCheck = wx.CheckBox(check_box_sizer, -1, "Apply Wi-Fi changes on exit")
-            self.applyWifiChangesCheck.SetSizerProps(halign='right', expand=True, border=(['top', 'bottom'], 8))
+            self.applyWifiChangesCheck.SetSizerProps(halign='right', expand=True,
+                                                     border=(['top', 'bottom'], 8))
             # self.applyWifiChangesCheck.SetValue(True)
         else:
             self.applyWifiChangesCheck = None
@@ -195,7 +220,7 @@ class ConfigDialog(SC.SizedDialog):
         self.setClockCheck.Enable(hasattr(self.device, 'setTime'))
 
         self.SetAffirmativeId(wx.ID_OK)
-        self.Bind(wx.EVT_BUTTON, self.OnOK, id=wx.ID_OK)
+        # self.Bind(wx.EVT_BUTTON, self.OnOK, id=wx.ID_OK)
         self.Bind(wx.EVT_BUTTON, self.OnCancel, id=wx.ID_CANCEL)
 
         # Restore the following if/when import and export are fixed.
@@ -217,6 +242,9 @@ class ConfigDialog(SC.SizedDialog):
             raise endaq.device.ConfigError('No CONFIG.UI data for {}'.format(self.device))
 
         for el in rootEl:
+            if not self.showWifi and el.name == 'WiFiSelectionTab':
+                continue
+
             if el.name in base.TAB_TYPES:
                 tabType = base.TAB_TYPES[el.name]
                 tab = tabType(self.notebook, -1, element=el, root=self)
@@ -227,6 +255,7 @@ class ConfigDialog(SC.SizedDialog):
                 self.hasCal = self.hasCal or isinstance(tab, special_tabs.FactoryCalibrationTab)
 
                 if not tab.isAdvancedFeature or self.showAdvanced:
+                    # noinspection unresolved-references
                     self.notebook.AddPage(tab, str(tab.label))
                     self.tabs.append(tab)
 
@@ -257,7 +286,8 @@ class ConfigDialog(SC.SizedDialog):
             try:
                 self.configItems[k].setConfigValue(v)
             except KeyError:
-                logger.info(f"Item {hex(k)} in config file not in UI, probably okay.")
+                # logger.debug(f"Item {hex(k)} in config file not in UI, probably okay.")
+                self.unknownConfigData[k] = v
             except AttributeError as err:
                 logger.warning("Unexpected {} in ConfigDialog.applyConfigData(): {}"
                                .format(type(err).__name__, err))
@@ -287,6 +317,7 @@ class ConfigDialog(SC.SizedDialog):
         """
         self.configData.clear()
         self.configData.update(self.configValues.toDict())
+        self.configData.update(self.unknownConfigData)
 
 
     def updateDeviceConfig(self):
@@ -317,6 +348,7 @@ class ConfigDialog(SC.SizedDialog):
         """
         maxVersion = max(self.device.config.supportedConfigVersions)
         version = self.device.config.configVersionRead or maxVersion
+
         if version < maxVersion:
             if version in self.device.config.supportedConfigVersions:
                 # Prompt to save in old version.
@@ -325,7 +357,7 @@ class ConfigDialog(SC.SizedDialog):
                   f"The recorder's firmware can use a later version (v{maxVersion}). Some newer configuration\n"
                   "options in the dialog may be lost if the older version is used.\n\n"
                   "'Yes' will save using the newer version (recommended).\n"
-                  "'No' will save using the file's original version."
+                  "'No' will save using the file's original version.",
                                   "Apply Configuration",
                                   wx.YES_NO | wx.YES_DEFAULT | wx.ICON_QUESTION,
                                   self)
@@ -333,6 +365,7 @@ class ConfigDialog(SC.SizedDialog):
                     version = maxVersion
             else:
                 version = maxVersion
+
         self.updateDeviceConfig()
         self.device.config.applyConfig(unknown=True, version=version)
 
@@ -342,8 +375,14 @@ class ConfigDialog(SC.SizedDialog):
         """
         self.updateConfigData()
 
-        oldKeys = sorted(self.origConfigData.keys())
-        newKeys = sorted(self.configData.keys())
+        def notDefault(d):
+            """ Get IDs of items in config.cfg that are known and not default. """
+            return set(k for k, v in d.items()
+                       if k in self.configItems
+                       and self.configValues[k] != self.configItems[k].default)
+
+        oldKeys = notDefault(self.origConfigData)
+        newKeys = notDefault(self.configData)
 
         if oldKeys != newKeys:
             return True
@@ -378,9 +417,9 @@ class ConfigDialog(SC.SizedDialog):
                 self.device.setTime()
             except Exception as err:
                 logger.error(f"Error setting clock: {err!r}")
-                self.showError("The recorder's clock could not be set.",
-                               "Configure Device",
-                               style=wx.OK | wx.OK_DEFAULT | wx.ICON_WARNING)
+                showError("The recorder's clock could not be set.",
+                          "Configure Device", parent=self, err=err,
+                          style=wx.OK | wx.OK_DEFAULT | wx.ICON_WARNING)
 
 
     def _saveTabs(self):
@@ -433,17 +472,16 @@ class ConfigDialog(SC.SizedDialog):
                     configio.exportConfig(self.device, dlg.GetPath(), unknown=True)
 
                 except ConfigError as err:
-                    self.showError(str(err), "Configuration Export Failed",
-                                   style=wx.OK | wx.ICON_EXCLAMATION)
+                    showError(str(err), "Configuration Export Failed",
+                              parent=self, err=err, style=wx.OK | wx.ICON_EXCLAMATION)
 
                 except Exception as err:
                     # TODO: More specific error message
                     logger.error('Could not export configuration ({}: {})'
                                  .format(type(err).__name__, err))
-                    self.showError(
-                            "The configuration data could not be exported to the "
-                            "specified file.", "Configuration Export Failed",
-                            style=wx.OK | wx.ICON_EXCLAMATION)
+                    showError("The configuration data could not be exported to the "
+                              "specified file.", "Configuration Export Failed",
+                              parent=self, err=err, style=wx.OK | wx.ICON_EXCLAMATION)
 
 
     # ===========================================================================
@@ -454,6 +492,14 @@ class ConfigDialog(SC.SizedDialog):
     def OnOK(self, evt: wx.Event):
         """ Handle dialog OK, saving changes.
         """
+        evt.Skip()
+
+
+    def shutdown(self, parent: Optional[wx.Window] = None) -> bool:
+        """ Handle post-OK dialog shutdown.
+        """
+        parent = parent or self
+
         # Try to ensure Wi-Fi threads have stopped. Redundant in most cases, but
         # needed in some error conditions.
         for t in self.tabs:
@@ -470,7 +516,7 @@ class ConfigDialog(SC.SizedDialog):
 
             if not self.saveOnOk:
                 self.updateConfigData()
-                evt.Skip()
+                # evt.Skip()
                 return
 
             self.saveConfigData()
@@ -480,12 +526,15 @@ class ConfigDialog(SC.SizedDialog):
             self._saveTabs()
             self._setClock()
 
-            if self.device.hasWifi and self.configData.get(0x18ff7f) != wifiWasEnabled:
+            if (self.device.hasWifi
+                    and self.configData.get(0x18ff7f) != wifiWasEnabled
+                    and not isGateway(self.device)):
                 q = wx.MessageBox("Reset recording device?\n\n"
                                   "Enabling or disabling Wi-Fi requires the "
                                   "recording device to reset in order to take effect.\n"
                                   "Reset recorder now?",
                                   "Configure Device",
+                                  parent=parent,
                                   style=(wx.YES_NO | wx.YES_DEFAULT
                                          | wx.ICON_QUESTION))
                 if q == wx.YES:
@@ -512,8 +561,8 @@ class ConfigDialog(SC.SizedDialog):
                 else:
                     msg += " (error code {})".format(err.errno)
 
-            self.showError(msg, "Configuration Error")
-            evt.Skip()
+            showError(msg, "Configuration Error", parent=parent, err=err)
+            # evt.Skip()
             return
 
         except Exception as err:
@@ -525,54 +574,40 @@ class ConfigDialog(SC.SizedDialog):
             if self.showAdvanced:
                 msg += str(err).capitalize()
 
-            self.showError(msg, "Configuration Error")
-            evt.Skip()
+            showError(msg, "Configuration Error", parent=parent, err=err)
+            # evt.Skip()
             return
 
         finally:
+            # Shut down all persistent MDNSFinder instances
+            # XXX: (this should probably be a function in endaq.device.mqtt.discovery)
+            for finder in endaq.device.mqtt.discovery.MDNS_FINDERS:
+                finder.stop()
+
             wx.SetCursor(wx.NullCursor)
 
-        evt.Skip()
+        # evt.Skip()
 
 
     def OnCancel(self, evt: wx.Event):
-        """ Handle dialog cancel, prompting the user to save any changes.
+        """ Handle dialog cancel, prompting the user to discard any changes.
         """
+        if wx.GetKeyState(wx.WXK_CONTROL) and wx.GetKeyState(wx.WXK_SHIFT):
+            evt.Skip()
+            return
+
         if self.configChanged():
-            q = self.showError("Save configuration changes before exiting?\n\n"
-                               '"No" will discard changes.',
-                               "Configure Device",
-                               style=(wx.YES_NO | wx.CANCEL | wx.CANCEL_DEFAULT
-                                      | wx.ICON_QUESTION))
-            if q == wx.CANCEL:
-                return
-            elif q == wx.YES:
-                self.saveConfigData()
-                evt.Skip()
+            q = showError("Discard changes?\n\n"
+                          'Some configuration changes may not have been applied.',
+                          "Configure Device",
+                          parent=self,
+                          style=(wx.YES_NO | wx.NO_DEFAULT | wx.ICON_INFORMATION))
+            if q == wx.NO:
                 return
 
         # If cancelled, the returned configuration data is `None`
         self.configData = None
         evt.Skip()
-
-
-    def showError(self,
-                  msg: str,
-                  caption: str,
-                  style: int = wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR,
-                  err: Optional[Exception] = None):
-        """ Show an error message. Wraps the standard message box to add some
-            debugging stuff.
-        """
-        if not msg.endswith(('.', '!', '?')):
-            msg += "."
-
-        q = wx.MessageBox(msg, caption, style=style, parent=self)
-        if wx.GetKeyState(wx.WXK_CONTROL) and wx.GetKeyState(wx.WXK_SHIFT):
-            raise
-        if err is not None:
-            logger.debug("%s: %r" % (msg, err))
-        return q
 
 
 # ===============================================================================
@@ -586,12 +621,12 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
                       saveOnOk: bool = True,
                       showAdvanced: bool = False,
                       icon: Optional[wx.Icon] = None,
-                      exceptions: bool = True,
                       debug: bool = __DEBUG__) -> Union[tuple, None]:
     """ Create the configuration dialog for a recording device.
 
-        :param path: The path to the data recorder (e.g. a mount point under
-            *NIX or a drive letter under Windows)
+        :param path: The `Recorder` instance of the device to configure,
+            or the path to the data recorder (e.g. a mount point under
+            *NIX or a drive letter under Windows) if mounted as a drive.
         :param setTime: If `True`, the checkbox to set the device's clock
             on save will be checked by default.
         :param useUtc: If `True`, the 'in UTC' checkbox for wake times will
@@ -603,9 +638,6 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
             as 'advanced.'
         :param icon: An icon to appear in the window's titlebar (not
             visible in all operating systems/window managers).
-        :param exceptions: If `True`, allow all exceptions to be raised. If
-            `False`, show descriptive message boxes when anticipated errors
-             occur, intended for standalong use.
         :param debug: If `True`, show/log debugging messages.
         :return: `None` if configuration was cancelled, else a tuple
             containing:
@@ -623,46 +655,60 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
 
     if not dev:
         msg = "Path '{}' does not appear to be a recorder".format(path)
-        if exceptions:
-            raise ValueError(msg)
 
-        wx.MessageBox(msg, "Configuration Error",
-                      parent=parent,
-                      style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
+        showError(msg, "Configuration Error",
+                  parent=parent,
+                  style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
         return None
 
-    if not dev.config.getConfigUI():
-        if exceptions:
-            raise endaq.device.DeviceError("The device appears to have corrupted configuration UI data.", dev)
-
-        wx.MessageBox("Could not configure recorder\n\n"
-                      "Valid configuration UI data could not be retrieved for the device.",
-                      "Configuration Error",
-                      parent=parent,
-                      style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
-        return None
+    isWifi = isinstance(dev.command, MQTTCommandInterface)
 
     try:
+        if isWifi:
+            logger.debug("Setting LockID")
+            dev.command.setLockID()
+
+        if not dev.config.getConfigUI():
+            showError("Could not configure recorder\n\n"
+                      "Valid configuration UI data could not be retrieved for the device.",
+                      "Configuration Error",
+                      parent=parent)
+            return None
+
+        showWifi = not isWifi
+
         with ConfigDialog(parent, device=dev, setTime=setTime,
                           useUtc=useUtc, saveOnOk=saveOnOk,
                           showAdvanced=showAdvanced,
+                          wifi=showWifi,
                           icon=icon, debug=debug) as dlg:
-            dlg.ShowModal()
+            q = dlg.ShowModal()
+            if q == wx.ID_OK:
+                dlg.shutdown()
+
             result = dlg.configData
             setTime = dlg.setClockCheck.GetValue()
             useUtc = dlg.useUtc
             msg = dlg.postConfigMessage or getattr(dev, "POST_CONFIG_MSG", None)
 
     except PermissionError:
-        if exceptions:
-            raise
-
-        wx.MessageBox("Another process appears to have control of the device.\n\n"
-                      "Close other application that could be using the recorder and try again.",
-                      "Configuration Error",
-                      parent=parent,
-                      style=wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR)
+        showError("Another process appears to have control of the device.\n\n"
+                  "Close other application that could be using the recorder and try again.",
+                  "Configuration Error",
+                  parent=parent)
         return None
+
+    except CommunicationError as err:
+        showError("An error occurred communicating with the device.\n\n"
+                  "If any configuration changes were made, they may not have been applied.",
+                  "Configuration Error",
+                  err=err, parent=parent)
+        return None
+
+    finally:
+        if isWifi:
+            logger.debug("Clearing LockID")
+            dev.command.clearLockID()
 
     if result is None:
         return None

@@ -5,34 +5,31 @@ a device's "UI Hints" data (a/k/a CONFIG_UI).
 The dialog itself was split off to allow a more modular approach.
 """
 
+# TODO: Define all attributes in `__init__` using an 'unsupplied' value (not
+#  None) and check for that instead of `hasattr` and catching `AttributeError`.
+#  This will reduce the number of warnings flagged by the linter, which drown
+#  out real issues.
+
 __author__ = "dstokes"
-__copyright__ = "Copyright 2022 Mide Technology Corporation"
-
-# ===============================================================================
-#
-# ===============================================================================
-
-# ===============================================================================
-#
-# ===============================================================================
+__copyright__ = "Copyright 2026 Mide Technology Corporation"
 
 import logging
-logger = logging.getLogger('endaqconfig')
-
-# ===============================================================================
-#
-# ===============================================================================
+logger = logging.getLogger(__name__)
 
 from fnmatch import fnmatch
 import string
 import time
+from typing import Optional
+
+from ebmlite import Element, MasterElement
 
 import wx
 import wx.lib.filebrowsebutton as FB
 import wx.lib.scrolledpanel as SP
 
-from .common import getUtcOffset, isCompiled
-from .widgets.shared import DateTimeCtrl, wx_DateTime_FromTimeT
+from endaqconfig.common import getUtcOffset
+from endaqconfig.validators import TextValidator
+from endaqconfig.widgets.shared import DateTimeCtrl, wx_DateTime_FromTimeT
 
 # ===============================================================================
 # --- Utility functions
@@ -63,98 +60,15 @@ def registerTab(cls):
     return cls
 
 
-# ===============================================================================
-#
-# ===============================================================================
 
-def getClipboardText():
-    """ Retrieve text from the clipboard.
+def getConfigId(el: Element) -> Optional[int]:
+    """ Get a UI widget element's `ConfigID`.
     """
-    if not wx.TheClipboard.IsOpened():
-        wx.TheClipboard.Open()
-
-    obj = wx.TextDataObject()
-    if wx.TheClipboard.GetData(obj):
-        return obj.GetText()
-
-    return ""
-
-
-# ===============================================================================
-#
-# ===============================================================================
-
-class TextValidator(wx.Validator):
-    """ Generic Validator for TextField and ASCIIField text widgets.
-    """
-
-    VALID_KEYS = (wx.WXK_LEFT, wx.WXK_UP, wx.WXK_RIGHT, wx.WXK_DOWN,
-                  wx.WXK_HOME, wx.WXK_END, wx.WXK_PAGEUP, wx.WXK_PAGEDOWN,
-                  wx.WXK_INSERT, wx.WXK_DELETE)
-
-
-    def __init__(self, validator, maxLen=None):
-        """ Instantiate a text field validator.
-
-            :keyword validator: A function that validates the string.
-        """
-        self.maxLen = maxLen
-        self.isValid = validator
-        wx.Validator.__init__(self)
-        self.Bind(wx.EVT_CHAR, self.OnChar)
-        self.Bind(wx.EVT_TEXT_PASTE, self.OnPaste)
-
-
-    def Clone(self):
-        """ Required in wx.PyValidator subclasses. """
-        return TextValidator(self.isValid, self.maxLen)
-
-
-    def TransferToWindow(self):
-        """ Required in wx.PyValidator subclasses. """
-        return True
-
-
-    def TransferFromWindow(self):
-        """ Required in wx.PyValidator subclasses. """
-        return True
-
-
-    def Validate(self, win):
-        txt = self.GetWindow().GetValue()
-        return self.isValid(txt)
-
-
-    def OnChar(self, evt):
-        """ Validate a character that has been typed.
-        """
-        key = evt.GetKeyCode()
-
-        if key < wx.WXK_SPACE or key in self.VALID_KEYS:
-            evt.Skip()
-            return
-
-        val = self.GetWindow().GetValue()
-
-        if self.isValid(chr(key)) and len(val) < self.maxLen:
-            evt.Skip()
-            return
-
-        if not wx.Validator.IsSilent():
-            wx.Bell()
-
-        return
-
-
-    def OnPaste(self, evt):
-        """ Validate text pasted into the field.
-        """
-        txt = getClipboardText()
-        current = self.GetWindow().GetValue()
-        if self.isValid(current + txt):
-            evt.Skip()
-        elif not wx.Validator.IsSilent():
-            wx.Bell()
+    if isinstance(el, MasterElement):
+        for ch in el:
+            if ch.name == 'ConfigID':
+                return ch.value
+    return None
 
 
 # ===============================================================================
@@ -170,7 +84,6 @@ class DisplayContainer(object):
         by giving dependent values higher config IDs than the fields they
         depend upon.
     """
-
 
     def __init__(self, root):
         self.root = root
@@ -273,12 +186,14 @@ class ConfigBase(object):
             "ExcludeID": "exclude",
             "DisplayFormat": "displayFormat",
             "ValueFormat": "valueFormat",
+            "MinLength": "minLength",
             "MaxLength": "maxLength",
             "*Min": "min",
             "*Max": "max",
             "*Value": "default",
             "*Gain": "gain",
-            "*Offset": "offset"
+            "*Offset": "offset",
+            "Validator": "validator"
             }
 
     # Class-specific element/attribute mapping. Subclasses can use this for
@@ -370,6 +285,20 @@ class ConfigBase(object):
             return self.label
 
 
+    def parseElementAttribute(self, el):
+        key = value = None
+        for child in el:
+            if child.name == 'AttributeName':
+                key = child.value
+            elif child.name.endswith('Attribute'):
+                value = child.value
+        if key is not None and value is not None:
+            logger.debug(f'Read attribute in {self.element}: {key=!r}, {value=!r}')
+            self.elementAttributes[key] = value
+        else:
+            logger.error(f'Bad attribute in {self.element}: {key=!r}, {value=!r}')
+
+
     def __init__(self, element, root):
         """ Constructor. Instantiates a `ConfigBase` and parses parameters out
             of the supplied EBML element.
@@ -390,6 +319,8 @@ class ConfigBase(object):
 
         self.valueType = self.DEFAULT_TYPE
         self.exclude = []
+
+        self.elementAttributes = {}
 
         for el in self.element.value:
             if el.name == "IsAdvancedFeature":
@@ -412,6 +343,9 @@ class ConfigBase(object):
             if el.name in args:
                 # Known element name (verbatim): set attribute
                 setattr(self, args[el.name], el.value)
+
+            elif el.name == 'Attribute':
+                self.parseElementAttribute(el)
             else:
                 # Match wildcards and set attribute
                 for k, v in args.items():
@@ -714,6 +648,25 @@ class ConfigWidget(wx.Panel, ConfigBase):
         self.Enable(enabled)
 
 
+    def blockOK(self) -> bool | str:
+        """ Are the widget's contents or value valid enough to save?
+
+            :return: A message if saving should be blocked (a string that
+                doesn't cast to `False`), or `False` if saving is allowed.
+        """
+        return False
+
+
+    def blockCancel(self) -> bool | str:
+        """ Is the widget or its contents in a busy stat the should
+            disallow cancelling?
+
+            :return: A message if cancelling should be blocked (a string that
+                doesn't cast to `False`), or `False` if cancelling is allowed.
+        """
+        return False
+
+
     # ===========================================================================
     # Event handlers
     # ===========================================================================
@@ -785,6 +738,7 @@ class TextField(ConfigWidget):
     DEFAULT_TYPE = "TextValue"
 
     # String of valid characters. 'None' means all are valid.
+    # All characters are permitted in UTF-8 fields.
     VALID_CHARS = None
 
 
@@ -800,12 +754,11 @@ class TextField(ConfigWidget):
 
     def isValid(self, s):
         """ Filter for characters valid in the text field. Used by the field's
-            Validator. It just checks the string contents vs. `VALID_CHARS` and
-            its length vs. `maxLength`.
+            Validator. It just checks the string contents vs. `VALID_CHARS`.
+            Length checks are handled by the `TextValidator`.
+
+            :param s: The string/character to validate.
         """
-        # All characters are permitted in UTF-8 fields.
-        if self.maxLength is not None and len(s) > self.maxLength:
-            return False
         if self.VALID_CHARS is None:
             return True
         return all(c in self.VALID_CHARS for c in s)
@@ -814,18 +767,19 @@ class TextField(ConfigWidget):
     def addField(self):
         """ Class-specific method for adding the appropriate type of widget.
         """
-        validator = TextValidator(self.isValid, self.maxLength)
+        validator = TextValidator(self.isValid, minLen=self.minLength, maxLen=self.maxLength)
         if self.textLines > 1:
             self.field = wx.TextCtrl(self, -1, str(self.default or ''),
                                      style=wx.TE_MULTILINE | wx.TE_PROCESS_ENTER,
                                      validator=validator)
-            # XXX: This is supposed to set multi-line field height, doesn't work
+            # NOTE: This is supposed to set multi-line field height, doesn't work
             s = self.field.GetSize()[1]
             self.field.SetSize(-1, s * self.textLines)
         else:
             self.field = wx.TextCtrl(self, -1, str(self.default or ''),
                                      validator=validator)
 
+        self.field.Bind(wx.EVT_KILL_FOCUS, self.OnExitField)
         self.sizer.Add(self.field, 4, wx.EXPAND)
         return self.field
 
@@ -845,6 +799,17 @@ class TextField(ConfigWidget):
         else:
             self.field.Enable(enabled)
         wx.Panel.Enable(self, enabled)
+
+
+    def OnExitField(self, evt):
+        """ Handler for leaving a text field; does validation.
+        """
+        try:
+            validator = evt.GetEventObject().GetValidator()
+            if validator:
+                validator.Validate(validator.GetWindow())
+        finally:
+            evt.Skip()
 
 
 # ===============================================================================
@@ -1108,125 +1073,6 @@ class EnumOption(ConfigBase):
 # ===============================================================================
 
 @registerField
-class BitField(EnumField):
-    """ A widget representing a set of bits in an unsigned integer, with
-        individual checkboxes for each bit. A subclass of `EnumField`, each
-        `EnumOption` creates a checkbox; its value indicates the index of the
-        corresponding bit (0 is the first bit, 1 is the second, 2 is the third,
-        etc.).
-    """
-    DEFAULT_TYPE = "UIntValue"
-
-
-    def addField(self):
-        """ Class-specific method for adding the appropriate type of widget.
-        """
-        if self.labelWidget is None:
-            # No label or checkbox; add checks directly to main sizer.
-            childSizer = self.sizer
-        else:
-            # the field has a label or a checkbox; indent child checkboxes.
-            childSizer = wx.BoxSizer(wx.VERTICAL)
-            self.sizer.Add(childSizer, 1, wx.WEST, 24)
-
-        for o in self.options:
-            o.default = (self.default >> o.value) & 1
-            o.checkbox = wx.CheckBox(self, -1, o.label)
-            childSizer.Add(o.checkbox, 0,
-                           wx.ALIGN_LEFT | wx.EXPAND | wx.NORTH | wx.SOUTH, 4)
-
-            tooltip = o.tooltip or self.tooltip
-            if tooltip:
-                o.checkbox.SetToolTip(tooltip)
-
-        self.field = None
-        return childSizer
-
-
-    def setDisplayValue(self, val, check=True):
-        """ Check the items according to the bits of the supplied value.
-        """
-        for o in self.options:
-            o.checkbox.SetValue(bool(val & (1 << o.value)))
-        self.setCheck(check)
-
-
-    def initUI(self):
-        """ Build the user interface, adding the item label and/or checkbox,
-            the appropriate UI control(s) and a 'units' label (if applicable).
-            Separated from `__init__()` for the sake of subclassing.
-        """
-        optionEls = [el for el in self.element.value if el.name == "EnumOption"]
-        self.options = [EnumOption(el, self, n) for n, el in enumerate(optionEls)]
-
-        self.sizer = wx.BoxSizer(wx.VERTICAL)
-
-        if self.label:
-            if self.CHECK:
-                self.checkbox = wx.CheckBox(self, -1, self.label or '')
-                self.labelWidget = self.checkbox
-                self.sizer.Add(self.checkbox, 0)  # , wx.ALIGN_CENTER_VERTICAL)
-                self.Bind(wx.EVT_CHECKBOX, self.OnCheck)
-                self.setCheck(False)
-            else:
-                self.checkbox = None
-                self.labelWidget = wx.StaticText(self, -1, self.label or '')
-                self.sizer.Add(self.labelWidget, 0)  # , wx.ALIGN_CENTER_VERTICAL)
-
-            self.labelWidget.SetFont(self.labelWidget.GetFont().Bold())
-        else:
-            self.checkbox = self.labelWidget = None
-
-        self.addField()
-        self.unitLabel = None
-
-        if self.tooltip:
-            self.SetToolTip(self.tooltip)
-            if self.labelWidget is not None:
-                self.labelWidget.SetToolTip(self.tooltip)
-
-        self.SetSizer(self.sizer)
-
-        self.setToDefault()
-
-        # Child checks should also fire the 'on check' handler.
-        self.Bind(wx.EVT_CHECKBOX, self.OnCheck)
-
-
-    def getDisplayValue(self):
-        """ Get the field's displayed value.
-        """
-        if self.checkbox is not None and not self.checkbox.GetValue():
-            return None
-        if self.isDisabled():
-            return None
-
-        val = 0
-        for o in self.options:
-            if o.checkbox.GetValue():
-                val = val | (1 << o.value)
-
-        return val
-
-
-    def updateDisabled(self):
-        """ Automatically enable or disable this field according to its
-            `isDisabled` expression (if any). Individually disabled options
-            get set to their default.
-        """
-        super(BitField, self).updateDisabled()
-
-        if not self.isDisabled():
-            for o in self.options:
-                dis = o.isDisabled()
-                o.checkbox.Enable(not dis)
-                if dis:
-                    o.checkbox.SetValue(bool(o.default))
-
-
-# ===============================================================================
-
-@registerField
 class DateTimeField(IntField):
     """ UI widget for editing a date/time value.
     """
@@ -1301,10 +1147,6 @@ class DateTimeField(IntField):
             if self.isLocalTime():
                 val += self.localTz
 
-        # XXX: THIS IS BROKEN IN wxPYTHON 4.1.1 IN PYTHON 3!!! GENERATES BAD TIMES (i.e., year 55236)
-        #   I've reported this: https://github.com/wxWidgets/Phoenix/issues/1910
-        #   Remove the workaround once this is fixed in wxPython!
-        # dt = wx.DateTime.FromTimeT(int(val)).MakeUTC()
         dt = wx_DateTime_FromTimeT(int(val)).MakeUTC()  # Workaround; remove once wx.DateTime.FromTimeT() is fixed!
 
         super(DateTimeField, self).setDisplayValue(dt, check)
@@ -1323,7 +1165,7 @@ class DateTimeField(IntField):
         return val
 
 
-    def OnTzChange(self, evt):
+    def OnTzChange(self, _evt):
         """ Handle Local/UTC selection change.
         """
         # NOTE: This changes the main dialog's useUtc attribute, but it will
@@ -1353,62 +1195,11 @@ class DateTimeField(IntField):
         self.updateToolTips()
 
 
-# ===============================================================================
-
 @registerField
-class UTCOffsetField(FloatField):
-    """ Special-case UI widget for entering the local UTC offset, with the
-        ability to get the value from the computer.
+class CheckDateTimeField(DateTimeField):
+    """ UI widget (with a checkbox) for editing a date/time value.
     """
-    DEFAULT_TYPE = "IntValue"
-
-
-    def __init__(self, *args, **kwargs):
-        """ Constructor.
-
-            :see: `ConfigWidget.__init__()`
-        """
-        self.setAttribDefault('min', -23.0)
-        self.setAttribDefault('max', 23.0)
-        self.setAttribDefault('units', "Hours")
-        self.setAttribDefault('increment', 0.5)
-        self.setAttribDefault('displayFormat', "x/3600.0")
-        self.setAttribDefault('valueFormat', "x*3600")
-        self.setAttribDefault("label", "Local UTC Offset")
-        super(UTCOffsetField, self).__init__(*args, **kwargs)
-
-
-    def initUI(self):
-        """ Build the user interface, adding the item label and/or checkbox,
-            the appropriate UI control(s) and a 'units' label (if applicable).
-            The UTC Offset fields have an extra button to the right of the
-            units label.
-        """
-        super(UTCOffsetField, self).initUI()
-
-        self.getOffsetBtn = wx.Button(self, -1, "Get Local Offset")
-        self.getOffsetBtn.SetSize(-1, self.field.GetSize()[1])
-        self.getOffsetBtn.Bind(wx.EVT_BUTTON, self.OnSetTZ)
-        self.sizer.Add(self.getOffsetBtn, 0)
-
-        if self.tooltip:
-            self.getOffsetBtn.SetToolTip(self.tooltip)
-
-
-    def OnSetTZ(self, event):
-        """ Handle the 'Get Local Offset' button press by getting the local
-            time zone offset.
-        """
-        self.setDisplayValue(getUtcOffset())
-
-
-    def getConfigValue(self):
-        """ Get the widget's value, as written to the config file.
-        """
-        val = super().getConfigValue()
-        if val is None:
-            return None
-        return int(val)
+    CHECK = True
 
 
 # ===============================================================================
@@ -1478,94 +1269,9 @@ class CheckEnumField(EnumField):
 
 
 @registerField
-class CheckBitField(BitField):
-    """ A widget (with a checkbox) representing a set of bits in an unsigned
-        integer, with individual checkboxes for each bit. A subclass of
-        `EnumField`, each `EnumOption` creates a checkbox; its value indicates
-        the index of the corresponding bit (0 is the first bit, 1 is the
-        second, 2 is the third, etc.).
-    """
-    CHECK = True
-
-
-@registerField
-class CheckDateTimeField(DateTimeField):
-    """ UI widget (with a checkbox) for editing a date/time value.
-    """
-    CHECK = True
-
-
-@registerField
-class CheckUTCOffsetField(UTCOffsetField):
-    """ Special-case UI widget (with a checkbox) for entering the local UTC
-        offset, with the ability to get the value from the computer.
-    """
-    CHECK = True
-
-
-@registerField
 class CheckBinaryField(BinaryField):
     """ Special-case UI widget (with a checkbox) for selecting binary data.
         FOR FUTURE IMPLEMENTATION.
-    """
-    CHECK = True
-
-
-# ===============================================================================
-# --- Type-specific fields/widgets
-# These few are mostly proof-of-concept and don't provide additional features.
-# Future ones may offer special handling (selectable units, etc).
-# ===============================================================================
-
-@registerField
-class FloatTemperatureField(FloatField):
-    """ `FloatField` variant with appropriate defaults for temperature display.
-    """
-
-
-    def __init__(self, *args, **kwargs):
-        """ Constructor.
-
-            :see: `ConfigWidget.__init__()`
-        """
-        self.setAttribDefault("units", u"\u00b0C")
-        self.setAttribDefault("label", "Temperature")
-        self.setAttribDefault("min", -40.0)
-        self.setAttribDefault("max", 80.0)
-        super(FloatTemperatureField, self).__init__(*args, **kwargs)
-
-
-@registerField
-class CheckFloatTemperatureField(FloatTemperatureField):
-    """ `CheckFloatField` variant with appropriate defaults for temperature
-        display.
-    """
-    CHECK = True
-
-
-@registerField
-class FloatAccelerationField(FloatField):
-    """ `FloatField` variant with appropriate defaults for acceleration display.
-    """
-
-
-    def __init__(self, *args, **kwargs):
-        """ Constructor.
-
-            :see: `ConfigWidget.__init__()`
-        """
-        self.setAttribDefault("units", u"g")
-        self.setAttribDefault("label", "Acceleration")
-        self.setAttribDefault("min", -100.0)
-        self.setAttribDefault("max", 100.0)
-        self.setAttribDefault("default", 5.0)
-        super(FloatAccelerationField, self).__init__(*args, **kwargs)
-
-
-@registerField
-class CheckFloatAccelerationField(FloatAccelerationField):
-    """ `CheckFloatField` variant with appropriate defaults for acceleration
-        display.
     """
     CHECK = True
 
@@ -1575,101 +1281,14 @@ class CheckFloatAccelerationField(FloatAccelerationField):
 # ===============================================================================
 
 @registerField
-class CheckDriftButton(ConfigWidget):
-    """ Special-case "field" consisting of a button that checks the recorder's
-        clock versus the host computer's time. It does not affect the config
-        data.
-    """
-    UNITS = False
-    DEFAULT_TYPE = None
-
-
-    def __init__(self, *args, **kwargs):
-        """ Constructor.
-
-            :see: `ConfigWidget.__init__()`
-        """
-        self.setAttribDefault("label", "Check Clock Drift")
-        self.setAttribDefault("tooltip", "Read the recorder's clock and "
-                                         "compare to the current system time.")
-        super(CheckDriftButton, self).__init__(*args, **kwargs)
-
-
-    def initUI(self):
-        """ Build the user interface, adding the item label and/or checkbox,
-            the appropriate UI control(s) and a 'units' label (if applicable).
-            Separated from `__init__()` for the sake of subclassing.
-        """
-        self.checkbox = None
-        self.sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.field = wx.Button(self, -1, self.label)
-        self.sizer.Add(self.field, 0)
-
-        if self.tooltip:
-            self.SetToolTip(self.tooltip)
-            self.field.SetToolTip(self.tooltip)
-
-        self.SetSizer(self.sizer)
-
-        self.Bind(wx.EVT_BUTTON, self.OnButtonPress)
-
-
-    def OnButtonPress(self, evt):
-        """ Handle button press: perform the clock drift test.
-        """
-        self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
-        try:
-            times = self.root.device.getTime()
-        except Exception:
-            if self.root.DEBUG and not isCompiled():
-                raise
-            self.showError("Could not read the recorder's clock!", self.label,
-                           style=wx.OK | wx.ICON_ERROR)
-            return
-
-        drift = times[0] - times[1]
-        msg = "Recorder is %.4f seconds %s the computer." % \
-              (drift, "behind" if drift > 0 else "ahead of")
-
-        self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
-        wx.MessageBox(msg, self.label, parent=self, style=wx.OK | wx.ICON_INFORMATION)
-
-
-@registerField
 class VerticalPadding(ConfigWidget):
     """ Special-case "field" that simply provides resizeable vertical padding,
         so the  fields following it appear at the bottom of the dialog. Note
         that this is handled as a special case by `Group.addChild()`.
     """
 
-
     def initUI(self):
         self.checkbox = self.field = None
-
-
-@registerField
-class ResetButton(CheckDriftButton):
-    """ Special-case "field" that consists of a button that resets all its
-        sibling fields in its group or tab.
-    """
-
-
-    def __init__(self, *args, **kwargs):
-        """ Constructor.
-
-            :see: `ConfigWidget.__init__()`
-        """
-        self.setAttribDefault("label", "Reset to Defaults")
-        self.setAttribDefault("tooltip", "Reset this set of fields to their "
-                                         "default values")
-        super(ResetButton, self).__init__(*args, **kwargs)
-
-
-    def OnButtonPress(self, evt):
-        """ Handle button press: reset sibling fields to the factory defaults.
-        """
-        if self.group is not None:
-            self.group.setToDefault()
 
 
 # ===============================================================================
@@ -1718,9 +1337,20 @@ class Group(ConfigWidget):
         """ Get the appropriate class for an EBML *Field element. Elements
             without a specialized subclass will get a generic widget for their
             basic data type.
-
-            Note: does not handle IDs not present in the schema!
         """
+        # Tabs and groups can have non-field items; skip them
+        if not isinstance(el, MasterElement):
+            return None
+
+        # 'FieldSubType' is a backwards-compatible way to support new element types
+        # in very old versions of enDAQ Lab. Also for new fields that should default
+        # to something other than the base type if unknown.
+        for child in el.value:
+            if child.name == 'FieldSubtype':
+                if child.value in el.schema and (name := el.schema.get(child.value).name) in FIELD_TYPES:
+                    return FIELD_TYPES[name]
+                break
+
         if el.name in FIELD_TYPES:
             return FIELD_TYPES[el.name]
 
@@ -1739,6 +1369,9 @@ class Group(ConfigWidget):
     def addChild(self, el, flags=wx.ALIGN_LEFT | wx.EXPAND | wx.NORTH, border=4):
         """ Add a child field to the Group.
         """
+        if self.root.excludeIds and getConfigId(el) in self.root.excludeIds:
+            return
+
         cls = self.getWidgetClass(el)
         if cls is None:
             return
@@ -1827,6 +1460,38 @@ class Group(ConfigWidget):
         if self.checkbox is not None and not self.checkbox.GetValue():
             return None
         return not self.isDisabled() or None
+
+
+    def blockOK(self) -> bool | list[str]:
+        """ Are the widget's contents or value valid enough to save?
+
+            :return: A list of messages if saving should be blocked (strings
+                that don't cast to `False`), or `False` if saving is allowed.
+        """
+        if self.isDisabled():
+            return False
+
+        blocks = [child.blockOK() for child in self.fields]
+        if not any(blocks):
+            return False
+        return [b for b in blocks if b]
+
+
+    def blockCancel(self) -> bool | list[str]:
+        """ Is the widget or its contents in a busy stat the should
+            disallow/warn against cancelling?
+
+            :return: A list of messages if cancelling should be blocked
+                (strings that don't cast to `False`), or `False` if
+                cancelling is allowed.
+        """
+        if self.isDisabled():
+            return False
+
+        blocks = [child.blockCancel() for child in self.fields]
+        if not any(blocks):
+            return False
+        return [b for b in blocks if b]
 
 
 @registerField

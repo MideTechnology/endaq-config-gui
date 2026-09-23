@@ -134,3 +134,6 @@ dmypy.json
 # Icon source files. Keep only original SVG.
 icons_src/*.png
 icons_src/*.py
+
+# Temporary files (streaming tests, etc.)
+temp/

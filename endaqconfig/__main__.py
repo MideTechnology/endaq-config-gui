@@ -53,7 +53,6 @@ def run(debug=__DEBUG__):
         if dev:
             configureRecorder(dev,
                               showAdvanced=args.advanced,
-                              exceptions=False,
                               debug=debug)
     finally:
         wx.SetCursor(wx.NullCursor)

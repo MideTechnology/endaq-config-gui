@@ -17,10 +17,12 @@ def batStat2name(status: dict[str, Any],
             description of the battery state.
     """
     # {'hasBattery': True, 'charging': True, 'percentage': False, 'level': 255}
-    if not status or not status.get('hasBattery'):
+    if not status:
+        return f"battery_none_{theme}", "Battery status not reported"
+    elif status.get('externalPower', False):
+        return f"battery_external_{theme}", "Externally powered"
+    elif not status.get('hasBattery'):
         return None, ''
-    if status.get('externalPower', False):
-        return None, "Externally powered"
 
     percentage = status.get('percentage')
     charging = '_charging' if status.get('charging') else ''
@@ -182,3 +184,19 @@ battery_unknown_dk = PyEmbeddedImage(
     b'a0BtoIlHoSXUu/SV0X3MTiVe+0TXzzfCvjD7CfTDMYwOKv1cPJFN3867ipBJzLkfIr5e2ipq'
     b'uQDdKfKbx6HJfEGnuJrA3D+gd4QDpFIjXsUDAAAAAElFTkSuQmCC')
 
+battery_none_dk = PyEmbeddedImage(
+    b'iVBORw0KGgoAAAANSUhEUgAAABoAAAAQCAYAAAAI0W+oAAAACXBIWXMAAAMMAAADDAECvD0X'
+    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAKlJREFUOI3d1DFKQ1EQ'
+    b'BdBzYzBgCivRys7Cys4NiGu2chHauAMhiEjKFPFamNgK8l8Kp5pimMPMe0zaOkTMDqIgOMbV'
+    b'IPS17TvMcYZrfEyMLHGCHwg+2z5OqSS5xSLJadv16Dc6x32Si5HQEx5QHM1/Kf5ztN1gk6Qc'
+    b'8HsPmyjJYtc/QyHc4HKXb0dCsMJz2/UemiW5mxhZYtV2zffq3vBi0AnaJ/l31/sLvKQuFELu'
+    b'l8YAAAAASUVORK5CYII=')
+
+battery_external_dk = PyEmbeddedImage(
+    b'iVBORw0KGgoAAAANSUhEUgAAABoAAAAQCAYAAAAI0W+oAAAACXBIWXMAAAMMAAADDAECvD0X'
+    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAONJREFUOI3tlL1qQkEU'
+    b'hL+JAQWxtQuCVSofQX0Mm7SSvISdzxCIhZDW0tpGFOxFsJCUYp8+kyIie+X+eC94qxwYWJg9'
+    b'O4dhzso2ZdRDKSplCj0WaZJUAV6ALvAUUB+2Z7FNtnMBaAArwDGYJ/UpbxgkvQOvCfQRWJ/P'
+    b'P8DY9haICknqAM0UnS9gB9RunGtoewIQWjIg3o4Qowx+AbTPaIXWham760JdW/cM1FPun4AD'
+    b'UAV0w/sX6yLxtr3PnEyaAm8J9HUYNuHjReK9JGe8cy+s7W9Jff4Wtkd0YT8Tnfj/VIvWL6jj'
+    b'z1N0gQDNAAAAAElFTkSuQmCC')

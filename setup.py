@@ -20,7 +20,7 @@ def get_version(rel_path):
 
 
 INSTALL_REQUIRES = [
-    "endaq-device>=1.4.0",
+    "endaq-device @ git+https://github.com/MideTechnology/endaq-device.git@develop",
     "wxPython>=4.2.0",
 ]
 
@@ -45,6 +45,10 @@ setuptools.setup(
         keywords='endaq slamstick config utility gui',
         packages=setuptools.find_packages(),
         package_dir={'': '.'},
+        package_data={
+            'endaqconfig': ['widgets/password-dots.ttf',  # is this right?
+                            ]
+        },
         entry_points={'console_scripts': [
             'endaqconfig=endaqconfig.__main__:run',
         ]},
