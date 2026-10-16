@@ -591,7 +591,7 @@ def promptDeviceReboot(device: Recorder,
                                  callback=callback)
 
     # This will need revising if we use different hardware
-    if isGateway(device) and 'MQTT' not in type(device.command).__name__:
+    if isGateway(device) and 'Serial' in type(device.command).__name__:
         wx.MessageBox('Unplug Gateway USB cable now!\n\n'
                       'The Gateway must not have a USB connection when booting.',
                       'Disconnect USB',

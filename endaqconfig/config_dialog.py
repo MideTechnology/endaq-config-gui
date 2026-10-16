@@ -581,7 +581,7 @@ class ConfigDialog(SC.SizedDialog):
         finally:
             # Shut down all persistent MDNSFinder instances
             # XXX: (this should probably be a function in endaq.device.mqtt.discovery)
-            for finder in endaq.device.mqtt.discovery.MDNS_FINDERS:
+            for finder in endaq.device.mqtt.discovery.MDNS_FINDERS.values():
                 finder.stop()
 
             wx.SetCursor(wx.NullCursor)
@@ -707,6 +707,7 @@ def configureRecorder(path: Union[str, endaq.device.Recorder],
 
     finally:
         if isWifi:
+            # TODO: Need to catch clearLockID() errors (e.g., timeout)!
             logger.debug("Clearing LockID")
             dev.command.clearLockID()
 

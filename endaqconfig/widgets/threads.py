@@ -13,6 +13,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union, TYPE_CHECK
 from endaq.device import (Recorder, getDevices, DeviceError, CommandError,
                           CommunicationError, DeviceTimeout, UnsupportedFeature)
 from endaq.device.command_interfaces import SerialCommandInterface
+from endaq.device.https_interface import HTTPSCommandInterface
+import endaq.device.https_interface as https
 from endaq.device.mqtt.mqtt_interface import MQTTConnector
 from endaq.device.response_codes import (DeviceStatusCode, CommandResponseCode,
                                          WiFiConnectionStatus)
@@ -106,7 +108,7 @@ class DeviceScanThread(threading.Thread):
             a `MQTTDeviceManager` state update message.
         """
         try:
-            print(update.get('DeviceList'))
+            # print(update.get('DeviceList'))
             sns = set(d.get('SerialNumber') for d in update['DeviceList']['DeviceListItem'])
             if sns != self.lastMqttSerials:
                 logger.debug('Got update from Manager; devices changed')
@@ -138,6 +140,9 @@ class DeviceScanThread(threading.Thread):
         # logger.debug('Collecting USB devices...')
         localdevs = getDevices()
         devices.update(localdevs)
+
+        httpsdevs = https.getDevices(finder=self.parent.finder)
+        devices.update(httpsdevs)
 
         connected = self.parent.connector and self.parent.connector.client.is_connected()
 
@@ -173,15 +178,22 @@ class DeviceScanThread(threading.Thread):
 
             self.devices = devices
 
+        # print(devices)
         with self.updating:
             # logger.debug('Starting updateDeviceStatus threads')
-            # XXX: Skip update for timed out devices?
             for dev in self.devices.copy():
-                if dev.command.status[0] > 0:  # device has reported status
-                    if not isOnline(dev):
-                        continue
-                    elif isSleeping(dev):
-                        continue
+                if not dev.hasCommandInterface:
+                    continue
+                # if dev.command.status[0] == 0:  # device has reported status
+                #     continue
+                if isSleeping(dev):
+                    # print(f'{dev} sleeping, skip')
+                    continue
+                if (not isOnline(dev) and dev.command.status[1] is not None and not dev.command.available):
+                    # Note: non-MQTT devices can't report status w/o command, so also
+                    # check if the command interface is available.
+                    # print(f'{dev} offline, skip')
+                    continue
 
                 if dev not in self.updateThreads:
                     currentThreads[dev] = DeviceCommandThread(dev, updateDeviceStatus,
@@ -302,17 +314,29 @@ def updateDeviceStatus(device: Recorder, callback: Callable, timeout=1):
         # Very old firmware and/or no serial command interface.
         return
 
-    if type(device.command) is SerialCommandInterface:
+    if type(device.command) in (SerialCommandInterface, HTTPSCommandInterface):
+        # print(f'Updating status of {device}')
         try:
-            device.command.getBatteryStatus(timeout=timeout, callback=callback)
-        except CommandError:
-            # Older FW that doesn't support GetBatteryStatus returns
-            # ERR_INVALID_COMMAND. Try to `ping` to get status.
-            try:
+            if device.firmwareVersion >= 10000:
+                try:
+                    device.command.getBatteryStatus(timeout=timeout, callback=callback)
+                except CommunicationError as err:
+                    logger.debug(f'getBatteryStatus to {device} failed: {err!r}')
+                    pass
+                except CommandError:
+                    # Older FW that doesn't support GetBatteryStatus returns
+                    # ERR_INVALID_COMMAND. Try to `ping` to get status.
+                    try:
+                        device.command.ping(timeout=timeout, callback=callback)
+                    except (DeviceError, AttributeError, IOError) as err:
+                        logger.debug(f'Ping to {device} failed: {err!r}')
+                        pass
+            else:
                 device.command.ping(timeout=timeout, callback=callback)
-            except (DeviceError, AttributeError, IOError) as err:
-                logger.debug(f'Ping to {device} failed: {err!r}')
-                pass
+
+        except (DeviceError, AttributeError, IOError) as err:
+            logger.debug(f'Ping to {device} failed: {err!r}')
+            pass
         except (NotImplementedError, UnsupportedFeature):
             pass
         except TimeoutError:
@@ -322,7 +346,7 @@ def updateDeviceStatus(device: Recorder, callback: Callable, timeout=1):
     try:
         # This will read and cache the calibration data.
         # XXX: What if the userpage is updated?
-        if device.command.status[1] in (DeviceStatusCode.IDLE, DeviceStatusCode.IDLE_UNMOUNTED):
+        if device.canRecord and device.command.status[1] in (DeviceStatusCode.IDLE, DeviceStatusCode.IDLE_UNMOUNTED):
             device.getCalExpiration()
     except (DeviceError, AttributeError, IOError, TimeoutError):
         pass

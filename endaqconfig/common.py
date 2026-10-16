@@ -19,7 +19,8 @@ except (ImportError, AttributeError):
     DOUBLE_CLICK_DEBOUNCE_TIME = 300
 
 
-from endaq.device import Recorder, DeviceStatusCode
+from endaq.device import Recorder, DeviceStatusCode, DeviceError
+from endaq.device.command_interfaces import FileCommandInterface, SerialCommandInterface
 
 
 # ===============================================================================
@@ -132,10 +133,17 @@ def isOnline(device: Recorder) -> bool:
         return False
     elif not device.isRemote:
         return True
+    if not device.hasCommandInterface:
+        # Very old firmware and/or no serial command interface.
+        return True
 
     # TODO: Also exclude timed out devices?
     status = device.command.status[1]
-    if status is not None and 300 <= status < 500:
+    if status is None:
+        # File command interface never sets status
+        return isinstance(device, FileCommandInterface)
+
+    if status is not None and 400 <= status < 500:
         # Codes 400-499 are 'offline' variants of positive codes 0-99
         return False
     return status not in (DeviceStatusCode.ERR_DISCONNECTED,
@@ -145,7 +153,8 @@ def isOnline(device: Recorder) -> bool:
                           DeviceStatusCode.START_PENDING,
                           DeviceStatusCode.STOP_PENDING,
                           DeviceStatusCode.UPLOADING,
-                          None)
+                          DeviceStatusCode.WAKING,
+                          )
 
 
 def isSleeping(device: Recorder) -> bool:
@@ -155,8 +164,7 @@ def isSleeping(device: Recorder) -> bool:
     if status is not None and 200 <= status < 400:
         # Codes 300-399 are 'periodic' variants of positive codes 0-99
         return True
-    return status in (DeviceStatusCode.SLEEPING,
-                      DeviceStatusCode.WAKING)
+    return status == DeviceStatusCode.SLEEPING
 
 
 def isGateway(device: Recorder) -> bool:

@@ -23,8 +23,9 @@ import wx.lib.filebrowsebutton as FBB
 
 from endaq.device import (Recorder, RECORDERS, UnsupportedFeature,
                           CommandError, DeviceError, deviceChanged,
-                          _module_busy)
+                          DeviceStatusCode, _module_busy)
 from endaq.device.base import os_specific
+from endaq.device.mqtt.discovery import MDNSFinder
 from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface, MQTTConnector
 
 from endaqconfig.common import isGateway, isOnline, isSleeping
@@ -246,6 +247,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.indicesByRecorder: Dict[Recorder, int] = {}  # List index keyed by `Recorder`
         self.checkedRecorders: set[Recorder] = set()  # Checked items/recorders (to keep checks after list updates)
 
+        self.finder = MDNSFinder(keepalive=1200)
+        self.finder.start()
         self.brokerInfo: Optional[dict] = None  # Selected MQTT broker's mDNS info
 
         # TODO: Better column collection (assemble piecemeal based on parameters)
@@ -302,7 +305,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     # TODO: REMOVE NEXT COMMENT LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
-    # xnoinspection PyUnresolvedReferences
+    # noinspection PyUnresolvedReferences
     def _addBrokerSelect(self, pane):
         """ Add MQTT Broker selection widgets.
         """
@@ -629,7 +632,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # Check for cached cal data, skip if not present. As it can be slow
         # on MQTT devices (endaq.device circa 2025-09), reading this is done
         # in a separate thread.
-        if dev._calibration:
+        if dev.canRecord and dev._calibration:
             calExp = dev.getCalExpiration()
             if calExp:
                 calExp = calExp.replace(tzinfo=datetime.timezone.utc)
@@ -798,9 +801,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             # drawn in gray as if they were (so checkbox still accessible)
             color = STATUS_DISPLAY[100][1]
             font = self.sleepingListFont
-        elif isGateway(dev):
-            # DCB/HDS Gateway device; highlight it.
-            font = self.boldListFont
+        # elif isGateway(dev):
+        #     # DCB/HDS Gateway device; highlight it.
+        #     font = self.boldListFont
 
         for i, col in enumerate(self.columns[1:], 1):
             # Don't rebuild button panel in update
@@ -1006,24 +1009,33 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             logger.warning(f'Timed out waiting for stream from {dev.serial} to close')
 
 
+    def _startRecording(self, dev, *args, **kwargs):
+        ts, _status, msg = dev.command.status
+        dev.command.status = ts, DeviceStatusCode.START_PENDING, msg
+        dev.command.startRecording(*args, **kwargs)
+
+
     def startRecording(self, *devices):
         """ Start one or more devices recording (assuming they can record).
         """
         # TODO: Better identification of valid devices (correct status, etc.)
-        recorders = [(dev, dev.command.startRecording, (), {})
+        recorders = [(dev, self._startRecording, (), {})
                      for dev in devices if dev.command.canRecord]
 
         # TODO: Handle errors better
         self.startThreads('start recording', recorders)
 
 
+    def _startStreaming(self, dev, path, **kwargs):
+        ts, _status, msg = dev.command.status
+        dev.command.status = ts, DeviceStatusCode.START_PENDING, msg
+        dev.command.saveStream(path)
+        dev.command.startRecording(**kwargs)
+
+
     def startStreaming(self, *devices):
         """ Start one or more devices streaming (assuming they can stream).
         """
-        def _startStreaming(dev, path, **kwargs):
-            dev.command.saveStream(path)
-            dev.command.startRecording(**kwargs)
-
         path = os.path.abspath(self.savePathField.GetValue())
         if not os.path.isdir(path):
             wx.MessageBox(f'Invalid output path\n\nThe directory "{path}"\n'
@@ -1031,7 +1043,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             return
 
         # TODO: Better identification of valid devices (correct status, etc.)
-        streamers = [(dev, _startStreaming, (dev, path), {})
+        streamers = [(dev, self._startStreaming, (dev, path), {})
                      for dev in devices if dev.command.canStream]
 
         # TODO: Handle errors better
@@ -1069,7 +1081,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         try:
             self.SetCursor(wx.Cursor(wx.CURSOR_ARROWWAIT))
             self.pauseUpdater()
-            with BrokerDialog(self) as dlg:
+            with BrokerDialog(self, finder=self.finder) as dlg:
                 dlg.ShowModal()
         finally:
             self.startUpdater()
@@ -1401,6 +1413,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if self.tooltipFrame:
                 self.tooltipFrame.timer.Stop()
                 self.tooltipFrame.Hide()
+            self.finder.stop()
 
         evt.Skip()
         
@@ -1432,12 +1445,15 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if not recorder:
                 recorder = self.recordersByIndex.get(self.selected, None)
             if recorder and recorder.canRecord:
+                ts, _status, msg = recorder.command.status
                 if stop:
+                    recorder.command.status = ts, DeviceStatusCode.STOP_PENDING, msg
                     DeviceCommandThread(recorder,
                                         self._stopRecording,
                                         recorder,
                                         callback=self.isDead)
                 else:
+                    recorder.command.status = ts, DeviceStatusCode.START_PENDING, msg
                     DeviceCommandThread(recorder,
                                         recorder.command.startRecording,
                                         callback=self.isDead)

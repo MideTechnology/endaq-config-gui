@@ -32,8 +32,8 @@ logger = logging.getLogger(__name__)
 
 # Status display: (list column text, list text color, tooltip text).
 # `None` for color uses default. `None` for tooltip uses list column text.
-# Note that some codes are for display and may not be in `DeviceStatusCode` (e.g. 29).
-# If status >= 200, use status % 100.
+# Note that some codes are for display and may not be in `DeviceStatusCode`
+# (e.g. 29 and 101). If status >= 200, use status % 100.
 STATUS_DISPLAY = {
     -110: ("Disconnected",  wx.RED,                     None),
     -10:  ("Error",         wx.RED,                     None),  # Also default for other errors
@@ -48,7 +48,7 @@ STATUS_DISPLAY = {
     50:   ("Uploading",     wx.BLUE,                    "Uploading to Cloud"),
     60:   ("Streaming",     wx.BLUE,                    "Streaming Data"),
     100:  ("Sleeping",      wx.Colour(100, 100, 100),   None),
-    101:  ("Waking",        wx.Colour(200, 200, 200),   None),
+    101:  ("Waking",        wx.Colour(100, 100, 200),   None),
     110:  ("Offline",       wx.Colour(200, 200, 200),   None),
     111:  ("Shutdown",      wx.Colour(200, 0, 0),       "System shutting down"),
 }
@@ -345,12 +345,13 @@ class ListContextMenu(wx.Menu):
         locked, mine = self.device.command.isLocked()
         anothers = locked and not mine
 
-        isRecording = self.device.command.status[1] in (DeviceStatusCode.RECORDING,
-                                                        DeviceStatusCode.RECORDING_PERIODIC,
-                                                        DeviceStatusCode.TRIGGERING,
-                                                        DeviceStatusCode.TRIGGERING_PERIODIC,
-                                                        DeviceStatusCode.STREAMING)
-        available = isOnline(device)
+        status = self.device.command.status[1]
+        isRecording = status in (DeviceStatusCode.RECORDING,
+                                 DeviceStatusCode.RECORDING_PERIODIC,
+                                 DeviceStatusCode.TRIGGERING,
+                                 DeviceStatusCode.TRIGGERING_PERIODIC,
+                                 DeviceStatusCode.STREAMING)
+        available = isOnline(device) and status != DeviceStatusCode.WAKING
         devstr = deviceString(self.device)
 
         # TODO: Only show commands device supports? Makes it more consistent

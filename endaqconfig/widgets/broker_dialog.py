@@ -423,9 +423,9 @@ class BrokerNameDialog(BrokerDialog):
 if __name__ == '__main__':
     logger.setLevel(logging.DEBUG)
     app = wx.App()
-    with BrokerNameDialog(None) as dlg:
+    with BrokerDialog(None) as dlg:
         q = dlg.ShowModal()
         if q == wx.ID_OK:
-            print(dlg.getSelectedName())
+            print(f'Selected {dlg.getSelectedName()!r}')
         elif q == wx.ID_CANCEL:
             print('cancelled')
