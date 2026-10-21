@@ -28,7 +28,7 @@ from endaq.device.base import os_specific
 from endaq.device.mqtt.discovery import MDNSFinder
 from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface, MQTTConnector
 
-from endaqconfig.common import isGateway, isOnline, isSleeping
+from endaqconfig.common import isLocked, isOnline, isSleeping
 from endaqconfig.widgets import battery_icons
 from endaqconfig.widgets import icons
 from endaqconfig.widgets.broker_dialog import BrokerDialog
@@ -781,7 +781,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         #     logger.debug(f'recorder status error: {err!r}')
         #     status = 0
 
-        locked, mine = dev.command.isLocked()
+        # XXX: this command is indirectly `device_synchronized`
+        locked, mine = isLocked(dev)
         anothers = locked and not mine
         enabled = (enabled and isOnline(dev) and not anothers)
         sleeping = isSleeping(dev)
@@ -1492,9 +1493,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         clear = getattr(evt, 'clear', False)
         force = getattr(evt, 'force', False)
 
-        # TODO: this whole thing might need to go into a thread, as
-        #  `isLocked()` could potentially take time to execute.
-        locked, mine = device.command.isLocked()
+        locked, mine = isLocked(device)
         current = device.command.getLockID() if force else None
 
         if locked and not mine and not force:

@@ -8,6 +8,7 @@ import calendar
 from datetime import datetime
 import sys
 import time
+from typing import Tuple
 
 import wx
 
@@ -141,7 +142,7 @@ def isOnline(device: Recorder) -> bool:
     status = device.command.status[1]
     if status is None:
         # File command interface never sets status
-        return isinstance(device, FileCommandInterface)
+        return isinstance(device.command, FileCommandInterface)
 
     if status is not None and 400 <= status < 500:
         # Codes 400-499 are 'offline' variants of positive codes 0-99
@@ -161,7 +162,7 @@ def isSleeping(device: Recorder) -> bool:
     """ Is the device in a 'sleeping' state?
     """
     status = device.command.status[1]
-    if status is not None and 200 <= status < 400:
+    if status is not None and 300 <= status < 400:
         # Codes 300-399 are 'periodic' variants of positive codes 0-99
         return True
     return status == DeviceStatusCode.SLEEPING
@@ -173,3 +174,16 @@ def isGateway(device: Recorder) -> bool:
     # Gateway-ness determined by bits in the "recorder's" `RecorderTypeUID`.
     devtype = device.getInfo('RecorderTypeUID', 0)
     return bool(devtype & 0x20000000)  # bit and 29 (gateway)
+
+
+def isLocked(device: Recorder) -> Tuple[bool, bool]:
+    """ Has the hardware been 'claimed' for exclusive use via `setLockID()`?
+        This version uses only cached values and does not issue a command.
+    """
+    if device.apiVersion < 3:
+        return False, False
+
+    lock = device.command.lockId[1]
+    if not lock or not any(lock):
+        return False, False
+    return True, device.command.hostId == lock

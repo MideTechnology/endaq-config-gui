@@ -357,7 +357,6 @@ def getDeviceStatus(device: Recorder) \
                  Tuple[Optional[int], str],
                  Optional[str],
                  Optional[int],
-                 bool,
                  bool]:
     """ Get the device's cached battery info, status, lock ID, and command
         interface availability in a form that can be hashed and easily tested
@@ -365,12 +364,12 @@ def getDeviceStatus(device: Recorder) \
         status; it does not ping the device to update it.
 
         :return: A tuple containing the device's battery status, status code
-            and message, path, lock ID, command interface availability, and
-            whether it has read calibration data yet.
+            and message, path, lock ID, and whether it has read calibration
+            data yet.
     """
     if not device.hasCommandInterface:
         # Old devices won't have a CommandInterface.
-        return (None, (DeviceStatusCode.IDLE, ''), None, None, True, True)
+        return (None, (DeviceStatusCode.IDLE, ''), None, None, True)
 
     # All command interfaces have _battery, status, and lockId, but only
     # newer serial and MQTT interfaces set them. Older devices will set

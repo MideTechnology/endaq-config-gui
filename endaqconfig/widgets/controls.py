@@ -10,12 +10,11 @@ from wx.lib.agw import ultimatelistctrl as ULC
 
 from endaq.device.response_codes import DeviceStatusCode
 from endaq.device import CommandError, UnsupportedFeature, Recorder, Gateway
-from endaq.device.command_interfaces import SerialCommandInterface
 
 from . import battery_icons
 from . import icons
 from .events import EvtConfig, EvtRecord, EvtStream, EvtLockDevice, EvtBlink, EvtReset, EvtShutdown
-from ..common import deviceString, isOnline, isGateway
+from ..common import deviceString, isOnline, isGateway, isLocked
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -211,7 +210,7 @@ class NewControlButtons(wx.Panel):
             self.lockBtn.UnsetToolTip()
             return
 
-        locked, mine = self.device.command.isLocked()
+        locked, mine = isLocked(self.device)
 
         icons = self.lockedIcons if locked else self.lockIcons
         self.lockBtn.SetBitmap(icons[0])
@@ -305,7 +304,7 @@ class NewControlButtons(wx.Panel):
     def OnLockButton(self, _evt):
         """ Handle Lock button press.
         """
-        locked, mine = self.device.command.isLocked()
+        locked, mine = isLocked(self.device)
         self._postEvent(EvtLockDevice(device=self.device,
                                       clear=locked,
                                       force=wx.GetKeyState(wx.WXK_CONTROL)))
@@ -342,7 +341,7 @@ class ListContextMenu(wx.Menu):
         icons = NewControlButtons.ICONS
 
 
-        locked, mine = self.device.command.isLocked()
+        locked, mine = isLocked(self.device)
         anothers = locked and not mine
 
         status = self.device.command.status[1]

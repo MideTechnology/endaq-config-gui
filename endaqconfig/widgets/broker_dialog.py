@@ -291,7 +291,7 @@ class BrokerDialog(sc.SizedDialog):
         """
         if evt.IsShown():
             self.setBrokers(self.finder.getBrokerList())
-            self.spinner.Start(timeout=5000)
+            # self.spinner.Start(timeout=5000)
             self.finder.addCallback(self.brokerUpdateCallback)
         else:
             logger.debug('Stopping BrokerDialog timer, spinner, etc.')
