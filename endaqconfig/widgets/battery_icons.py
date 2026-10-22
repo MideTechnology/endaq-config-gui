@@ -32,9 +32,12 @@ def batStat2name(status: dict[str, Any],
     if level < 20:
         lev = 0
     elif not percentage:
-        if level > 80:
+        if level >= 80:
             lev = 100
             desc = "Full"
+        elif level <= 25:
+            lev = 20
+            desc = "Low"
         else:
             lev = "unknown"
             desc = "Partially charged"

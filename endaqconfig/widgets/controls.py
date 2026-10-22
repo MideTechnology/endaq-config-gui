@@ -141,6 +141,7 @@ class NewControlButtons(wx.Panel):
         sizer.Fit(self)
 
 
+    # noinspection unreachable-code
     @classmethod
     def _loadImages(cls):
         """
@@ -235,6 +236,10 @@ class NewControlButtons(wx.Panel):
 
     def updateButtons(self, enabled=True):
         """ Update the button labels, tooltips, and enabled/disabled state.
+
+            :param enabled: If `True`, buttons will be allowed to become
+                enabled according to device state. If `False`, buttons
+                will all be forced to be disabled.
         """
 
         try:
@@ -244,15 +249,30 @@ class NewControlButtons(wx.Panel):
         except (AttributeError, CommandError, UnsupportedFeature):
             status = None
 
-        self.recording = status in (DeviceStatusCode.START_PENDING,
-                                    DeviceStatusCode.RECORDING,
+        self.recording = status in (DeviceStatusCode.RECORDING,
                                     DeviceStatusCode.STREAMING,
                                     DeviceStatusCode.TRIGGERING)
         self.uploading = status == DeviceStatusCode.UPLOADING
 
-        self.Enable(enabled and not self.uploading)
+        enabled = enabled and status not in (DeviceStatusCode.STOP_PENDING,
+                                             DeviceStatusCode.START_PENDING,
+                                             DeviceStatusCode.RESET_PENDING,
+                                             DeviceStatusCode.WAKING,
+                                             DeviceStatusCode.OFFLINE,
+                                             DeviceStatusCode.SHUTDOWN,
+                                             DeviceStatusCode.UPLOADING)
+
+        # Note: Even if the parent panel is disabled, the buttons are
+        # individually disabled as well. This is deliberately done to
+        # ensure they render correctly.
+        self.Enable(enabled)
         self.recBtn.Enable(enabled
-                           and self.device.command.canRecord)
+                           and self.device.command.canRecord
+                           and not self.recording)
+
+        self.streamBtn.Enable(enabled
+                              and self.device.command.canStream
+                              and not self.recording)
 
         if self.configBtn.IsShown():
             self.configBtn.Enable(enabled
@@ -260,8 +280,7 @@ class NewControlButtons(wx.Panel):
                                   # and self.device.config.available
                                   and not self.recording)
 
-        # TODO: Redo this logic?
-        self.stopBtn.Enable(self.recording and not self.uploading)
+        self.stopBtn.Enable(enabled and self.recording)
 
         self.updateLock()
 
@@ -536,6 +555,7 @@ def populateStatusColumn(dev: Recorder,
         :param root: The parent window/dialog.
         :return: A string for use in column sorting.
     """
+    # noinspection unreachable-code
     if column is None:
         return ''
 

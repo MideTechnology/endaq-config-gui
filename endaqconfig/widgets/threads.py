@@ -70,7 +70,6 @@ class DeviceScanThread(threading.Thread):
         self.mqttUpdated = threading.Event()  # Set when the set of MQTT devices changes
         self.updateThreads: Dict[Recorder, "DeviceCommandThread"] = {}
         self.updateCancelled = threading.Event()
-
         self.updating = threading.RLock()
 
         self.lastScan: float = 0.0
@@ -78,8 +77,6 @@ class DeviceScanThread(threading.Thread):
         self.mqttDevices = set()  # Last found MQTT devices
         self.lastMqttSerials = set()  # Serial numbers of known MQTT devices
         self.devices = set()  # All found devices, USB and MQTT
-
-        self.deviceStatus: dict[Recorder, tuple] = {}
 
         DeviceScanThread._INDEX += 1
         super().__init__(name=f'{type(self).__name__}-{DeviceScanThread._INDEX}',
@@ -92,10 +89,10 @@ class DeviceScanThread(threading.Thread):
     def clearCache(self):
         """ Clear cached recorders and related data.
         """
-        self.deviceStatus.clear()
-        self.mqttDevices.clear()
-        self.lastMqttSerials.clear()
-        self.devices.clear()
+        with self.updating:
+            self.mqttDevices.clear()
+            self.lastMqttSerials.clear()
+            self.devices.clear()
 
 
     def onUpdate(self, update: dict):
@@ -211,6 +208,7 @@ class DeviceScanThread(threading.Thread):
                 sleep(0.1)
                 continue
 
+            # noinspection broad-exception
             try:
                 now = time()
                 if (not self.interval

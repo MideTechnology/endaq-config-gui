@@ -165,7 +165,10 @@ def isSleeping(device: Recorder) -> bool:
     if status is not None and 300 <= status < 400:
         # Codes 300-399 are 'periodic' variants of positive codes 0-99
         return True
-    return status == DeviceStatusCode.SLEEPING
+
+    # For display purposes, WAKING is considered SLEEPING
+    return status in (DeviceStatusCode.SLEEPING,
+                      DeviceStatusCode.WAKING)
 
 
 def isGateway(device: Recorder) -> bool:
@@ -187,3 +190,17 @@ def isLocked(device: Recorder) -> Tuple[bool, bool]:
     if not lock or not any(lock):
         return False, False
     return True, device.command.hostId == lock
+
+
+def isRecording(device: Recorder) -> bool:
+    """ Is the device in a 'recording' state?
+    """
+    if not device.command.canRecord:
+        return False
+
+    status = device.command.status[1]
+    return (status in (DeviceStatusCode.RECORDING,
+                       DeviceStatusCode.RECORDING_PERIODIC,
+                       DeviceStatusCode.TRIGGERING,
+                       DeviceStatusCode.TRIGGERING_PERIODIC,
+                       DeviceStatusCode.STREAMING))

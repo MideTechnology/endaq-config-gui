@@ -28,7 +28,7 @@ from endaq.device.base import os_specific
 from endaq.device.mqtt.discovery import MDNSFinder
 from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface, MQTTConnector
 
-from endaqconfig.common import isLocked, isOnline, isSleeping
+from endaqconfig.common import isLocked, isOnline, isSleeping, isRecording
 from endaqconfig.widgets import battery_icons
 from endaqconfig.widgets import icons
 from endaqconfig.widgets.broker_dialog import BrokerDialog
@@ -601,9 +601,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             # HACK: datetime values differed at least 3 times between Python
             #  versions 3.9 and 3.12+; make explicitly sure we're using UTC.
             age = now - dev.birthday.replace(tzinfo=datetime.timezone.utc)
-            lifeleft = dev.LIFESPAN - age
+            lifeleft: datetime.timedelta = dev.LIFESPAN - age
         else:
-            age = lifeleft = None
+            lifeleft = None
+            age: datetime.timedelta = None
 
         pathtext = dev.path
         if dev.path and os.path.exists(dev.path):
@@ -769,6 +770,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         if dev not in self.indicesByRecorder:
             # New device, generally shouldn't happen.
+            logger.debug(f"Can't update row for {dev} (unknown index)")
             return
 
         index = self.indicesByRecorder[dev]
@@ -781,7 +783,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         #     logger.debug(f'recorder status error: {err!r}')
         #     status = 0
 
-        # XXX: this command is indirectly `device_synchronized`
         locked, mine = isLocked(dev)
         anothers = locked and not mine
         enabled = (enabled and isOnline(dev) and not anothers)
@@ -802,9 +803,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             # drawn in gray as if they were (so checkbox still accessible)
             color = STATUS_DISPLAY[100][1]
             font = self.sleepingListFont
-        # elif isGateway(dev):
-        #     # DCB/HDS Gateway device; highlight it.
-        #     font = self.boldListFont
 
         for i, col in enumerate(self.columns[1:], 1):
             # Don't rebuild button panel in update
@@ -912,7 +910,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def startThreads(self,
                      what: str,
                      devlist: list[tuple[Recorder, Callable, tuple, dict]],
-                     timeout: float = 5.0,
+                     timeout: float = 10.0,
                      dialog: bool = True,
                      ignore: Optional[type] = None) -> tuple[list, list, list]:
         """ Run commands on multiple devices, each in its own thread.
@@ -945,6 +943,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                     kwargs.pop('callback', None)
                 else:
                     kwargs.setdefault('callback', self.isDead)
+
+                # HACK: Increase total timeout if any devices are sleeping
+                if timeout and isSleeping(dev):
+                    timeout = 122
+
                 threads.append(DeviceCommandThread(dev, cmd, *args, **kwargs))
 
             if timeout:
@@ -1001,35 +1004,57 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     def _stopRecording(self, dev, **kwargs):
-        """ Helper method called from a thread.
+        """ Helper method called from a thread. Sends the stop command and
+            closes the stream (if open).
         """
         dev.command.stopRecording(**kwargs)
         try:
             dev.command.closeStream()
+        except UnsupportedFeature:
+            pass
         except TimeoutError:
             logger.warning(f'Timed out waiting for stream from {dev.serial} to close')
 
 
-    def _startRecording(self, dev, *args, **kwargs):
-        ts, _status, msg = dev.command.status
-        dev.command.status = ts, DeviceStatusCode.START_PENDING, msg
-        dev.command.startRecording(*args, **kwargs)
+    def stopRecording(self, *devices):
+        recorders = []
+        for dev in devices:
+            if not isRecording(dev):
+                logger.debug(f'stopRecording skipping {dev} (not recording)')
+                continue
+
+            recorders.append((dev, self._stopRecording, (dev,), {}))
+            ts, _status, msg = dev.command.status
+            dev.command.status = ts, DeviceStatusCode.STOP_PENDING, msg
+            self.updateRow(dev, enabled=False)
+
+        self.startThreads('stop recording', recorders, timeout=10)
 
 
     def startRecording(self, *devices):
         """ Start one or more devices recording (assuming they can record).
         """
-        # TODO: Better identification of valid devices (correct status, etc.)
-        recorders = [(dev, self._startRecording, (), {})
-                     for dev in devices if dev.command.canRecord]
+        recorders = []
+        for dev in devices:
+            # TODO: Better identification of valid devices (correct status, etc.)
+            if not dev.command.canRecord:
+                continue
 
-        # TODO: Handle errors better
-        self.startThreads('start recording', recorders)
+            recorders.append((dev, dev.command.startRecording, (), {}))
+            ts, _status, msg = dev.command.status
+            dev.command.status = ts, DeviceStatusCode.START_PENDING, msg
+            self.updateRow(dev, enabled=False)
+
+        # TODO: Generate message/prompt if some devices can't record
+
+        # TODO: Handle errors better?
+        self.startThreads('start recording', recorders, timeout=10)
 
 
     def _startStreaming(self, dev, path, **kwargs):
-        ts, _status, msg = dev.command.status
-        dev.command.status = ts, DeviceStatusCode.START_PENDING, msg
+        """ Helper method called from a thread. Sends the start command and
+            opens the stream.
+        """
         dev.command.saveStream(path)
         dev.command.startRecording(**kwargs)
 
@@ -1037,18 +1062,54 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def startStreaming(self, *devices):
         """ Start one or more devices streaming (assuming they can stream).
         """
-        path = os.path.abspath(self.savePathField.GetValue())
-        if not os.path.isdir(path):
-            wx.MessageBox(f'Invalid output path\n\nThe directory "{path}"\n'
-                          'does not exist.', style=wx.ICON_ERROR)
+        path = self.getValidatedPath()
+        if not path:
             return
 
-        # TODO: Better identification of valid devices (correct status, etc.)
-        streamers = [(dev, self._startStreaming, (dev, path), {})
-                     for dev in devices if dev.command.canStream]
+        streamers = []
+        for dev in devices:
+            # TODO: Better identification of valid devices (correct status, etc.)
+            if not dev.command.canStream:
+                continue
+
+            ts, _status, msg = dev.command.status
+            dev.command.status = ts, DeviceStatusCode.START_PENDING, msg
+            self.updateRow(dev, enabled=False)
+
+            streamers.append((dev, self._startStreaming, (dev, path), {}))
 
         # TODO: Handle errors better
         self.startThreads('start streaming', streamers)
+
+
+    def getValidatedPath(self) -> str:
+        """ Validate the path in the output directory select widget.
+        """
+        path = ''
+        try:
+            path = self.savePathField.GetValue()
+            if not path or not isinstance(path, str):
+                self.savePathField.OnBrowse(None)
+
+            # Try and try again; bail if there's still no path (e.g., user
+            # cancelled out of browse dialog)
+            path = self.savePathField.GetValue()
+            if not path:
+                return ''
+
+            path = os.path.abspath(path)
+            if not os.path.isdir(path):
+                wx.MessageBox(f'Invalid output path\n\nThe directory "{path}"\n'
+                              'does not exist.', style=wx.ICON_ERROR)
+                path = ''
+        except (TypeError, ValueError) as err:
+            # Unexpected problem with path, just in case...
+            logger.exception(f'{type(err).__name__} getting stream path: {err}')
+            wx.MessageBox(f'Invalid output path\n\nThe directory "{path}"\n'
+                          'is invalid.', style=wx.ICON_ERROR)
+            path = ''
+
+        return path
 
 
     def clearRecorderCache(self):
@@ -1428,12 +1489,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     def OnStartRecording(self, evt):
-        """ Initiate a recording.
+        """ Handle a device list 'record' button or menu item selection.
 
             :param evt: The event generated by a dialog 'Record' button, or
                 an `EVT_RECORD_BUTTON` event from a row in the list.
         """
-        # XXX: CLEAN THIS UP, USE startRecording()
         logger.debug('starting recording...')
 
         self.updateTimer.Stop()
@@ -1446,29 +1506,21 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if not recorder:
                 recorder = self.recordersByIndex.get(self.selected, None)
             if recorder and recorder.canRecord:
-                ts, _status, msg = recorder.command.status
                 if stop:
-                    recorder.command.status = ts, DeviceStatusCode.STOP_PENDING, msg
-                    DeviceCommandThread(recorder,
-                                        self._stopRecording,
-                                        recorder,
-                                        callback=self.isDead)
+                    self.stopRecording(recorder)
                 else:
-                    recorder.command.status = ts, DeviceStatusCode.START_PENDING, msg
-                    DeviceCommandThread(recorder,
-                                        recorder.command.startRecording,
-                                        callback=self.isDead)
-                self.updateRow(recorder, enabled=False)
+                    self.startRecording(recorder)
         finally:
-            # self.updateList()
             if self.autoUpdate:
                 self.updateTimer.Start(self.autoUpdate)
 
 
     def OnStartStreaming(self, evt):
         """ Handle a device list 'stream' button or menu item selection.
+            This is for a single device.
         """
         logger.debug('starting stream...')
+
         self.updateTimer.Stop()
         # TODO: Make sure updating threads all stopped?
 
@@ -1479,9 +1531,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 dev = self.recordersByIndex.get(self.selected, None)
             if dev and dev.command.canStream:
                 self.startStreaming(dev)
-                self.updateRow(dev, enabled=False)
         finally:
-            # self.updateList()
             if self.autoUpdate:
                 self.updateTimer.Start(self.autoUpdate)
 
