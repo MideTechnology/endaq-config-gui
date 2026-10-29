@@ -8,6 +8,7 @@ import logging
 import socket
 import threading
 from time import sleep, time
+import weakref
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 
 from endaq.device import (Recorder, getDevices, DeviceError, CommandError,
@@ -77,6 +78,7 @@ class DeviceScanThread(threading.Thread):
         self.mqttDevices = set()  # Last found MQTT devices
         self.lastMqttSerials = set()  # Serial numbers of known MQTT devices
         self.devices = set()  # All found devices, USB and MQTT
+        self.forgotten: List[weakref.ref] = []  # Removed instances, excluded from scan results
 
         DeviceScanThread._INDEX += 1
         super().__init__(name=f'{type(self).__name__}-{DeviceScanThread._INDEX}',
@@ -93,6 +95,30 @@ class DeviceScanThread(threading.Thread):
             self.mqttDevices.clear()
             self.lastMqttSerials.clear()
             self.devices.clear()
+
+
+    def forgetDevice(self, device: Recorder):
+        """ Remove a `Recorder` instance, so that a new instance of the
+            device is created by the next scan. The next scan happens
+            immediately, rather than waiting for the scan interval.
+
+            Note: removal is by identity; a new instance of the same device
+            compares equal to the old one.
+        """
+        with self.updating:
+            self.forgotten.append(weakref.ref(device))
+            self.devices = {d for d in self.devices if d is not device}
+            self.mqttDevices = {d for d in self.mqttDevices if d is not device}
+            self.updateThreads = {d: t for d, t in self.updateThreads.items()
+                                  if d is not device}
+            self.lastScan = 0
+            self.mqttUpdated.set()
+
+
+    def isForgotten(self, device: Recorder) -> bool:
+        """ Is the given `Recorder` instance one removed by `forgetDevice()`?
+        """
+        return any(ref() is device for ref in self.forgotten)
 
 
     def onUpdate(self, update: dict):
@@ -162,6 +188,13 @@ class DeviceScanThread(threading.Thread):
         devices.update(self.mqttDevices)
 
         with self.updating:
+            # Exclude removed instances, in case this scan started before
+            # they were removed (and drop references to deleted ones).
+            self.forgotten = [ref for ref in self.forgotten if ref() is not None]
+            if self.forgotten:
+                devices = {d for d in devices if not self.isForgotten(d)}
+                self.mqttDevices = {d for d in self.mqttDevices if not self.isForgotten(d)}
+
             currentThreads = {}
 
             # Check if any previous update threads failed and collect any
@@ -424,7 +457,7 @@ class BrokerConnectThread(threading.Thread):
 
 
     def run(self):
-        wx.PostEvent(self.parent, EvtMQTTConnecting(info=self.info))
+        self.postEvent(EvtMQTTConnecting(info=self.info))
         onConnect = partial(postCallbackEvent, EvtMQTTConnected, self.root)
         onDisconnect = partial(postCallbackEvent, EvtMQTTDisconnected, self.root)
 
@@ -454,8 +487,7 @@ class BrokerConnectThread(threading.Thread):
         # Connected to the broker; check the `MQTTDeviceManager`
         try:
             con.command.ping()
-            wx.PostEvent(self.parent, EvtBrokerSelected(connector=con,
-                                                        info=self.info))
+            self.postEvent(EvtBrokerSelected(connector=con, info=self.info))
 
         except (CommunicationError, TimeoutError) as err:
             self.postError("Could not contact enDAQ Device Manager", err)
@@ -470,17 +502,22 @@ class BrokerConnectThread(threading.Thread):
             self.postError(str(err), err)
 
 
-    def postError(self, message: str, err: Exception):
-        """ Post an `EVT_MQTT_ERROR` event.
+    def postEvent(self, evt: wx.Event):
+        """ Post an event to the parent, if it still exists (the parent
+            dialog may be closed while the thread runs).
         """
         try:
-            wx.PostEvent(self.parent,
-                         EvtMQTTError(message=message, exception=err))
+            wx.PostEvent(self.parent, evt)
         except RuntimeError as e:
             # Possibly called while changing windows or cleaning up,
             # which is (probably) okay.
-            logger.debug(f'Ignoring failure posting  to {self.parent}: {e}')
-            pass
+            logger.debug(f'Ignoring failure posting to {self.parent}: {e}')
+
+
+    def postError(self, message: str, err: Exception):
+        """ Post an `EVT_MQTT_ERROR` event.
+        """
+        self.postEvent(EvtMQTTError(message=message, exception=err))
 
 
 def postCallbackEvent(eventType: type[wx.Event],

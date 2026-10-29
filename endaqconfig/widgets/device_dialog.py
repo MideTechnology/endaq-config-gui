@@ -21,7 +21,7 @@ import wx.lib.mixins.listctrl as listmix
 from wx.lib.agw import ultimatelistctrl as ULC
 import wx.lib.filebrowsebutton as FBB
 
-from endaq.device import (Recorder, RECORDERS, UnsupportedFeature,
+from endaq.device import (Recorder, RECORDERS, RECORDERS_BY_SN, UnsupportedFeature,
                           CommandError, DeviceError, deviceChanged,
                           DeviceStatusCode, _module_busy)
 from endaq.device.base import os_specific
@@ -29,6 +29,7 @@ from endaq.device.mqtt.discovery import MDNSFinder
 from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface, MQTTConnector
 
 from endaqconfig.common import isLocked, isOnline, isSleeping, isRecording, setWaking
+from endaqconfig.config_dialog import configureRecorder
 from endaqconfig.widgets import battery_icons
 from endaqconfig.widgets import icons
 from endaqconfig.widgets.broker_dialog import BrokerDialog
@@ -73,8 +74,9 @@ CONNECT_FAIL_TIMEOUT = 30
 #
 # ===========================================================================
 
-class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
-    """ The dialog for selecting a device to configure.
+class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
+    """ The (non-modal) window for selecting a device to configure.
+        Despite the name, it is a `wx.Frame`.
     """
 
     ID_SET_TIME = wx.NewIdRef()
@@ -133,7 +135,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
 
     def __init__(self, *args, **kwargs):
-        """ Constructor. Takes standard dialog arguments, plus:
+        """ Constructor. Takes standard frame arguments, plus:
 
             :keyword filter: An optional function to exclude devices from
                 the list. It should take a `Recorder` as an argument, and
@@ -156,23 +158,14 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 be hidden. Default is `False`.
             :keyword hideRecord: If `True`, the "Start Recording" button
                 will be hidden. Default is `False`.
-            :keyword okText: Alternate text to display on the OK/Configure
-                button. Defaults to `"Configure"`.
-            :keyword okHelp: Alternate tooltip for the OK/Configure button.
-                Defaults to `"Configure the selected device"`.
-            :keyword cancelText: Alternate text to display on the
-                Cancel/Close button. Defaults to `"Close"`
             :keyword icon: A `wx.Icon` for the dialog (for platforms that
                 support title bar icons). `None` (default) will use the
                 package default. `False` will show no icon.
             :keyword tooltips: If `True` (default), show list tooltips
                 containing all important device infomation.
             :keyword checks: If `True`, show checkboxes for each device.
-            :keyword allowDoubleClick: If `True`, double-clicking a list item
-                will be the same as selecting it and clicking OK. Defaults
-                to `False` if `checks` is `True`.
-            :keyword mustConfig: If `True`, the 'OK' button will only become
-                enabled if the device can be configured.
+            :keyword mustConfig: If `True`, only devices that can be
+                configured will open the configuration dialog.
             :keyword remote: If `True`, show the MQTT broker selection field.
             :keyword remoteChecked: The initial state of the 'use remote'
                 checkbox, if `remote` is `True`. `True` by default.
@@ -196,7 +189,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.showAdvanced: bool = kwargs.pop('showAdvanced', False)
         self.filter: Callable = kwargs.pop('filter', lambda x: True)
         self.checks: bool = kwargs.pop('checks', True)
-        self.allowDoubleClick: bool = kwargs.pop('allowDoubleClick', not self.checks)
         self.mustConfigure: bool = kwargs.pop('mustConfig', True)
         self.remote: bool = kwargs.pop('remote', True)
         self.remoteChecked: bool = kwargs.pop('remoteChecked', self.remote)
@@ -205,26 +197,25 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.connector: MQTTConnector = kwargs.pop('connector', None)
 
         self.ownConnector = self.connector is not None
+        self._initialConnector = self.connector  # Not disconnected on close
         self.oldUpdateCallback = None
 
         self.defaultBroker: Optional[str] = kwargs.pop('broker', DEFAULT_BROKER)
-        okText = kwargs.pop('okText', "Configure")
-        okHelp = kwargs.pop('okHelp', 'Configure the selected device')
-        cancelText = kwargs.pop('cancelText', "Close")
         icon = kwargs.pop('icon', None)
         tooltips = kwargs.pop('tooltips', True)
-        kwargs.setdefault('style', (wx.DEFAULT_DIALOG_STYLE
-                                    | wx.RESIZE_BORDER
-                                    | wx.MAXIMIZE_BOX
-                                    | wx.MINIMIZE_BOX
-                                    | wx.DIALOG_EX_CONTEXTHELP
-                                    | wx.SYSTEM_MENU
-                                    ))
+        kwargs.setdefault('style', wx.DEFAULT_FRAME_STYLE)
 
         # Not currently used, but consistent with the main dialog.
         self.DEBUG = kwargs.pop('debug', False)
 
-        sc.SizedDialog.__init__(self, *args, **kwargs)
+        sc.SizedFrame.__init__(self, *args, **kwargs)
+        self._shutDown = False
+
+        # `SizedFrame` (unlike `SizedDialog`) has no border around its
+        # contents. Add one, and match the background so it doesn't show.
+        self.GetSizer().GetItem(self.mainPanel).SetFlag(wx.EXPAND | wx.ALL)
+        self.GetSizer().GetItem(self.mainPanel).SetBorder(sc.GetDialogBorder(self))
+        self.SetBackgroundColour(self.mainPanel.GetBackgroundColour())
 
         icon = icon or icons.icon.GetIcon()
         self.SetIcon(icon)
@@ -238,6 +229,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.connectFailTimer = wx.Timer(self)  # Failsafe to re-enable broker selection if connect thread fails
 
         self.updatingDisplay = threading.Event()  # Set while updating, so other calls skip.
+        self.configuring = threading.Event()  # Set while the configuration dialog is open.
         self.menuOpen = threading.Event()  # Set while context menu open, preventing list updates.
 
         self.recorders: List[Recorder] = []  # The currently-displayed recorders.
@@ -279,7 +271,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # if self.showSave:
         #     self._addStreamTo(pane, default=self.savePath)
 
-        self._addButtons(pane, okText, okHelp, cancelText)
+        self._addButtons(pane)
 
         self.populateList()
         self.Fit()
@@ -291,6 +283,8 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.Centre()
 
         self.Bind(wx.EVT_SHOW, self.OnShow)
+        self.Bind(wx.EVT_CLOSE, self.OnClose)
+        self.Bind(wx.EVT_WINDOW_DESTROY, self.OnDestroy)
         self.Bind(EVT_RECORD, self.OnStartRecording)
         self.Bind(EVT_STREAM, self.OnStartStreaming)
         self.Bind(EVT_CONFIG, self.OnConfigButton)
@@ -374,11 +368,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             btn.Bind(wx.EVT_BUTTON, handler)
             return btn
 
-        self.selectAllBtn = wx.BitmapButton(buttonpane, -1, icons.select_all.GetBitmap())
-        self.selectAllBtn.SetToolTip('Check All')
-        self.selectNoneBtn = wx.BitmapButton(buttonpane, -1, icons.select_none.GetBitmap())
-        self.selectNoneBtn.SetToolTip('Check None')
-
         self.multiStartBtn = _add('Start Checked', startIcons,
                                   "Send the start recording command to all checked devices",
                                   self.OnStartSelected)
@@ -396,23 +385,10 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                                                  changeCallback=self.OnSavePathPicked)
         self.savePathField.SetSizerProps(valign='center', expand=True, proportion=1)
 
-        # Note: setting the width of the all/none buttons wasn't taking for some reason.
-        #  The `SetBitmapMargins` fixes it, but may have cosmetic issues on different
-        #  platforms and/or screen resolutions.
-        h = self.multiStreamBtn.GetSize().height
-        size = wx.Size(h, h)
-        self.selectAllBtn.SetSize(size)
-        self.selectAllBtn.SetBitmapMargins((4, 2))
-        self.selectNoneBtn.SetSize(size)
-        self.selectNoneBtn.SetBitmapMargins((4, 2))
-
-        self.Bind(wx.EVT_BUTTON, self.OnSelectAllButton, self.selectAllBtn)
-        self.Bind(wx.EVT_BUTTON, self.OnSelectNoneButton, self.selectNoneBtn)
-
 
     # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
     # noinspection PyUnresolvedReferences
-    def _addButtons(self, pane, okText, okHelp, cancelText):
+    def _addButtons(self, pane):
         """ Add device selection dialog bottom buttons.
         """
         buttonpane = sc.SizedPanel(pane, -1)
@@ -436,13 +412,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.recordButton.Show(not self.hideRecord)
 
         sc.SizedPanel(buttonpane, -1).SetSizerProps(proportion=1)  # Spacer
-
-        self.okButton = wx.Button(buttonpane, wx.ID_OK, okText)
-        self.okButton.SetToolTip(okHelp)
-        self.okButton.SetSizerProps(halign="right")
-        self.okButton.Enable(False)
-        self.cancelButton = wx.Button(buttonpane, wx.ID_CANCEL, cancelText)
-        self.cancelButton.SetSizerProps(halign="right")
 
 
     # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
@@ -497,12 +466,12 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         self.Bind(wx.EVT_LIST_ITEM_SELECTED, self.OnItemSelected, self.list)
         self.Bind(wx.EVT_LIST_ITEM_DESELECTED, self.OnItemDeselected, self.list)
-        self.list.Bind(wx.EVT_LEFT_DCLICK, self.OnItemDoubleClick)
         self.Bind(wx.EVT_LIST_COL_CLICK, self.OnColClick, self.list)
         self.list.Bind(wx.EVT_RIGHT_DOWN, self.OnListRightClick)
 
         if self.checks:
             self.Bind(ULC.EVT_LIST_ITEM_CHECKED, self.OnItemChecked, self.list)
+            self.Bind(ULC.EVT_LIST_COL_CHECKED, self.OnHeaderChecked, self.list)
 
         # For doing per-item tool tips in the list
         self.lastToolTipItem = -1
@@ -672,8 +641,16 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         for i, c in enumerate(cols, start):
             self.list.InsertColumn(i, c[0])
+            if i == 0 and self.checks:
+                # Header checkbox, for checking/unchecking all rows
+                header = self.list.GetColumn(i)
+                header.SetKind(1)
+                header.Check(False)
+                self.list.SetColumn(i, header)
+
             if c.name == 'Path' and self.checks:
-                width = 50
+                # Room for the header checkbox and the column name
+                width = self.list.GetTextExtent(c.name)[0] + 24
             elif c.name == 'Name':
                 width = self.list.GetTextExtent('W' * 20)[0]
             elif c.formatter == populateStatusColumn:
@@ -695,13 +672,9 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             logger.debug('populating list')
             self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
 
-            # Get checked devices (may have different list indices)
-            checked = self.checkedRecorders.copy()
-
             self.list.ClearAll()
             self.recordersByIndex.clear()
             self.indicesByRecorder.clear()
-            self.checkedRecorders.clear()
             self.itemDataMap.clear()
             self.listWidth = 0
 
@@ -716,10 +689,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 index = self.list.InsertImageStringItem(idx, path, [0], int(self.checks))
                 self.list.EnableItem(index, enable=isOnline(dev))
                 # print(f'{dev} {dev.command.status} {isOnline(dev)=} {isSleeping(dev)=}')
-
-                # update dict of checked recorders with new list indices
-                if dev in checked:
-                    self.checkedRecorders.add(dev)
 
                 self.itemDataMap[index] = [dev.path]
                 self.recordersByIndex[index] = dev
@@ -755,6 +724,12 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
             if not self.recordersByIndex or not self.selected:
                 self.OnItemDeselected(None)
+
+            # Forget checked devices no longer in the list. Done here rather
+            # than rebuilding the set, so checks made while this runs
+            # (e.g., during a `wx.Yield()`) aren't lost.
+            self.checkedRecorders.intersection_update(self.recordersByIndex.values())
+            self.updateChecks()
 
         finally:
             self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
@@ -845,10 +820,51 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 # Possible error in row population, or race condition
                 logger.debug(f'IndexError updating row for device {dev.serial}')
 
+        self.updateChecks()
+
+
+    def updateChecks(self):
+        """ Apply `checkedRecorders` to the rows' checkboxes, and update the
+            controls that depend on them. Unlike `updateList()`, this is
+            quick and never skipped, so it is safe to call while an update
+            is in progress (e.g., from an event handled during `wx.Yield()`).
+        """
+        if not self.checks:
+            return
+
+        for idx, dev in self.recordersByIndex.items():
+            item = self.list.GetItem(idx)
+            checked = dev in self.checkedRecorders
+            if item.IsChecked() != checked:
+                item.Check(checked)
+                self.list.SetItem(item)
+
         checked = self.list.GetCheckedItemCount() > 0
         self.multiStreamBtn.Enable(checked)
         self.multiStartBtn.Enable(checked)
         self.multiStopBtn.Enable(checked)
+        self.updateHeaderCheck()
+
+
+    def allEnabledChecked(self) -> bool:
+        """ Are all enabled rows checked? `False` if no rows are enabled.
+        """
+        enabled = [dev for idx, dev in self.recordersByIndex.items()
+                   if self.list.IsItemEnabled(idx)]
+        return bool(enabled) and all(dev in self.checkedRecorders for dev in enabled)
+
+
+    def updateHeaderCheck(self):
+        """ Show the first column's header checkbox as checked if all
+            enabled rows are checked.
+        """
+        if not self.checks or not self.list.GetColumnCount():
+            return
+        checked = self.allEnabledChecked()
+        header = self.list.GetColumn(0)
+        if header.IsChecked() != checked:
+            header.Check(checked)
+            self.list.SetColumn(0, header)
 
 
     def getSelected(self) -> Optional[Recorder]:
@@ -859,12 +875,94 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         return self.recordersByIndex.get(self.selected, None)
 
 
+    def canConfigure(self, recorder: Optional[Recorder]) -> bool:
+        """ Can the given device be configured?
+        """
+        if recorder is None:
+            return False
+        try:
+            if not self.mustConfigure:
+                return True
+            return bool(recorder.hasConfigInterface and recorder.config.available)
+        except AttributeError as err:
+            logger.debug(f'Ignoring error checking device configurablity: {err!r}')
+            return not self.mustConfigure
+
+
+    def configureDevice(self, recorder: Recorder):
+        """ Open the (modal) configuration dialog for a device. The device
+            selection dialog remains open, but is disabled while the
+            configuration dialog is shown.
+        """
+        if self.configuring.is_set() or not self.canConfigure(recorder):
+            return
+
+        try:
+            self.configuring.set()
+            self.pauseUpdater()
+            self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
+            result = configureRecorder(recorder,
+                                       parent=self,
+                                       showAdvanced=self.showAdvanced,
+                                       debug=self.DEBUG)
+            self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+            if result:
+                # Configuration was applied (`result` is `None` if cancelled).
+                # Discard the instance; discovery will create a new one.
+                self.forgetDevice(recorder)
+                msg = result[-1]
+                if msg:
+                    showPostConfigMessage(self, msg)
+        finally:
+            self.configuring.clear()
+            if self:
+                self.SetCursor(wx.Cursor(wx.CURSOR_DEFAULT))
+                self.startUpdater()
+                wx.CallAfter(self.OnUpdateTimerTick)
+
+
+    def forgetDevice(self, recorder: Recorder):
+        """ Delete a `Recorder` instance and its cached data, so the next
+            scan creates a new instance of the device. Note: removal is by
+            identity; a new instance of a device compares equal to the old.
+        """
+        logger.debug(f'Forgetting {recorder}')
+
+        with _module_busy:
+            # Each instance appears once per cache. `RECORDERS` keys vary
+            # (DEVINFO or path hash), so find it by value.
+            key = next((k for k, v in RECORDERS.items() if v is recorder), None)
+            if key is not None:
+                del RECORDERS[key]
+            if RECORDERS_BY_SN.get(recorder.serialInt) is recorder:
+                del RECORDERS_BY_SN[recorder.serialInt]
+
+        if self.scanThread:
+            self.scanThread.forgetDevice(recorder)
+
+        self.recorders = [dev for dev in self.recorders if dev is not recorder]
+        self.recorderStatus.pop(recorder, None)
+        self.recorderTimeouts.pop(recorder, None)
+        self.checkedRecorders.discard(recorder)
+        if self.recordersByIndex.get(self.selected) is recorder:
+            self.selected = None
+
+        # Release the port (serial ports can only be opened once). Use the
+        # attribute; the `command` property may create a new interface.
+        command = getattr(recorder, '_command', None)
+        if command is not None:
+            try:
+                command.close()
+            except Exception as err:
+                logger.debug(f'Ignoring error closing {recorder} command interface: {err!r}')
+
+        wx.CallAfter(self.populateList)
+
+
     def enableButtons(self, enabled=True):
         """ Disable/enable main dialog buttons while a command executes.
         """
-        butts = self.okButton, self.cancelButton, self.setClockButton
-        for b in butts:
-            b.Enable(enabled)
+        self.setClockButton.Enable(enabled)
 
 
     def startUpdater(self):
@@ -1308,8 +1406,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             if self.updateCount == 0:
                 # First update; resize to fit list contents
                 logger.debug('first update, fitting list to width')
-                # noinspection PyUnresolvedReferences
-                self.SetSize((self.listWidth + (self.GetDialogBorder() * 4), -1))
+                self.SetSize((self.listWidth + (sc.GetDialogBorder(self) * 4), -1))
         finally:
             self.updatingDisplay.clear()
 
@@ -1332,7 +1429,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         if self.selected not in self.recordersByIndex:
             logger.error(f'Could not get selected recorder with index {self.selected}!')
-            self.okButton.Enable(False)
             evt.Skip()
             return
 
@@ -1344,16 +1440,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.recordButton.SetToolTip(self.RECORD_UNSUPPORTED)
             self.recordButton.Enable(False)
 
-        try:
-            if not self.mustConfigure:
-                en = True
-            else:
-                en = recorder.hasConfigInterface and recorder.config.available
-            self.okButton.Enable(en)
-        except AttributeError as err:
-            logger.debug(f'Ignoring error checking device configurablity: {err!r}')
-            self.okButton.Enable(not self.mustConfigure)
-
         evt.Skip()
 
 
@@ -1361,7 +1447,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """ Handle list item (row) deselection.
         """
         self.selected = None
-        self.okButton.Enable(False)
         if self.showWarnings:
             self.infoText.SetLabel("\n")
         else:
@@ -1372,17 +1457,6 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 
         if evt is not None:
             evt.Skip()
-
-
-    def OnItemDoubleClick(self, evt):
-        """ Hande list item (row) double-click.
-        """
-        if (self.allowDoubleClick and self.list.GetSelectedItemCount() > 0
-                and self.okButton.IsEnabled()):
-            # Close the dialog
-            self.EndModal(wx.ID_OK)
-
-        evt.Skip()
 
 
     def OnListMouseMotion(self, evt):
@@ -1465,20 +1539,57 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
             self.startUpdater()
 
         else:
-            if self.connector:
-                self.connector.updateCallback = None
-                self.connector.connectCallback = None
-                self.connector.disconnectCallback = None
-                # if self.ownConnector:
-                #     self.connector.disconnect()
-            self.stopUpdater()
+            self.pauseUpdater()
             if self.tooltipFrame:
                 self.tooltipFrame.timer.Stop()
                 self.tooltipFrame.Hide()
-            self.finder.stop()
 
         evt.Skip()
-        
+
+
+    def shutDown(self):
+        """ Shut down threads, timers, and any broker connection this
+            window made. Safe to call more than once.
+        """
+        if self._shutDown:
+            return
+        self._shutDown = True
+
+        self.stopUpdater()
+        self.connectFailTimer.Stop()
+        self.disconnectTimer.Stop()
+
+        if self.tooltipFrame:
+            self.tooltipFrame.timer.Stop()
+            self.tooltipFrame.Hide()
+
+        self.finder.stop()
+
+        if self.connector:
+            self.connector.updateCallback = None
+            self.connector.connectCallback = None
+            self.connector.disconnectCallback = None
+            # Disconnect if the connection wasn't pre-existing (i.e., the
+            # same as the one provided as the `connector` kwarg)
+            if self.connector != self._initialConnector:
+                self.connector.disconnect()
+
+
+    def OnClose(self, _evt):
+        """ Handle the window being closed.
+        """
+        self.shutDown()
+        self.Destroy()
+
+
+    def OnDestroy(self, evt):
+        """ Handle the window being destroyed. Catches the case where a
+            parent window destroys it without it being closed first.
+        """
+        if evt.GetEventObject() is self:
+            self.shutDown()
+        evt.Skip()
+
 
     def OnSetClocks(self, _evt=None):
         """ Set all clocks. Used as an event handler.
@@ -1576,8 +1687,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         """ Handle a device list 'configure' button or menu item selection.
         """
         logger.debug(f'Handling config event for {evt.device}')
-        if self.okButton.IsEnabled():
-            self.EndModal(wx.ID_OK)
+        self.configureDevice(evt.device)
 
 
     def OnRebootDevice(self, evt):
@@ -1650,7 +1760,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
                 self.checkedRecorders.remove(dev)
             except KeyError:
                 pass
-        self.updateList()
+        self.updateChecks()
         evt.Skip()
 
 
@@ -1662,19 +1772,20 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         # self.saveCheck.SetValue(True)
 
 
-    def OnSelectAllButton(self, _evt):
-        logger.debug('Check all')
-        self.checkedRecorders.clear()
-        for idx, dev in self.recordersByIndex.items():
-            if self.list.IsItemEnabled(idx):
-                self.checkedRecorders.add(dev)
-        self.updateList()
-
-
-    def OnSelectNoneButton(self, _evt):
-        logger.debug('Check none')
-        self.checkedRecorders.clear()
-        self.updateList()
+    def OnHeaderChecked(self, _evt):
+        """ Handle the first column's header checkbox being clicked. If all
+            enabled rows are checked, uncheck everything; otherwise, check
+            all enabled rows.
+        """
+        if self.allEnabledChecked():
+            logger.debug('Check none')
+            self.checkedRecorders.clear()
+        else:
+            logger.debug('Check all')
+            for idx, dev in self.recordersByIndex.items():
+                if self.list.IsItemEnabled(idx):
+                    self.checkedRecorders.add(dev)
+        self.updateChecks()
 
 
     # =======================================================================
@@ -1784,13 +1895,25 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
 #
 # ===========================================================================
 
-def selectDevice(title: str = "Select Recorder",
-                 parent: Optional[wx.Window] = None,
-                 **kwargs):
-    """ Display a device-selection dialog and return the path to a recorder.
-        The dialog will (optionally) update automatically when devices are
-        added or removed.
+def showPostConfigMessage(parent: DeviceSelectionDialog, message: str):
+    """ Display the message produced after configuring a device.
 
+        :param parent: The parent `DeviceSelectionDialog`.
+        :param message: The message text.
+    """
+    wx.MessageBox(message, "Configuration Complete", parent=parent,
+                  style=wx.OK | wx.ICON_INFORMATION)
+
+
+def showDeviceDialog(title: str = "Select Recorder",
+                     parent: Optional[wx.Window] = None,
+                     **kwargs) -> DeviceSelectionDialog:
+    """ Create and show a (non-modal) device-selection dialog. Returns
+        immediately; the dialog destroys itself when closed. Devices are
+        configured from within the dialog.
+
+        :param title: The dialog's title.
+        :param parent: The parent window, or `None`.
         :keyword filter: An optional function to exclude devices from the
             list. It should take a `Recorder` as an argument, and return a
             boolean.
@@ -1812,23 +1935,14 @@ def selectDevice(title: str = "Select Recorder",
             hidden. Default is `False`.
         :keyword hideRecord: If `True`, the "Start Recording" button will be
             hidden. Default is `False`.
-        :keyword okText: Alternate text to display on the OK/Configure
-            button. Defaults to `"Configure"`.
-        :keyword okHelp: Alternate tooltip for the OK/Configure button.
-            Defaults to `"Configure the selected device"`.
-        :keyword cancelText: Alternate text to display on the Cancel/Close
-            button. Defaults to `"Close"`
         :keyword icon: A `wx.Icon` for the dialog (for platforms that support
             title bar icons). `None` (default) will use the package default.
             `False` will show no icon.
         :keyword tooltips: If `True` (default), show list tooltips containing
             all important device infomation.
         :keyword checks: If `True`, show checkboxes for each device.
-        :keyword allowDoubleClick: If `True`, double-clicking a list item
-            will be the same as selecting it and clicking OK. Defaults to
-            `False` if `checks` is `True`.
-        :keyword mustConfig: If `True`, the 'OK' button will only become
-            enabled if the device can be configured.
+        :keyword mustConfig: If `True`, only devices that can be configured
+            will open the configuration dialog.
         :keyword remote: If `True`, show the MQTT broker selection field.
         :keyword remoteChecked: The initial state of the 'use remote'
             checkbox, if `remote` is `True`. `True` by default.
@@ -1838,19 +1952,8 @@ def selectDevice(title: str = "Select Recorder",
             instance, if one was already created.
         :keyword showSave: If `True`, show the save path selector.
         :keyword savePath: The default save path for streams.
-        :return: The path of the selected device.
+        :return: The `DeviceSelectionDialog`.
     """
-    result = None
-
-    with DeviceSelectionDialog(parent, -1, title, **kwargs) as dlg:
-        if dlg.ShowModal() == wx.ID_OK:
-            result = dlg.getSelected()
-
-        # Disconnect from broker if no device selected and broker connection
-        # wasn't pre-existing (i.e., the same as the one provided as
-        # `connector` kwarg)
-        if (result is None and dlg.connector is not None
-                and kwargs.get('connector') != dlg.connector):
-            dlg.connector.disconnect()
-
-    return result
+    dlg = DeviceSelectionDialog(parent, -1, title, **kwargs)
+    dlg.Show()
+    return dlg

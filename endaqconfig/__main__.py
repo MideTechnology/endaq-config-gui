@@ -38,22 +38,26 @@ def run(debug=__DEBUG__):
     if not _app:
         _app = wx.App()
 
+    if not args.path:
+        # Non-modal; devices are configured from within the dialog, which
+        # destroys itself when closed (ending the main loop).
+        device_dialog.showDeviceDialog(showAdvanced=args.advanced,
+                                       debug=debug)
+        if not _app.IsMainLoopRunning():
+            _app.MainLoop()
+        return
+
     try:
-        if not args.path:
-            dev = device_dialog.selectDevice(showAdvanced=args.advanced,
-                                             debug=debug)
-        else:
-            dev = getRecorder(args.path)
-            if not dev:
-                wx.MessageBox(f'Could not find a valid enDAQ device on path "{args.path}"',
-                              'enDAQ Configuration Error',  style=wx.OK | wx.ICON_ERROR | wx.CENTRE)
-                return
+        dev = getRecorder(args.path)
+        if not dev:
+            wx.MessageBox(f'Could not find a valid enDAQ device on path "{args.path}"',
+                          'enDAQ Configuration Error',  style=wx.OK | wx.ICON_ERROR | wx.CENTRE)
+            return
 
         wx.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
-        if dev:
-            configureRecorder(dev,
-                              showAdvanced=args.advanced,
-                              debug=debug)
+        configureRecorder(dev,
+                          showAdvanced=args.advanced,
+                          debug=debug)
     finally:
         wx.SetCursor(wx.NullCursor)
 

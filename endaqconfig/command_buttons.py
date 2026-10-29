@@ -163,16 +163,15 @@ class RebootButton(CheckDriftButton):
             if q == wx.CANCEL:
                 return
             elif q == wx.YES:
-                # TODO: save config here
-                self.root.saveConfigData()
+                # Discard changes: the returned configuration data is `None`
+                self.root.configData = None
             else:
-                # If cancelled, the returned configuration data is `None`
-                self.configData = None
+                self.root.saveConfigData()
 
         if thread := self._command(self.root.device, self.root):
             wx.MilliSleep(100)  # Just to make sure the command executed
             while thread.is_alive():
-                if thread.failed.set():
+                if thread.failed.is_set():
                     # TODO: Improved error dialog content based on failure type
                     msg = f"An error occurred while executing {self.WHAT}"
                     err = ''
