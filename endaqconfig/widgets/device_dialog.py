@@ -28,7 +28,7 @@ from endaq.device.base import os_specific
 from endaq.device.mqtt.discovery import MDNSFinder
 from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface, MQTTConnector
 
-from endaqconfig.common import isLocked, isOnline, isSleeping, isRecording
+from endaqconfig.common import isLocked, isOnline, isSleeping, isRecording, setWaking
 from endaqconfig.widgets import battery_icons
 from endaqconfig.widgets import icons
 from endaqconfig.widgets.broker_dialog import BrokerDialog
@@ -43,7 +43,7 @@ from endaqconfig.widgets.events import (
     EvtMQTTError)
 from endaqconfig.widgets.threads import (DeviceScanThread, DeviceCommandThread, BrokerConnectThread)
 from endaqconfig.widgets.shared import DeviceToolTip, promptDeviceReboot, promptDeviceShutdown
-
+import endaq.device.command_interfaces
 logger = logging.getLogger(__name__)
 
 import endaq.device
@@ -322,7 +322,7 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         self.brokerSelectBtn = wx.Button(selpane, -1, "Select...")
         self.brokerSelectBtn.SetSizerProps(valign='centre', border=(['right'], 16))
         self.brokerMessageText = wx.StaticText(selpane, -1, ' '*40, style=wx.ST_ELLIPSIZE_END)
-        self.brokerMessageText.SetSizerProps(expand=True, proportion=1, valign='centre',
+        self.brokerMessageText.SetSizerProps(proportion=2, valign='centre',
                                              border=(['top'], 2))
 
         self.remoteCheck.Bind(wx.EVT_CHECKBOX, self.OnRemoteCheckChanged)
@@ -1543,13 +1543,16 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
         clear = getattr(evt, 'clear', False)
         force = getattr(evt, 'force', False)
 
+        setWaking(device)
         locked, mine = isLocked(device)
-        current = device.command.getLockID() if force else None
 
         if locked and not mine and not force:
             logger.debug(f'Tried to unlock {device.serial}, claimed by another')
             return
-        elif clear:
+
+        current = device.command.getLockID() if force else None
+
+        if clear:
             logger.debug(f'Clearing lock on device {device.serial}')
             DeviceCommandThread(device, device.command.clearLockID, current=current)
         else:
@@ -1562,8 +1565,11 @@ class DeviceSelectionDialog(sc.SizedDialog, listmix.ColumnSorterMixin):
     def OnBlink(self, evt):
         """ Handle a device list 'blink LEDs' button or menu item selection.
         """
-        logger.debug(f'Sending Blink to {evt.device}')
-        DeviceCommandThread(evt.device, evt.device.command.blink)
+        device = evt.device
+        setWaking(device)
+
+        logger.debug(f'Sending Blink to {device}')
+        DeviceCommandThread(device, device.command.blink)
 
 
     def OnConfigButton(self, evt):

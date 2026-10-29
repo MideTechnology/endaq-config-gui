@@ -204,3 +204,13 @@ def isRecording(device: Recorder) -> bool:
                        DeviceStatusCode.TRIGGERING,
                        DeviceStatusCode.TRIGGERING_PERIODIC,
                        DeviceStatusCode.STREAMING))
+
+
+def setWaking(device: Recorder,
+              status: DeviceStatusCode = DeviceStatusCode.WAKING):
+    """ If a device is in a 'sleeping' state, force its reported status to
+        a 'waking' or 'pending' one.
+    """
+    if isSleeping(device):
+        ts, _status, msg = device.command.status
+        device.command.status = ts, status, msg

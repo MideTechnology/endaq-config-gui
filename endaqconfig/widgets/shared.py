@@ -16,7 +16,7 @@ import wx
 import wx.adv
 import wx.lib.masked as wx_mc
 
-from endaq.device import Recorder
+from endaq.device import Recorder, DeviceStatusCode
 
 from endaqconfig.common import isGateway
 from endaqconfig.validators import FieldValidationError
@@ -586,6 +586,9 @@ def promptDeviceReboot(device: Recorder,
             logger.debug('No reset for the wicked!')
             return None
 
+    ts, _status, msg = device.command.status
+    device.command.status = ts, DeviceStatusCode.RESET_PENDING, msg
+
     logger.debug(f'Sending reboot to {device}')
     thread = DeviceCommandThread(device, device.command.reset,
                                  callback=callback)
@@ -624,6 +627,9 @@ def promptDeviceShutdown(device: Recorder,
     if q != wx.YES:
         logger.debug('Never gonna give you up, never gonna shut you down')
         return None
+
+    ts, _status, msg = device.command.status
+    device.command.status = ts, DeviceStatusCode.SHUTDOWN, msg
 
     logger.debug(f'Sending shutdown to {device}')
     thread = DeviceCommandThread(device, device.command.shutdown,
