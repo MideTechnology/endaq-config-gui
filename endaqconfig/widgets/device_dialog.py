@@ -66,8 +66,8 @@ DEV_WARN_DAYS = datetime.timedelta(days=182)
 
 DEFAULT_BROKER = "DRS Test Broker"  # TODO: REMOVE/CHANGE
 
-DISCONNECT_TIMEOUT = 10
-CONNECT_FAIL_TIMEOUT = 30
+DISCONNECT_TIMEOUT_MS = 10_000
+CONNECT_FAIL_TIMEOUT_MS = 30_000
 
 
 # ===========================================================================
@@ -189,7 +189,6 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         self.showAdvanced: bool = kwargs.pop('showAdvanced', False)
         self.filter: Callable = kwargs.pop('filter', lambda x: True)
         self.checks: bool = kwargs.pop('checks', True)
-        self.mustConfigure: bool = kwargs.pop('mustConfig', True)
         self.remote: bool = kwargs.pop('remote', True)
         self.remoteChecked: bool = kwargs.pop('remoteChecked', self.remote)
         self.showSave: bool = kwargs.pop('showSave', True)
@@ -881,12 +880,10 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         if recorder is None:
             return False
         try:
-            if not self.mustConfigure:
-                return True
             return bool(recorder.hasConfigInterface and recorder.config.available)
         except AttributeError as err:
-            logger.debug(f'Ignoring error checking device configurablity: {err!r}')
-            return not self.mustConfigure
+            logger.debug(f'Ignoring error checking device configurability: {err!r}')
+            return False
 
 
     def configureDevice(self, recorder: Recorder):
@@ -1480,7 +1477,7 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
             self.tooltipFrame.setText(self.listToolTips[item])
             self.lastToolTipItem = index
             if not self.tooltipFrame.IsShown():
-                self.tooltipFrame.timer.StartOnce(self.tooltipFrame.TOOLTIP_TIME)
+                self.tooltipFrame.timer.StartOnce(self.tooltipFrame.TOOLTIP_TIME_MS)
 
         evt.Skip()
 
@@ -1543,6 +1540,13 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
             if self.tooltipFrame:
                 self.tooltipFrame.timer.Stop()
                 self.tooltipFrame.Hide()
+
+            # Make sure all recorders are shut down; prevents a sporadic serial port
+            # conflict when the dialog is opened again.
+            for d in endaq.device.RECORDERS.values():
+                if d.hasCommandInterface:
+                    d.command.close()
+            endaq.device.RECORDERS.clear()
 
         evt.Skip()
 
@@ -1833,7 +1837,7 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         self.showBrokerSelection(False)
         self.disconnectTimer.Stop()
         self.setBrokerMessage('Connecting...')
-        self.connectFailTimer.StartOnce(CONNECT_FAIL_TIMEOUT)
+        self.connectFailTimer.StartOnce(CONNECT_FAIL_TIMEOUT_MS)
 
 
     def OnMQTTConnected(self, _evt):
@@ -1855,7 +1859,7 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         # self.brokerPane.Enable()
         self.showBrokerSelection()
         self.setBrokerMessage('Disconnected')
-        self.disconnectTimer.StartOnce(DISCONNECT_TIMEOUT)
+        self.disconnectTimer.StartOnce(DISCONNECT_TIMEOUT_MS)
 
 
     def OnMQTTError(self, evt):

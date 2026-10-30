@@ -299,7 +299,7 @@ class ConfigDialog(SC.SizedDialog):
         """ Load config data from the recorder.
         """
         # Mostly for testing. Will probably be removed.
-        if self.device is None:
+        if not self.device:
             self.configData.clear()
             self.origConfigData.clear()
         else:
@@ -346,8 +346,8 @@ class ConfigDialog(SC.SizedDialog):
     def saveConfigData(self):
         """ Save edited config data to the recorder.
         """
-        maxVersion = max(self.device.config.supportedConfigVersions)
-        version = self.device.config.configVersionRead or maxVersion
+        maxVersion: int = max(self.device.config.supportedConfigVersions)
+        version: int = self.device.config.configVersionRead or maxVersion
 
         if version < maxVersion:
             if version in self.device.config.supportedConfigVersions:

@@ -18,7 +18,7 @@ import wx.lib.masked as wx_mc
 
 from endaq.device import Recorder, DeviceStatusCode
 
-from endaqconfig.common import isGateway
+from endaqconfig.common import isGateway, isSleeping
 from endaqconfig.validators import FieldValidationError
 from endaqconfig.widgets.threads import DeviceCommandThread
 from endaqconfig.widgets.controls import getStatusDisplay
@@ -290,7 +290,7 @@ class DeviceToolTip(wx.Frame):
         If ULC tooltips get fixed, this may be redundant and can be removed if so.
     """
 
-    TOOLTIP_TIME = 900
+    TOOLTIP_TIME_MS = 900
     MOUSE_OFFSET = wx.Point(0, 18)
 
 
@@ -586,12 +586,14 @@ def promptDeviceReboot(device: Recorder,
             logger.debug('No reset for the wicked!')
             return None
 
+    timeout = 125 if isSleeping(device) else 5
+
     ts, _status, msg = device.command.status
     device.command.status = ts, DeviceStatusCode.RESET_PENDING, msg
 
     logger.debug(f'Sending reboot to {device}')
     thread = DeviceCommandThread(device, device.command.reset,
-                                 callback=callback)
+                                 timeout=timeout, callback=callback)
 
     # This will need revising if we use different hardware
     if isGateway(device) and 'Serial' in type(device.command).__name__:
@@ -628,12 +630,14 @@ def promptDeviceShutdown(device: Recorder,
         logger.debug('Never gonna give you up, never gonna shut you down')
         return None
 
-    ts, _status, msg = device.command.status
+    timeout = 125 if isSleeping(device) else 5
+
+    ts, status, msg = device.command.status
     device.command.status = ts, DeviceStatusCode.SHUTDOWN, msg
 
     logger.debug(f'Sending shutdown to {device}')
     thread = DeviceCommandThread(device, device.command.shutdown,
-                                 callback=callback)
+                                 timeout=timeout, callback=callback)
     return thread
 
 
@@ -641,7 +645,7 @@ def promptDeviceShutdown(device: Recorder,
 #
 # ===============================================================================
 
-# noinspection PyUnusedLocal
+# noinspection unused-parameter
 def ExtraMessageBox(message: str,
                     caption: str = wx.MessageBoxCaptionStr,
                     extra: str = '',
