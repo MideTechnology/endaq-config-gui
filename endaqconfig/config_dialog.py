@@ -99,17 +99,24 @@ class ConfigDialog(SC.SizedDialog):
             :param wifi: If `False`, hide configuration options relevant to
                 Wi-Fi. Default is `True` (show Wi-Fi widgets, if present
                 in the `CONFIG.UI`).
+            :keyword prefs: A dict-like object of retained settings.
+                Items with keys that duplicate the keyword arguments listed
+                above will be used as defaults.
         """
         self.schema = loadSchema('mide_config_ui.xml')
-
-        self.setTime: bool = kwargs.pop('setTime', True)
         self.device: Recorder = kwargs.pop('device', None)
-        self.saveOnOk: bool = kwargs.pop('saveOnOk', True)
-        self.useUtc: bool = kwargs.pop('useUtc', True)
-        self.showAdvanced: bool = kwargs.pop('showAdvanced', False)
         self.showWifi: bool = kwargs.pop('wifi', True)
         self.DEBUG: bool = kwargs.pop('debug', __DEBUG__)
         icon = kwargs.pop('icon', None)
+
+        self.prefs = kwargs.pop('prefs', {})
+        _kwargs = dict(self.prefs)
+        _kwargs.update(kwargs)
+
+        self.setTime: bool = _kwargs.pop('setTime', True)
+        self.saveOnOk: bool = _kwargs.pop('saveOnOk', True)
+        self.useUtc: bool = _kwargs.pop('useUtc', True)  # Modified by child widgets
+        self.showAdvanced: bool = _kwargs.pop('showAdvanced', False)
 
         self.postConfigMessage = None
 
@@ -140,10 +147,11 @@ class ConfigDialog(SC.SizedDialog):
             # Typically, this won't happen outside of testing, either.
             logger.debug(f'AttributeError forcing config to load: {err}')
 
-        kwargs.setdefault("title", f"Configure {devName}")
-        kwargs.setdefault("style", wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
-
-        super(ConfigDialog, self).__init__(*args, **kwargs)
+        frameKwargs = {k: v for k, v in kwargs.items()
+                       if k in ('id', 'title', 'pos', 'size', 'style', 'name')}
+        frameKwargs.setdefault("title", f"Configure {devName}")
+        frameKwargs.setdefault("style", wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        super(ConfigDialog, self).__init__(*args, **frameKwargs)
 
         icon = icons.icon.GetIcon() if icon is None else icon
         if icon:
@@ -261,6 +269,11 @@ class ConfigDialog(SC.SizedDialog):
 
             elif el.name == "PostConfigMessage":
                 self.postConfigMessage = el.value
+
+
+    def updatePrefs(self):
+        self.prefs['setTime'] = self.setClockCheck.GetValue()
+        self.prefs['useUtc'] = self.useUtc
 
 
     def loadConfigUI(self):
@@ -492,6 +505,7 @@ class ConfigDialog(SC.SizedDialog):
     def OnOK(self, evt: wx.Event):
         """ Handle dialog OK, saving changes.
         """
+        self.updatePrefs()
         evt.Skip()
 
 

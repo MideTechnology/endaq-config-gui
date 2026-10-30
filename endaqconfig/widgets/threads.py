@@ -164,8 +164,10 @@ class DeviceScanThread(threading.Thread):
         localdevs = getDevices()
         devices.update(localdevs)
 
-        httpsdevs = https.getDevices(finder=self.parent.finder)
-        devices.update(httpsdevs)
+        if self.parent.https:
+            # logger.debug('Collecting HTTPS devices...')
+            httpsdevs = https.getDevices(finder=self.parent.finder)
+            devices.update(httpsdevs)
 
         connected = self.parent.connector and self.parent.connector.client.is_connected()
 

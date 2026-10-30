@@ -25,6 +25,7 @@ from endaq.device import (Recorder, RECORDERS, RECORDERS_BY_SN, UnsupportedFeatu
                           CommandError, DeviceError, deviceChanged,
                           DeviceStatusCode, _module_busy)
 from endaq.device.base import os_specific
+from endaq.device.command_interfaces import CommandInterface
 from endaq.device.mqtt.discovery import MDNSFinder
 from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface, MQTTConnector
 
@@ -156,58 +157,63 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
                 `False`.
             :keyword hideClock: If `True`, the "Set all clocks" button will
                 be hidden. Default is `False`.
-            :keyword hideRecord: If `True`, the "Start Recording" button
-                will be hidden. Default is `False`.
             :keyword icon: A `wx.Icon` for the dialog (for platforms that
                 support title bar icons). `None` (default) will use the
                 package default. `False` will show no icon.
             :keyword tooltips: If `True` (default), show list tooltips
                 containing all important device infomation.
-            :keyword checks: If `True`, show checkboxes for each device.
-            :keyword mustConfig: If `True`, only devices that can be
-                configured will open the configuration dialog.
-            :keyword remote: If `True`, show the MQTT broker selection field.
+            :keyword checks: If `True` (default), show checkboxes for each device.
+            :keyword https: If `True` (default), show HTTPS devices (e.g., Gateways).
+            :keyword remote: If `True` (default), show the MQTT broker selection field.
             :keyword remoteChecked: The initial state of the 'use remote'
-                checkbox, if `remote` is `True`. `True` by default.
+                checkbox, if `remote` is `True`.
             :keyword broker: The name of the default, initially selected
                 broker. `None` will select the first found.
             :keyword connector: An existing `endaq.device.mqtt.MQTTConnector`
                 instance, if one was already created.
             :keyword showSave: If `True`, show the save path selector.
             :keyword savePath: The default save path for streams.
-
+            :keyword prefs: A dict-like object of retained settings.
+                Items with keys that duplicate the keyword arguments listed
+                above will be used as defaults.
         """
         # Clear cached devices
         RECORDERS.clear()
 
-        self.autoUpdate: Union[int, bool] = kwargs.pop('autoUpdate', 750)
-        self.scanInterval: Union[int, bool] = kwargs.pop('scanInterval', 4000)
-        self.hideClock: bool = kwargs.pop('hideClock', False)
-        self.hideRecord: bool = kwargs.pop('hideRecord', True)
-        self.showWarnings: bool = kwargs.pop('showWarnings', True)
-        self.showConnection: bool = kwargs.pop('showConnection', True)
-        self.showAdvanced: bool = kwargs.pop('showAdvanced', False)
-        self.filter: Callable = kwargs.pop('filter', lambda x: True)
-        self.checks: bool = kwargs.pop('checks', True)
-        self.remote: bool = kwargs.pop('remote', True)
-        self.remoteChecked: bool = kwargs.pop('remoteChecked', self.remote)
-        self.showSave: bool = kwargs.pop('showSave', True)
-        self.savePath: str = kwargs.pop('savePath', '')
-        self.connector: MQTTConnector = kwargs.pop('connector', None)
+        self.prefs = kwargs.pop('prefs', {})  # Note: only modify this in place
+        _kwargs = dict(self.prefs)
+        _kwargs.update(kwargs)
+
+        self.autoUpdate: Union[int, bool] = _kwargs.get('autoUpdate', 750)
+        self.scanInterval: Union[int, bool] = _kwargs.get('scanInterval', 4000)
+        self.hideClock: bool = _kwargs.get('hideClock', False)
+        self.showWarnings: bool = _kwargs.get('showWarnings', True)
+        self.showConnection: bool = _kwargs.get('showConnection', True)
+        self.showAdvanced: bool = _kwargs.get('showAdvanced', False)
+        self.filter: Callable = _kwargs.get('filter', lambda x: True)
+        self.checks: bool = _kwargs.get('checks', True)
+        self.https: bool = _kwargs.get('https', True)
+        self.remote: bool = _kwargs.get('remote', True)
+        self.remoteChecked: bool = _kwargs.get('remoteChecked', self.remote)
+        self.showSave: bool = _kwargs.get('showSave', True)
+        self.savePath: str = _kwargs.get('savePath', '')
+        self.connector: MQTTConnector = _kwargs.get('connector', None)
 
         self.ownConnector = self.connector is not None
         self._initialConnector = self.connector  # Not disconnected on close
         self.oldUpdateCallback = None
 
-        self.defaultBroker: Optional[str] = kwargs.pop('broker', DEFAULT_BROKER)
-        icon = kwargs.pop('icon', None)
-        tooltips = kwargs.pop('tooltips', True)
-        kwargs.setdefault('style', wx.DEFAULT_FRAME_STYLE)
+        self.defaultBroker: str = _kwargs.get('broker', DEFAULT_BROKER)
+        icon = _kwargs.get('icon', None)
+        tooltips = _kwargs.get('tooltips', True)
 
         # Not currently used, but consistent with the main dialog.
-        self.DEBUG = kwargs.pop('debug', False)
+        self.DEBUG = _kwargs.get('debug', False)
 
-        sc.SizedFrame.__init__(self, *args, **kwargs)
+        # Filter out any non-SizedFrame keyword arguments
+        frameKwargs = {k: v for k, v in kwargs.items()
+                       if k in ('id', 'title', 'pos', 'style', 'name')}
+        sc.SizedFrame.__init__(self, *args, **frameKwargs)
         self._shutDown = False
 
         # `SizedFrame` (unlike `SizedDialog`) has no border around its
@@ -238,8 +244,11 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         self.indicesByRecorder: Dict[Recorder, int] = {}  # List index keyed by `Recorder`
         self.checkedRecorders: set[Recorder] = set()  # Checked items/recorders (to keep checks after list updates)
 
-        self.finder = MDNSFinder(keepalive=1200)
-        self.finder.start()
+        if self.https or self.remote:
+            self.finder = MDNSFinder(keepalive=1200)
+            self.finder.start()
+        else:
+            self.finder = None
         self.brokerInfo: Optional[dict] = None  # Selected MQTT broker's mDNS info
 
         # TODO: Better column collection (assemble piecemeal based on parameters)
@@ -253,7 +262,7 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         self.initList(pane, tooltips)
 
         if self.checks:
-            self._addSelectButtons(pane)
+            self._addSelectButtons(pane, self.savePath)
 
         # Selected device info
         self.infoText = wx.StaticText(pane, -1, " \n \n \n")
@@ -266,9 +275,6 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
 
         if self.remote is not None:
             self._addBrokerSelect(pane)
-
-        # if self.showSave:
-        #     self._addStreamTo(pane, default=self.savePath)
 
         self._addButtons(pane)
 
@@ -345,6 +351,12 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
     def _addSelectButtons(self, pane, defaultPath=''):
         """ Add buttons for selecting and controlling selected items.
         """
+        try:
+            if not (defaultPath and os.path.isdir(defaultPath)):
+                defaultPath = ''
+        except (TypeError, ValueError):
+            defaultPath = ''
+
         NewControlButtons._loadImages()
         startIcons = NewControlButtons.ICONS[1]
         stopIcons = NewControlButtons.ICONS[2]
@@ -408,9 +420,25 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         self.recordButton.SetToolTip(self.RECORD_ENABLED)
         self.Bind(wx.EVT_BUTTON, self.OnStartAllRecorders, id=self.ID_START_RECORDING)
         self.recordButton.Enable(False)
-        self.recordButton.Show(not self.hideRecord)
 
         sc.SizedPanel(buttonpane, -1).SetSizerProps(proportion=1)  # Spacer
+
+
+    def updatePrefs(self):
+        """ Update the window preferences dict (checkboxes, histories, etc.).
+        """
+        if self.remote:
+            if checked := self.remoteCheck.GetValue():
+                self.prefs['remoteChecked'] = checked
+                if broker := self.brokerNameField.GetValue():
+                    self.prefs['defaultBroker'] = broker
+        if self.showSave:
+            if filename := self.savePathField.GetValue():
+                history = self.prefs.get('saveHistory', [])
+                if filename in history:
+                    history.remove(filename)
+                history.insert(0, filename)
+                self.prefs['saveHistory'] = history
 
 
     # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
@@ -946,7 +974,7 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
 
         # Release the port (serial ports can only be opened once). Use the
         # attribute; the `command` property may create a new interface.
-        command = getattr(recorder, '_command', None)
+        command: CommandInterface = getattr(recorder, '_command', None)
         if command is not None:
             try:
                 command.close()
@@ -1567,7 +1595,8 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
             self.tooltipFrame.timer.Stop()
             self.tooltipFrame.Hide()
 
-        self.finder.stop()
+        if self.finder:
+            self.finder.stop()
 
         if self.connector:
             self.connector.updateCallback = None
@@ -1937,16 +1966,12 @@ def showDeviceDialog(title: str = "Select Recorder",
             `False`.
         :keyword hideClock: If `True`, the "Set all clocks" button will be
             hidden. Default is `False`.
-        :keyword hideRecord: If `True`, the "Start Recording" button will be
-            hidden. Default is `False`.
         :keyword icon: A `wx.Icon` for the dialog (for platforms that support
             title bar icons). `None` (default) will use the package default.
             `False` will show no icon.
         :keyword tooltips: If `True` (default), show list tooltips containing
             all important device infomation.
         :keyword checks: If `True`, show checkboxes for each device.
-        :keyword mustConfig: If `True`, only devices that can be configured
-            will open the configuration dialog.
         :keyword remote: If `True`, show the MQTT broker selection field.
         :keyword remoteChecked: The initial state of the 'use remote'
             checkbox, if `remote` is `True`. `True` by default.
