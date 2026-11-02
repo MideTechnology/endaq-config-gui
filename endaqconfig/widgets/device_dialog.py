@@ -26,7 +26,7 @@ from endaq.device import (Recorder, RECORDERS, RECORDERS_BY_SN, UnsupportedFeatu
                           DeviceStatusCode, _module_busy)
 from endaq.device.base import os_specific
 from endaq.device.command_interfaces import CommandInterface
-from endaq.device.mqtt.discovery import MDNSFinder
+from endaq.device.mqtt.discovery import MDNSFinder, MDNSInfo
 from endaq.device.mqtt.mqtt_interface import MQTTCommandInterface, MQTTConnector
 
 from endaqconfig.common import isLocked, isOnline, isSleeping, isRecording, setWaking
@@ -65,7 +65,7 @@ SPACE_WARN_MB = SPACE_MIN_MB * 4
 CAL_WARN_DAYS = datetime.timedelta(days=120)
 DEV_WARN_DAYS = datetime.timedelta(days=182)
 
-DEFAULT_BROKER = "DRS Test Broker"  # TODO: REMOVE/CHANGE
+DEFAULT_BROKER = ""
 
 DISCONNECT_TIMEOUT_MS = 10_000
 CONNECT_FAIL_TIMEOUT_MS = 30_000
@@ -181,6 +181,7 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         RECORDERS.clear()
 
         self.prefs = kwargs.pop('prefs', {})  # Note: only modify this in place
+        logger.debug(f'{self.prefs=}{dict(self.prefs)}')
         _kwargs = dict(self.prefs)
         _kwargs.update(kwargs)
 
@@ -254,7 +255,7 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
             self.finder.start()
         else:
             self.finder = None
-        self.brokerInfo: Optional[dict] = None  # Selected MQTT broker's mDNS info
+        self.brokerInfo: Optional[MDNSInfo] = None  # Selected MQTT broker's mDNS info
 
         # TODO: Better column collection (assemble piecemeal based on parameters)
         cols = self.ADVANCED_COLUMNS if self.showAdvanced else self.COLUMNS
@@ -436,14 +437,10 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
             if checked := self.remoteCheck.GetValue():
                 self.prefs['remoteChecked'] = checked
                 if broker := self.brokerNameField.GetValue():
-                    self.prefs['defaultBroker'] = broker
+                    self.prefs['broker'] = broker
         if self.showSave:
             if filename := self.savePathField.GetValue():
-                history = self.prefs.get('saveHistory', [])
-                if filename in history:
-                    history.remove(filename)
-                history.insert(0, filename)
-                self.prefs['saveHistory'] = history
+                self.prefs['savePath'] = filename
 
 
     # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
@@ -1283,7 +1280,11 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
             `MQTTConnector` is communicated back via an `EVT_BROKER_SELECTED`
             event.
         """
-        _thread = BrokerConnectThread(self, self, self.defaultBroker)
+        if self.remoteChecked and self.defaultBroker:
+            self.remoteCheck.SetValue(True)
+            self.remoteCheck.Enable(False)
+            self.brokerNameField.SetValue(self.defaultBroker)
+            _thread = BrokerConnectThread(self, self, self.defaultBroker)
 
 
     def setBrokerMessage(self, message: str, error=False):
@@ -1312,6 +1313,7 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
             :param info: A copy of the data returned by `findBrokers()` or
                 `getBroker()`
         """
+        self.remoteCheck.Enable()
         try:
             logger.debug(f'selected broker: {connector}')
             self.pauseUpdater()
@@ -1564,6 +1566,7 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
             if self.remote:
                 checked = self.remoteCheck.GetValue()
                 self.showBrokerSelection(checked)
+                wx.CallAfter(self.getDefaultBroker)
 
             wx.CallAfter(self.OnUpdateTimerTick)
             self.startUpdater()
@@ -1573,6 +1576,8 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
             if self.tooltipFrame:
                 self.tooltipFrame.timer.Stop()
                 self.tooltipFrame.Hide()
+
+            self.updatePrefs()
 
             # Make sure all recorders are shut down; prevents a sporadic serial port
             # conflict when the dialog is opened again.
@@ -1902,8 +1907,8 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         """
         self.connectFailTimer.Stop()
         self.disconnectTimer.Stop()
-        # self.brokerPane.Enable()
         self.showBrokerSelection()
+        self.remoteCheck.Enable()
         self.setBrokerMessage(evt.message, error=True)
 
 
@@ -1989,6 +1994,8 @@ def showDeviceDialog(title: str = "Select Recorder",
         :keyword savePath: The default save path for streams.
         :return: The `DeviceSelectionDialog`.
     """
+    # XXX: REMOVE
+    kwargs['prefs'] = {'broker': 'Gateway G0021147', 'remoteChecked': True, 'savePath': 'C:\\Users\\dstokes\\Downloads\\streams'}
     dlg = DeviceSelectionDialog(parent, -1, title, **kwargs)
     dlg.Show()
     return dlg

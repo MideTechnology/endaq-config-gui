@@ -16,6 +16,7 @@ from endaq.device import (Recorder, getDevices, DeviceError, CommandError,
 from endaq.device.command_interfaces import SerialCommandInterface
 from endaq.device.https_interface import HTTPSCommandInterface
 import endaq.device.https_interface as https
+from endaq.device.mqtt.discovery import MDNSInfo, MDNSFinder, fullServiceName
 from endaq.device.mqtt.mqtt_interface import MQTTConnector
 from endaq.device.response_codes import (DeviceStatusCode, CommandResponseCode,
                                          WiFiConnectionStatus)
@@ -433,6 +434,7 @@ class BrokerConnectThread(threading.Thread):
                  parent: Union["DeviceSelectionDialog", "BrokerDialog"],
                  root: Union["DeviceSelectionDialog", "BrokerDialog"],
                  brokerInfo: Dict[str, Any],
+                 findTimeout: float = 2.5,
                  **connectorArgs,
                  ):
         """ Mechanism to connect to a broker. Auto-starts on instantiation.
@@ -449,6 +451,7 @@ class BrokerConnectThread(threading.Thread):
         self.parent = parent
         self.root = root
         self.info = brokerInfo
+        self.findTimeout = findTimeout
         self.connectorArgs = dict(connectorArgs)
         self.stop = threading.Event()  # Set to kill the thread
 
@@ -458,8 +461,29 @@ class BrokerConnectThread(threading.Thread):
         self.start()
 
 
+    def getBrokerInfo(self, name: str) -> MDNSInfo:
+        """ Find the mDNS info for a broker name.
+        """
+        finder: MDNSFinder = getattr(self.root, 'finder', None)
+        if finder is not None:
+            fullname = fullServiceName(name)
+            deadline = time() + self.findTimeout
+            while time() < deadline:
+                if info := finder.getBrokerDict().get(fullname, None):
+                    return info
+                sleep(0.5)
+        return None
+
+
     def run(self):
         self.postEvent(EvtMQTTConnecting(info=self.info))
+        if not isinstance(self.info, MDNSInfo):
+            t0 = time()
+            self.info = self.getBrokerInfo(self.info)
+            logger.debug(f'found default broker in {time() - t0:.4f} seconds')
+        if not isinstance(self.info, MDNSInfo):
+            self.postError('Could not find broker', None)
+            return
         onConnect = partial(postCallbackEvent, EvtMQTTConnected, self.root)
         onDisconnect = partial(postCallbackEvent, EvtMQTTDisconnected, self.root)
 
