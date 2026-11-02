@@ -199,9 +199,14 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         self.savePath: str = _kwargs.get('savePath', '')
         self.connector: MQTTConnector = _kwargs.get('connector', None)
 
-        self.ownConnector = self.connector is not None
         self._initialConnector = self.connector  # Not disconnected on close
-        self.oldUpdateCallback = None
+        if self.connector:
+            # If using an existing connector, store existing callbacks for later restoration
+            self._initialCallbacks = (self.connector.updateCallback,
+                                      self.connector.connectCallback,
+                                      self.connector.disconnectCallback)
+        else:
+            self._iniialCallbacks = None, None, None
 
         self.defaultBroker: str = _kwargs.get('broker', DEFAULT_BROKER)
         icon = _kwargs.get('icon', None)
@@ -1599,9 +1604,10 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
             self.finder.stop()
 
         if self.connector:
-            self.connector.updateCallback = None
-            self.connector.connectCallback = None
-            self.connector.disconnectCallback = None
+            # Remove or restore callbacks
+            (self.connector.updateCallback,
+             self.connector.connectCallback,
+             self.connector.disconnectCallback) = self._iniialCallbacks
             # Disconnect if the connection wasn't pre-existing (i.e., the
             # same as the one provided as the `connector` kwarg)
             if self.connector != self._initialConnector:
