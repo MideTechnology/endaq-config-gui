@@ -536,8 +536,6 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
             self.batteryIconIndices[name] = i
             images.Add(icon.GetBitmap())
 
-        self.ICON_CONNECTION_BT = images.GetImageCount()
-        images.Add(icons.connection_bt.GetBitmap())
         self.ICON_CONNECTION_MSD = images.GetImageCount()
         images.Add(icons.connection_msd.GetBitmap())
         self.ICON_CONNECTION_USB = images.GetImageCount()
@@ -546,6 +544,20 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         images.Add(icons.connection_wifi.GetBitmap())
         self.ICON_CONNECTION_ETHERNET = images.GetImageCount()
         images.Add(icons.connection_ethernet.GetBitmap())
+
+        # For future use: additional command interface types
+        self.ICON_CONNECTION_BT = images.GetImageCount()
+        images.Add(icons.connection_bt.GetBitmap())
+        self.ICON_CONNECTION_LORA = images.GetImageCount()
+        images.Add(icons.connection_lora.GetBitmap())
+
+        # For future use: icons not determined by command interface type alone
+        self.ICON_CONNECTION_WIFI_ETHERNET = images.GetImageCount()
+        images.Add(icons.connection_wifi_ethernet.GetBitmap())
+        self.ICON_CONNECTION_AP_ETHERNET = images.GetImageCount()
+        images.Add(icons.connection_ap_ethernet.GetBitmap())
+        self.ICON_CONNECTION_AP = images.GetImageCount()
+        images.Add(icons.connection_ap.GetBitmap())
 
         return images
 
@@ -560,6 +572,8 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         try:
             # This is a primitive mechanism based on the `ConfigInterface`
             # subclass name. Some are for future use.
+            # FUTURE: Connection types/icons not determinable by the command
+            #  interface type alone (see `loadIcons()`)
             configname = dev.command.__class__.__name__.lower()
             if 'serial' in configname:
                 return self.ICON_CONNECTION_USB
@@ -568,8 +582,12 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
             elif any(n in configname for n in ('bluetooth', 'bt', 'ble')):
                 # For future use
                 return self.ICON_CONNECTION_BT
+            elif 'lora' in configname:
+                # For future use
+                return self.ICON_CONNECTION_LORA
             elif 'http' in configname:
-                # NOTE: the HTTPS Gateway connection may be over Wi-Fi
+                # NOTE: This is not a very good test; the HTTPS Gateway
+                #   connection may be over Wi-Fi. But it's good enough for now.
                 # Future: Consider better test and use Wi-Fi when appropriate.
                 return self.ICON_CONNECTION_ETHERNET
         except (AttributeError, NotImplementedError, UnsupportedFeature):

@@ -403,14 +403,63 @@ connection_wifi = PyEmbeddedImage(
 
 #----------------------------------------------------------------------
 connection_ethernet = PyEmbeddedImage(
+    b'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAn/AAAJ/wEHzD5G'
+    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAS1JREFUOI2l0jFLnEEQ'
+    b'xvHf4BvuOsFDbSzksLnCImmuEdEvYG8lhJQ2qdIp+BlSB6xskm+Q0iYpraMWIoiInaJwMGn2'
+    b'heV8TwQfmGKf+e/szO5GZnqvPuAXzqv4i4+ZqRzwqXg18xNNYBMn2KuKfsZ9Zu5DRHzHAn5U'
+    b'zDF2G/TxmJm/20xEbGOpgnu4nGIe0W8wQS8ihtWGQfFbTTCYYnot08cpsoprbFR3sFG8mjlF'
+    b'XwsV8Ayj2pvKj3BWe01EbGFc2lrEl4i41a0lLEbEt7L+M4dVrBTjATfV/OtYRlvwGf8KB9fx'
+    b'2keKiAPIzKOZ0IxZD/FUXdgTDjvZGQXusINhiR3cdbHNjMYaXGXmRRllvnidYJeeMY6IQVmv'
+    b'Fe/NBY7wtcpPivdCr77CW/Qfo7jA7WVzPOIAAAAASUVORK5CYII=')
+
+#----------------------------------------------------------------------
+connection_ap = PyEmbeddedImage(
+    b'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAn/AAAJ/wEHzD5G'
+    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAXBJREFUOI2F0j1oFVEQ'
+    b'BeBvN8+EgMZSCKZRmxQxpLZNraWdiDbhmRQW/lSKYKtGbC20EC0E8acJRCxE0VpbbQQrf0IC'
+    b'kUB81+KdjZu8iAOH2XvmzMzO3KuUopQCFa5gvOF2AuPRVFtcK3gHBV2M7pI8gnPR3N5WACcS'
+    b'uIYHeNruEs19PMP1aI+3C3zEO1xFD/OYbSXP4hQ2cRPv8SEx06l4Gmu4my49HA164W5gA3PJ'
+    b'mapTAH5hLx7hEm5hLFjERTzEsL82XUfQLAmG0MES7mX2JewJ39bu7+BHDhvxwxnlTJLle7XV'
+    b'fT3+e403ORzAVyzgAo5EuI7D4RbwE/uS87bZ8it8SqeC8/nN+WBE/xaa2Ge8LKVszXQZr/Wv'
+    b'aw6PMYmJxCfxJPs6hoM4iW0vsYtljOJFZl4LVvE8sWV0B55yigzFr2Cmxc9gpa1pUGtZKeW3'
+    b'/9hOTecfum84W1XVl5wnwg1YvRup/6xrHArqcAP2B9Z71ePnuCh6AAAAAElFTkSuQmCC')
+
+#----------------------------------------------------------------------
+connection_ap_ethernet = PyEmbeddedImage(
+    b'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAn/AAAJ/wEHzD5G'
+    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAYpJREFUOI1t0jtoVUEQ'
+    b'BuBvT44JAR+VCMGk0DQpNFjbiARJpaWdiFW4JoWFj0oRbH1ha6GFxEKQqIWR+ABRtLLQMhFB'
+    b'sFMhgUhA7lqcOXFvkoGfPfvPPzNnZkfOWc4ZEi5jqOU2AkOhSetc4byDjA4GtwgewNnQ3O5J'
+    b'gBPhuIoHmCurhOY+nuBaaI+XCb7gA66gi2lMFMETOIW/uIGP+Bw+45HxNFZwN6p0cTDQDe46'
+    b'1jAVMQeqSAB/sB0PcRE3sTNwCxcwi37/bbwKQTsk6EONedyL3uexLfhSu6vGr7isxdkfrZyJ'
+    b'YPG9XFRfjfNnhXdx2YMfmMF5jIZwFfuDm8Fv7IiY9+2UX2MpKmWci9+cDgxoXqH1fcXLnPN6'
+    b'T5fwVvNcU3iEMQyHfwyPY16HsRcn0bOJHSxgEM+i55XAMp6GbwGdNi5hN0aiUqV581c4knP+'
+    b'BCmlQ3iDo4UGvtWaNT6m12qbrdbsR2kvUruOpaWUFvEc34MaxmTOeXSjttqiEs1aV9gXqILb'
+    b'ZP8AmSW+ZUP8JgIAAAAASUVORK5CYII=')
+
+#----------------------------------------------------------------------
+connection_wifi_ethernet = PyEmbeddedImage(
+    b'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAn/AAAJ/wEHzD5G'
+    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAUdJREFUOI2l079L1lEU'
+    b'BvDPDQnHV/+A0q0QwZa0HHXTAi3QWZp1z02HIhp0dhDdnFwc2kVq0iBLUFAJkiZ5m1yq4+B5'
+    b'5au+bw1eOHDPOc/Dfc6PWyLCbc6dW7HRVnVKKQWDmEQf7mXqO3awhq2oyo4I6T/CJ8R/bBsD'
+    b'l7wkz+BPAn5iAaPoTXuGxcxFYqcbQiYy+BtvUMMLrGIzbQXj6MDbxEZy3cUGXmb9e/+Q/w1P'
+    b'8Rwf0F7twTDOEriP11nGKGZxkLkzDDV41THu4gTv0I9fOY1J1PEY7xPz9cYUUkUND3HURP4h'
+    b'HqBW5VzZg4iol1K60IkvWELBK9xHe0TUq5zSbJVLKX04xli+vo7uiPh8A9vqL5RSltHT6E9E'
+    b'TDXFuViU9bxXTydGMr6B02v5vxi/0sRrDZ3Hj7S5VriWJWQZTyAiPrbCnAPBzMRJmXJfjQAA'
+    b'AABJRU5ErkJggg==')
+
+# ----------------------------------------------------------------------
+connection_lora = PyEmbeddedImage(
     b'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAACXBIWXMAAAnXAAAJ1wGxbhe3'
-    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAATlJREFUOI2t0j9LFlAU'
-    b'BvDfY5YNgtESkr34AYqGBiGX1oY+QE7REH0AwUlXP0NLtEVzUEuroWPQ6jtUNgRKiYsGnYbu'
-    b'ixd9g0IPHO4553k49/xLVTmLTI6MJFdxpcN2quqwYVO43mHfq2oPUlWS3McLHHSk4GazP6Iv'
-    b'dRqPquqt1sI6lqvKSLGJO003T2DLWK8qE2fpn+MZ7GIxyX6HzbY4zCZ5gss4wiI2YFTSDNbw'
-    b'Ep/wDA+7kpdabBevsIqZqjKZ5B4WcIivuIghBklWuoqG7fcv7X2aZOsC5jHXSL/wA9+afwvX'
-    b'On+IvcaDnYw7pCS38Rh3W+g9nlfVh1PcvyTYwmvHdzGNB1W1cIrc77cb2jYGnT/A9jjuud3B'
-    b'SXmHjSRHzb+EN+OIY2cASW74s1L4WVWf/yvBv8pvCUmiVFiTkx4AAAAASUVORK5CYII=')
+    b'AAAAGXRFWHRTb2Z0d2FyZQB3d3cuaW5rc2NhcGUub3Jnm+48GgAAAVlJREFUOI2N00tqFVEQ'
+    b'BuCvjKA3RnTgRJD42EBGQiaKgo+RmUk2oNlEcOhEXYHBB4IDVyCCD9BZIroCE4gKcaQ3GBRB'
+    b'ykFXQt++fcGCA+dU/X/13/WIzNS1iBjgPE6XawNvM/PXGDgz9w4O4x62kZ2zjbuYaXNiV0FE'
+    b'zOIVTmIF7zGNwA7O4ibWcTkzN/cUYIBP2MJ1rPYoWK3YVmEHXQWL+Iv7GGIZP0vBIdzGESxh'
+    b'KjOf9dVgDq+rgN9bX/+BCxWbG+G0H61En4v4CA/q/rUX20M+UYSPLd9a+U518fvG+toA/996'
+    b'FAQ2K9FjPKz7F5qiT/wFzOMDLvUU8WrF5tuc/btKqo07OI6nuFVJAkfxRNPmYxGxONJGo4N0'
+    b'DS+MD9JzLOCbCYM0i5eaBVrBGxwogX9wETeKfGVklFs1mNEszLBHwRB3TFqmtkXEQZzDmXKt'
+    b'411m/u5i/wFGUyO4hc7OVQAAAABJRU5ErkJggg==')
 
 #----------------------------------------------------------------------
 
