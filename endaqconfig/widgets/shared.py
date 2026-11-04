@@ -5,12 +5,13 @@ Created on Sep 10, 2015
 """
 
 from datetime import datetime, timedelta
+from itertools import zip_longest
 import logging
 import os.path
 import re
 import socket
 from time import time
-from typing import Callable, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 import wx
 import wx.adv
@@ -459,7 +460,7 @@ def parseIP(val: str,
     try:
         ipMatch = re.match(r"\b(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?\b", val)
         hostMatch = re.match(r"^(?!.*\.\.)([A-Za-z0-9.-]+)(?::(\d{1,5}))?$", val)
-        if not (ipMatch or hostMatch):
+        if ipMatch is None or hostMatch is None:
             raise ValueError
 
         ip, port = (ipMatch or hostMatch).groups()
@@ -653,22 +654,22 @@ def ExtraMessageBox(message: str,
                     parent: Optional[wx.Window] = None,
                     x: int = wx.DefaultCoord,
                     y: int = wx.DefaultCoord) -> int:
-    """ A drop-in replacement for `wx.MessageBox()` with an extended message
-        (e.g., a verbose error). It takes the same arguments, plus `extra`,
-        minus the `x` and `y` position arguments (ignored under MSW, anyway,
-        left in for compatibility).
+    """
+    A drop-in replacement for `wx.MessageBox()` with an extended message
+    (e.g., a verbose error). It takes the same arguments, plus `extra`,
+    minus the `x` and `y` position arguments (ignored under MSW, anyway,
+    left in for compatibility).
 
-        :param message: Message to show in the dialog.
-        :param caption: The dialog title.
-        :param extra: The error message.
-        :param style: Combination of style flags described in wx.MessageDialog
-            documentation.
-        :param parent: The parent window.
-        :param x: Horizontal dialog position (ignored under MSW).
-        :param y: Vertical dialog position (ignored under MSW).
-        :returns: `wx.YES`, `wx.NO`, `wx.CANCEL`, `wx.OK` or `wx.HELP` (notice
-            that this return value is different from the return value of
-            `wx.MessageDialog.ShowModal`).
+    :param message: Message to show in the dialog.
+    :param caption: The dialog title.
+    :param extra: The extended message (error, etc.).
+    :param style: Style flags, as described in `wx.MessageDialog`
+        documentation.
+    :param parent: The parent window.
+    :param x: Horizontal dialog position (ignored under MSW).
+    :param y: Vertical dialog position (ignored under MSW).
+    :returns: `wx.YES`, `wx.NO`, `wx.CANCEL`, `wx.OK` or `wx.HELP`, depending
+        on `style` and the button clicked, matching `wx.MessageBox()`.
     """
     with wx.RichMessageDialog(parent, message, caption, style=style) as dlg:
         if extra:
@@ -686,16 +687,26 @@ def ExtraMessageBox(message: str,
 #
 # ===============================================================================
 
-def showError(msg: str,
+def showError(message: str,
               caption: str,
               style: int = wx.OK | wx.OK_DEFAULT | wx.ICON_ERROR,
               err: Optional[Exception] = None,
               parent: Optional[wx.Window] = None):
-    """ Show an error message. Wraps the standard message box to add some
-        debugging stuff.
     """
-    if not msg.endswith(('.', '!', '?')):
-        msg += "."
+    Show an error message. Wraps the standard message box to add some
+    debugging stuff.
+
+    :param message: Message to show in the dialog.
+    :param caption: The dialog title.
+    :param style: Style flags, as described in `wx.MessageDialog`
+        documentation.
+    :param err: The exception raised.
+    :param parent: The parent window.
+    :returns: `wx.YES`, `wx.NO`, `wx.CANCEL`, `wx.OK` or `wx.HELP`, depending
+        on `style` and the button clicked, matching `wx.MessageBox()`.
+    """
+    if not message.endswith(('.', '!', '?')):
+        message += "."
 
     extra = ''
     if isinstance(err, Exception):
@@ -703,11 +714,101 @@ def showError(msg: str,
     elif err:
         extra = str(err)
 
-    q = ExtraMessageBox(msg, caption, style=style, parent=parent,
+    q = ExtraMessageBox(message, caption, style=style, parent=parent,
                         extra=extra)
     if err is not None:
-        logger.debug("%s: %r" % (msg, err))
+        logger.debug("%s: %r" % (message, err))
         if wx.GetKeyState(wx.WXK_CONTROL) and wx.GetKeyState(wx.WXK_SHIFT):
             raise
 
     return q
+
+
+# ===============================================================================
+#
+# ===============================================================================
+
+def ask(message: str,
+        caption: str,
+        pref: str,
+        prefs: dict[str, Any],
+        saveNo: bool = True,
+        force: bool = False,
+        details: Optional[str] = None,
+        rememberMsg: Optional[str] = None,
+        checked: bool = None,
+        labels: Optional[tuple] = None,
+        style: int = wx.OK | wx.OK_DEFAULT | wx.ICON_INFORMATION,
+        parent: Optional[wx.Window] = None) -> int:
+    """
+    Generate a message box to notify or prompt the user, allowing for a
+    simple means of turning off future warnings and prompts via a "don't show
+    again" checkbox. If the key `pref` does not exist in the `prefs` dict
+    (see below), the dialog is shown; if "don't show again" is checked,
+    `prefs[pref]` is set to the button ID returned from the dialog.
+    If `pref` is in `prefs`, the dialog is not shown and the `prefs[pref]` is
+    returned.
+
+    Note: Neither `wx.ID_CANCEL` not `wx.ID_HELP` will be saved.
+
+    :param message: Message to show in the dialog box.
+    :param caption: The dialog box title.
+    :param style: Style flags, as described in `wx.MessageDialog`
+        documentation.
+    :param pref: The name of the preference corresponding to the dialog,
+        used as a key into the `prefs`.
+    :param prefs: A dictionary (or dict-like object) containing previous
+        dialog responses, which will be updated if the user checks the
+        "don't show again" checkbox.
+    :param saveNo: If `True` (default), remember "No" responses.
+    :param force: If `True`, show the dialog even if `pref` is in `prefs`.
+    :param details: An extended message, shown in a folding panel.
+    :param rememberMsg: The prompt next to the "don't ask again" checkbox.
+        Defaults to a message appropriate to the `style` flags.
+    :param checked: The default state of the "don't ask again" checkbox.
+        Defaults to `False` (unchecked).
+    :param labels: A list/tuple of alternative button labels, 1-3 strings
+        in the order ``(OK, [Cancel])`` or ``(Yes, [No, [Cancel]])`` depending
+        on the `style` flags.
+    :param parent: The parent window.
+    :returns: `wx.YES`, `wx.NO`, `wx.CANCEL`, `wx.OK` or `wx.HELP`, depending
+        on `style` and the button clicked, matching `wx.MessageBox()`.
+    """
+    if not force and pref in prefs:
+        return prefs[pref]
+
+    if not rememberMsg:
+        rememberMsg = ("Don't Ask Again" if style & wx.YES
+                       else "Don't show this message again")
+
+    if checked is None:
+        checked = pref in prefs and force
+
+    with wx.RichMessageDialog(parent, message, caption, style=style) as dlg:
+        dlg.ShowCheckBox(rememberMsg, checked)
+
+        if details:
+            dlg.ShowDetailedText(details)
+
+        if labels is not None:
+            if style & wx.OK:
+                dlg.SetOKCancelLabels(
+                    *(x or y for x, y in zip_longest(labels, ('OK', 'Cancel'))))
+            elif style & wx.YES:
+                dlg.SetYesNoCancelLabels(
+                    *(x or y for x, y in zip_longest(labels, ('Yes', 'No', 'Cancel'))))
+
+        result = dlg.ShowModal()
+        remember = dlg.IsCheckBoxChecked()
+
+    if remember:
+        if (result not in (wx.ID_CANCEL, wx.ID_HELP) or (saveNo and result == wx.ID_NO)):
+            prefs[pref] = result
+    else:
+        prefs.pop(pref, None)
+
+    return {wx.ID_OK: wx.OK,
+            wx.ID_CANCEL: wx.CANCEL,
+            wx.ID_YES: wx.YES,
+            wx.ID_NO: wx.NO,
+            wx.ID_HELP: wx.HELP}.get(result, wx.ID_OK)

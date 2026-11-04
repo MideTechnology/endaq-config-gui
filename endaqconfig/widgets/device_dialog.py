@@ -44,7 +44,7 @@ from endaqconfig.widgets.events import (
     EVT_MQTT_DISCONNECTED, EVT_MQTT_ERROR, EVT_RESET, EVT_SHUTDOWN,
     EvtMQTTError)
 from endaqconfig.widgets.threads import (DeviceScanThread, DeviceCommandThread, BrokerConnectThread)
-from endaqconfig.widgets.shared import DeviceToolTip, promptDeviceReboot, promptDeviceShutdown
+from endaqconfig.widgets.shared import DeviceToolTip, promptDeviceReboot, promptDeviceShutdown, ask
 import endaq.device.command_interfaces
 logger = logging.getLogger(__name__)
 
@@ -1775,22 +1775,63 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         evt.Skip()
 
 
+    def _multiWarning(self,
+                      title: str,
+                      action: str,
+                      devs: List[Recorder],
+                      checked: List[Recorder],
+                      pref: str):
+        """ Show a hideable warning if not all checked devices can do
+            something.
+
+            :param title: Dialog caption.
+            :param action: The action (e.g., "streaming data")
+            :param devs: The devices that *can* do the action.
+            :param checked: All checked devices.
+            :param pref: The name of the preference set if the user clicks
+                "Don't show again". It will get the suffix "Any" if `devs`
+                is empty or "All" if `devs` is shorter than `checked`.
+        """
+        if len(checked) > len(devs):
+            if not devs:
+                msg = ("No capable devices selected.\n\n"
+                       f"None of the checked devices are capable of {action}.")
+                pref += "Any"
+            else:
+                msg = ("Not all selected devices could be started.\n\n"
+                       f"{len(devs)} out of {len(checked)} devices are capable of "
+                       f"{action}.\nOnly those that can have been started.")
+                pref += "All"
+
+            ask(msg, title, pref, self.prefs, parent=self)
+
+
     def OnStartSelected(self, _evt):
         """ Handle the 'Start Checked' button press event.
         """
-        devices = [(rec, rec.command.startRecording, (), {})
-                   for rec in self.getChecked()
-                   if rec.command.canRecord]
+        checked = self.getChecked()
+        devs = [(rec, rec.command.startRecording, (), {})
+                   for rec in checked if rec.command.canRecord]
 
         # TODO: Handle errors better
-        self.startThreads('start recording', devices)
+        if devs:
+            self.startThreads('start recording', devs)
+
+        self._multiWarning("Start Checked", "recording on command",
+                           devs, checked, "cantStart")
 
 
     def OnStreamSelected(self, _evt):
         """ Handle the 'Stream from Checked' button press event.
         """
-        devs = [dev for dev in self.getChecked() if dev.command.canStream]
-        self.startStreaming(*devs)
+        checked = self.getChecked()
+        canStream = [dev for dev in checked if dev.command.canStream]
+
+        if canStream:
+            self.startStreaming(*canStream)
+
+        self._multiWarning("Stream from Checked", "streaming data",
+                           canStream, checked, "cantStream")
 
 
     def OnStopSelected(self, _evt):
