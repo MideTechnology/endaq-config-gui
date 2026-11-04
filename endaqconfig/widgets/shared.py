@@ -296,14 +296,17 @@ class DeviceToolTip(wx.Frame):
 
 
     def __init__(self,
-                 view: wx.Window):
+                 view: wx.Window,
+                 text: Optional[str] = None,
+                 interval: int = 1000):
         """ Tooltip display for device info.
 
             :param view: The parent view.
         """
         self.view = view
-        self.text = None
+        self.text = text
         self.device = None
+        self.interval = interval
 
         # Note: color not quite right.
         fgcolor = wx.SystemSettings.GetColour(wx.SYS_COLOUR_GRAYTEXT)
@@ -409,7 +412,7 @@ class DeviceToolTip(wx.Frame):
         self.SetSize((w + 10, h + 10))
         self.textWidget.SetLabel(text)
 
-        self.updateTimer.Start(1000)
+        self.updateTimer.Start(self.interval)
         return super().Show()
 
 

@@ -379,9 +379,11 @@ class ConfigBase(object):
         """
         """
         name = self.__class__.__name__
-        if not self.label:
-            return "<%s at 0x%x>" % (name, id(self))
-        return "<%s %r at 0x%x>" % (name, self.label, id(self))
+        if (label := getattr(self, 'label', None)) is not None:
+            name = f'{name} {label!r}'
+        if isinstance(configId := getattr(self, 'configId', None), int):
+            name = f'{name} (0x{configId:06x})'
+        return "<%s at 0x%x>" % (name, id(self))
 
 
     def isDisabled(self):
@@ -1437,6 +1439,7 @@ class Group(ConfigWidget):
     def enableChildren(self, enabled=True):
         """ Enable/Disable the Field's children.
         """
+        # logger.debug(f'{self} enableChildren({enabled=})')
         for f in self.fields:
             if hasattr(f, 'Enable'):
                 f.Enable(enabled)
@@ -1510,6 +1513,17 @@ class CheckGroup(Group):
         Group.setToDefault(self, check=check)
         if self.default is not None:
             self.setCheck(self.default)
+
+
+    def OnCheck(self, evt):
+        """ Handle checkbox changing.
+        """
+        super().OnCheck(evt)
+        # Ensure children without ConfigIDs (Groups, command buttons,
+        # static text, etc.) are enabled/disalbed
+        for f in self.fields:
+            if not getattr(f, 'configId', None):
+                f.Enable(evt.IsChecked())
 
 
 # ===============================================================================

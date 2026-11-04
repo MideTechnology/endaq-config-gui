@@ -2054,7 +2054,7 @@ def showDeviceDialog(title: str = "Select Recorder",
         :return: The `DeviceSelectionDialog`.
     """
     # XXX: REMOVE
-    kwargs['prefs'] = {'broker': 'Gateway G0021147', 'remoteChecked': True, 'savePath': 'C:\\Users\\dstokes\\Downloads\\streams'}
+    # kwargs['prefs'] = {'broker': 'Gateway G0021147', 'remoteChecked': True, 'savePath': 'C:\\Users\\dstokes\\Downloads\\streams'}
     dlg = DeviceSelectionDialog(parent, -1, title, **kwargs)
     dlg.Show()
     return dlg
