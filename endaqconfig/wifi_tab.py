@@ -166,16 +166,16 @@ class AddWifiDialog(SC.SizedDialog):
         """
         if self.booleanAuth:
             # noinspection PyUnresolvedReferences
-            auth = self.authField.GetValue()
+            auth = 3 if self.authField.GetValue() else 0
         else:
             # noinspection PyUnresolvedReferences
             auth = AUTH_TYPES[self.authField.GetSelection()]
 
         result = {'SSID': self.ssidField.GetValue(),
-                  'RSSI': None,
+                  'RSSI': 0,  # None,
                   'AuthType': auth,
                   'Known': False,
-                  'Selected': False}
+                  'Selected': True}
 
         return result, self.pwField.GetValue()
 
@@ -827,7 +827,7 @@ class WiFiSelectionTab(Tab):
             strength = ap['RSSI']
             security = ap['AuthType']
             selected = ap['Selected']
-
+            print(ap)
             if strength is None:
                 icon = 11 if security else 5
 

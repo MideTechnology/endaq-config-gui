@@ -95,11 +95,14 @@ class BrokerDialog(sc.SizedDialog):
         self.brokerRB.SetSizerProps(valign='center')
         self.brokerRB.SetToolTip('Select an mDNS advertised broker by name')
         self.adpane = sc.SizedPanel(pane, -1)
-        self.adpane.SetSizerType('horizontal')
+        self.adpane.SetSizerType('vertical')
         self.adpane.SetSizerProps(expand=True, proportion=1)
         self.brokerList = wx.ListBox(self.adpane, -1,
                                      style=wx.LB_SINGLE | wx.LB_OWNERDRAW)
         self.brokerList.SetSizerProps(expand=True, proportion=1)
+        self.brokerInfo = wx.StaticText(self.adpane, -1, ' '*40)
+        self.brokerInfo.SetSizerProps(expand=True, border=(['bottom', 'left'], 4), halign='center')
+        self.brokerInfo.Enable(False)
 
         # Second group: Enter IP address explicitly
         self.ipRB = wx.RadioButton(pane, -1, 'Broker Address:')
@@ -129,7 +132,7 @@ class BrokerDialog(sc.SizedDialog):
 
         self.Bind(wx.EVT_SHOW, self.OnShow)
         self.connectBtn.Bind(wx.EVT_BUTTON, self.OnConnectButton)
-        self.Bind(wx.EVT_CHOICE, self.OnBrokerChoice)
+        self.Bind(wx.EVT_LISTBOX, self.OnBrokerChoice)
         self.Bind(wx.EVT_RADIOBUTTON, self.OnRadioButton)
         self.enableGroup(self.activeGroup)
 
@@ -207,8 +210,8 @@ class BrokerDialog(sc.SizedDialog):
         if broker:
             info = self.brokers.get(broker)
             if info:
-                tt = "{name}.{serviceType}\nIP {host[0]}, port {port}".format(**asdict(info))
-        self.brokerList.SetToolTip(tt)
+                tt = "{name}.{serviceType} ({host[0]} port {port})".format(**asdict(info))
+        self.brokerInfo.SetLabel(tt)
 
 
     def setMessage(self, message: str, error=False):
@@ -380,6 +383,9 @@ class BrokerNameDialog(BrokerDialog):
         self.brokerList = wx.ListBox(pane, -1,
                                      style=wx.LB_SINGLE | wx.LB_OWNERDRAW)
         self.brokerList.SetSizerProps(expand=True, proportion=1)
+        self.brokerInfo = wx.StaticText(outerpane, -1, ' '*40)
+        self.brokerInfo.SetSizerProps(expand=True, border=(['bottom', 'left'], 4), halign='center')
+        self.brokerInfo.Enable(False)
 
         # Bottom buttons: Connect (OK) and Cancel
         buttonpane = sc.SizedPanel(outerpane, -1)
@@ -423,7 +429,9 @@ class BrokerNameDialog(BrokerDialog):
 if __name__ == '__main__':
     logger.setLevel(logging.DEBUG)
     app = wx.App()
-    with BrokerDialog(None) as dlg:
+    kind = BrokerNameDialog(None)
+    # kind = BrokerDialog(None)
+    with kind as dlg:
         q = dlg.ShowModal()
         if q == wx.ID_OK:
             print(f'Selected {dlg.getSelectedName()!r}')
