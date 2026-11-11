@@ -369,7 +369,8 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         streamIcons = NewControlButtons.ICONS[3]
 
         buttonpane = sc.SizedPanel(pane, -1)
-        buttonpane.SetSizerType("horizontal")
+        # buttonpane.SetSizerType("horizontal")
+        buttonpane.SetSizerType("grid", {'rows':2, 'cols':3, 'growable_col': (2, 1)})
         buttonpane.SetSizerProps(expand=True)
 
         def _add(label, icons, tooltip, handler):
@@ -392,15 +393,22 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
                                    "Send the start command to all checked devices, "
                                    "saving output to the specified directory",
                                    self.OnStreamSelected)
-        self.multiStopBtn = _add('Stop Checked', stopIcons,
-                                   "Send the stop command to all checked devices",
-                                   self.OnStopSelected)
 
         self.savePathField = FBB.DirBrowseButton(buttonpane,
                                                  labelText="Save to:",
                                                  initialValue=defaultPath,
                                                  changeCallback=self.OnSavePathPicked)
         self.savePathField.SetSizerProps(valign='center', expand=True, proportion=1)
+
+        self.multiStopBtn = _add('Stop Checked', stopIcons,
+                                   "Send the stop command to all checked devices",
+                                   self.OnStopSelected)
+
+        self.syncCheck = wx.CheckBox(buttonpane, -1, 'Sync on Stop')
+        self.syncCheck.SetToolTip("When stopping multiple streaming devices, "
+                                  "attempt to synchronize recording times.")
+        self.syncCheck.SetSizerProps(valign='center', expand=True, proportion=1)
+        self.syncCheck.SetValue(self.prefs.get('syncOnStop', False))
 
 
     # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
@@ -441,6 +449,7 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         if self.showSave:
             if filename := self.savePathField.GetValue():
                 self.prefs['savePath'] = filename
+            self.prefs['syncOnStop'] = self.syncCheck.GetValue()
 
 
     # TODO: REMOVE NEXT LINE LATER (linter doesn't like monkeypatched sizer methods, clutters everything up)
@@ -890,6 +899,7 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         self.multiStreamBtn.Enable(checked)
         self.multiStartBtn.Enable(checked)
         self.multiStopBtn.Enable(checked)
+        self.syncCheck.Enable(checked)
         self.updateHeaderCheck()
 
 
@@ -1055,7 +1065,8 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
                      devlist: list[tuple[Recorder, Callable, tuple, dict]],
                      timeout: float = 10.0,
                      dialog: bool = True,
-                     ignore: Optional[type] = None) -> tuple[list, list, list]:
+                     ignore: Optional[type] = None,
+                     callback: Optional[Callable] = None) -> tuple[list, list, list]:
         """ Run commands on multiple devices, each in its own thread.
 
             :param what: Description of the command being run. For display
@@ -1068,6 +1079,7 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
                 any devices failed.
             :param ignore: A class of exception to exclude from the list of
                 failures.
+            :param callback:
             :return: Three lists: successful executions, failures, and
                 ones that failed to complete before the timeout.
         """
@@ -1818,7 +1830,7 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
             self.startThreads('start recording', devs)
 
         self._multiWarning("Start Checked", "recording on command",
-                           devs, checked, "cantStart")
+                           devs, checked, "ask.cantStart")
 
 
     def OnStreamSelected(self, _evt):
@@ -1830,8 +1842,10 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         if canStream:
             self.startStreaming(*canStream)
 
+        # NB: The "ask" prefix on the pref name is for enDAQ Lab compatibility
+        # (it uses it to identify what to reset when clearing hidden dialogs)
         self._multiWarning("Stream from Checked", "streaming data",
-                           canStream, checked, "cantStream")
+                           canStream, checked, "ask.cantStream")
 
 
     def OnStopSelected(self, _evt):
