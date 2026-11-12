@@ -170,18 +170,18 @@ class RebootButton(CheckDriftButton):
 
         if thread := self._command(self.root.device, self.root):
             wx.MilliSleep(100)  # Just to make sure the command executed
-            while thread.is_alive():
-                if thread.failed.is_set():
-                    # TODO: Improved error dialog content based on failure type
-                    msg = f"An error occurred while executing {self.WHAT}"
-                    err = ''
-                    if thread.failure:
-                        err = f'Error: {thread.failure!r}'
-
-                    ExtraMessageBox(msg, "Error", err)
-                    return
+            while thread.is_alive() and not thread.failed.is_set():     # Note: failed threads should automatically exit
                 wx.Yield()
                 wx.MilliSleep(100)
+            if thread.failed.is_set():
+                # TODO: Improved error dialog content based on failure type
+                msg = f"An error occurred while executing {self.WHAT}"
+                err = ''
+                if thread.failure:
+                    err = f'Error: {thread.failure!r}'
+
+                ExtraMessageBox(msg, "Error", err)
+                return
 
             # Changes already saved, end with CANCEL
             self.root.EndModal(wx.ID_CANCEL)
