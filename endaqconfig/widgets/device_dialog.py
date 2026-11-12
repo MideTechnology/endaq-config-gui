@@ -207,7 +207,7 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
                                       self.connector.connectCallback,
                                       self.connector.disconnectCallback)
         else:
-            self._iniialCallbacks = None, None, None
+            self._initialCallbacks = None, None, None
 
         self.defaultBroker: str = _kwargs.get('broker', DEFAULT_BROKER)
         icon = _kwargs.get('icon', None)
