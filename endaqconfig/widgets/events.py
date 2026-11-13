@@ -30,6 +30,9 @@ EvtReset, EVT_RESET = NewEvent()
 # Power down the device (i.e., a Gateway)
 EvtShutdown, EVT_SHUTDOWN = NewEvent()
 
+# A set of background threads have completed
+EvtThreadsComplete, EVT_THREADS_COMPLETE = NewEvent()
+
 # ===========================================================================
 # Wi-Fi events
 # ===========================================================================

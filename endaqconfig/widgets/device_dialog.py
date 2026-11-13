@@ -14,6 +14,7 @@ import os.path
 import threading
 from time import sleep, time
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from weakref import WeakKeyDictionary
 
 import wx
 import wx.lib.sized_controls as sc
@@ -43,9 +44,13 @@ from endaqconfig.widgets.events import (
     EVT_BROKER_SELECTED, EVT_MQTT_CONNECTING, EVT_MQTT_CONNECTED,
     EVT_MQTT_DISCONNECTED, EVT_MQTT_ERROR, EVT_RESET, EVT_SHUTDOWN,
     EvtMQTTError)
-from endaqconfig.widgets.threads import (DeviceScanThread, DeviceCommandThread, BrokerConnectThread)
+from endaqconfig.widgets.threads import (DeviceScanThread, DeviceCommandThread,
+                                         BrokerConnectThread, ThreadWatcher)
 from endaqconfig.widgets.shared import DeviceToolTip, promptDeviceReboot, promptDeviceShutdown, ask
 import endaq.device.command_interfaces
+
+from widgets.events import EVT_THREADS_COMPLETE
+
 logger = logging.getLogger(__name__)
 
 import endaq.device
@@ -250,6 +255,8 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         self.indicesByRecorder: Dict[Recorder, int] = {}  # List index keyed by `Recorder`
         self.checkedRecorders: set[Recorder] = set()  # Checked items/recorders (to keep checks after list updates)
 
+        self.threads: Dict[Recorder, DeviceCommandThread] = WeakKeyDictionary()
+
         if self.https or self.remote:
             self.finder = MDNSFinder(keepalive=1200)
             self.finder.start()
@@ -303,6 +310,7 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         self.Bind(EVT_LOCK_DEVICE, self.OnLockDevice)
         self.Bind(EVT_RESET, self.OnRebootDevice)
         self.Bind(EVT_SHUTDOWN, self.OnShutdownDevice)
+        self.Bind(EVT_THREADS_COMPLETE, self.OnThreadsComplete)
 
         self.Bind(wx.EVT_TIMER, self.OnUpdateTimerTick, id=self.updateTimer.GetId())
         self.Bind(wx.EVT_TIMER, self.OnConnectFailTimer, id=self.connectFailTimer.GetId())
@@ -1066,7 +1074,7 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
                      timeout: float = 10.0,
                      dialog: bool = True,
                      ignore: Optional[type] = None,
-                     callback: Optional[Callable] = None) -> tuple[list, list, list]:
+                     callback: Optional[Callable] = None):
         """ Run commands on multiple devices, each in its own thread.
 
             :param what: Description of the command being run. For display
@@ -1080,15 +1088,9 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
             :param ignore: A class of exception to exclude from the list of
                 failures.
             :param callback:
-            :return: Three lists: successful executions, failures, and
-                ones that failed to complete before the timeout.
         """
         self.SetCursor(wx.Cursor(wx.CURSOR_WAIT))
         self.enableButtons(False)
-
-        successes = []
-        failures = []
-        timeouts = []
 
         try:
             self.updateTimer.Stop()
@@ -1103,42 +1105,13 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
                 if timeout and isSleeping(dev):
                     timeout = 122
 
-                threads.append(DeviceCommandThread(dev, cmd, *args, **kwargs))
+                thread = DeviceCommandThread(dev, cmd, *args, **kwargs)
+                threads.append(thread)
+                self.threads[dev] = thread
 
-            if timeout:
-                deadline = time() + timeout
-                while any(t.is_alive() for t in threads):
-                    if time() > deadline:
-                        break
-                    if self.isDead():
-                        break
-                    sleep(0.05)
-
-            names = []
-
-            for t in threads:
-                if t.failed.is_set():
-                    if ignore and isinstance(t.failure, ignore):
-                        continue
-                    logger.error(f'{t.command.__name__} failed on {t.device}: {t.failure!r}')
-                    failures.append(t)
-                    names.append(f"{t.device.productName} SN:{t.device.serial} (error)")
-                elif t.is_alive():
-                    logger.error(f'{t.command.__name__} did not complete on {t.device} within {timeout} seconds')
-                    timeouts.append(t)
-                    names.append(f"{t.device.productName} SN:{t.device.serial} (timed out)")
-                else:
-                    successes.append(t)
-
-            if dialog and (failures or (timeouts and timeout)) and not self.isDead():
-                if names:
-                    names = '\u2022 ' + ('\n\u2022 '.join(sorted(names)))
-                    msg = (f"Could not {what} on all devices\n\n"
-                           "The action was unsuccessful on these recorders:\n\n"
-                           f"{names}")
-
-                    wx.MessageBox(msg, "Device Error", parent=self,
-                                  style=wx.OK | wx.ICON_ERROR)
+            watcher = ThreadWatcher(self, threads, what, timeout, dialog, ignore, callback)
+            watcher.start()
+            logger.debug(f'Started {watcher}')
 
         finally:
             if not self.isDead():
@@ -1147,8 +1120,6 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
 
                 if self.autoUpdate:
                     self.updateTimer.Start(self.autoUpdate)
-
-        return successes, failures, timeouts
 
 
     def getChecked(self) -> List[Recorder]:
@@ -1617,6 +1588,55 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
             endaq.device.RECORDERS.clear()
 
         evt.Skip()
+
+
+    def OnThreadsComplete(self, evt):
+        """ Handle the thread completion event, posted by a `ThreadWatcher`.
+        """
+        watcher: ThreadWatcher = evt.watcher
+        logger.debug(f'EVT_THREADS_COMPLETE posted from {watcher}')
+
+        if not watcher.dialog:
+            # XXX: Thread management here
+            return
+
+        # TODO: Special-case display if there is only 1 thread
+
+        failures = []
+
+        for t in watcher.threads:
+            if t.completed.is_set():
+                continue
+
+            device = t.device
+            commandName = t.command.__name__
+            msg = f"{device.productName} SN:{device.serial}"
+
+            if t.is_alive() or isinstance(t.failure, TimeoutError):
+                logger.error(f'{commandName} timed out on {device} after {watcher.timeout} seconds')
+                cause = "(timed out)"
+
+            elif t.failed.is_set():
+                if watcher.ignore and isinstance(t.failure, watcher.ignore):
+                    continue
+                logger.error(f'{commandName} failed on {device}: {t.failure!r}')
+                cause = "(error)"
+
+            else:
+                logger.error(f"{device} in unknown state after {commandName} (shouldn't happen!)")
+                cause = '(unknown)'
+
+            failures.append((t.serial, f"\u2022 {msg} {cause}"))
+
+        if failures and not self.isDead():
+            failures.sort(key=lambda x: x[0])
+            display = '\n'.join(x[1] for x in failures)
+            msg = (f"Could not {watcher.what} on all devices\n\n"
+                   "The action was unsuccessful on these recorders:\n\n"
+                   f"{display}")
+
+            wx.MessageBox(msg, "Device Error", parent=self,
+                          style=wx.OK | wx.ICON_ERROR)
 
 
     def shutDown(self):

@@ -27,7 +27,8 @@ from endaqconfig.common import isOnline, isSleeping
 from endaqconfig.widgets.events import (EvtMQTTConnecting, EvtMQTTConnected,
                                         EvtMQTTDisconnected, EvtMQTTError,
                                         EvtBrokerSelected, EvtConfigWiFiConnectionCheck,
-                                        EvtClosingTemp, EvtConfigWiFiScan)
+                                        EvtClosingTemp, EvtConfigWiFiScan,
+                                        EvtThreadsComplete)
 
 # from .debug_lock import DebugRLock
 
@@ -730,3 +731,57 @@ class WiFiScanThread(threading.Thread):
         except RuntimeError:
             # Dialog probably closed during scan, which is okay.
             pass
+
+
+# ===============================================================================
+#
+# ===============================================================================
+
+class ThreadWatcher(threading.Thread):
+    """
+    A thread that calls a function after all given threads stop.
+    """
+
+    def __init__(self,
+                 parent: "DeviceSelectionDialog",
+                 threads: List[DeviceCommandThread],
+                 what: str = 'performing an action',
+                 timeout: float = 10.0,
+                 dialog: bool = True,
+                 ignore: Optional[type] = None,
+                 callback: Optional[Callable] = None):
+        """
+        :param parent: The parent `DeviceSelectionDialog`.
+        :param threads: A list of `threading.Thread` objects (e.g. created in
+            `DeviceSelectionDialog.startThreads()`)
+        :param callback:
+        """
+        self.parent = parent
+        self.threads = threads
+        self.what = what
+        self.timeout = timeout
+        self.dialog = dialog
+        self.ignore = ignore
+        self.callback = callback
+
+        super().__init__(daemon=True)
+        self.name = f'{type(self).__name__}{self.name}'
+
+
+    def __str__(self):
+        return f'{self.name} {self.what!r} ({len(self.threads)} threads)'
+
+
+    def run(self):
+
+        deadline = time() + self.timeout
+        while time() < deadline:
+            if self.parent.isDead():
+                return
+
+            if not any(t.is_alive() for t in self.threads):
+                break
+
+            sleep(0.25)
+
+        wx.PostEvent(self.parent, EvtThreadsComplete(watcher=self))
