@@ -10,6 +10,7 @@ import logging
 import os.path
 import re
 import socket
+import ipaddress
 from time import time
 from typing import Any, Callable, Optional, Tuple
 
@@ -463,10 +464,17 @@ def parseIP(val: str,
     try:
         ipMatch = re.match(r"\b(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?\b", val)
         hostMatch = re.match(r"^(?!.*\.\.)([A-Za-z0-9.-]+)(?::(\d{1,5}))?$", val)
+        ipv6 = isIPV6(val)
         if ipMatch is None or hostMatch is None:
-            raise ValueError
+            if not ipv6: raise ValueError
 
-        ip, port = (ipMatch or hostMatch).groups()
+        if not ipv6:
+            ip, port = (ipMatch or hostMatch).groups()
+        else:
+            port = val.split(':')[-1]
+            addr = ipaddress.IPv6Interface(val.strip(port).strip(':'))
+            ip = str(addr.ip)
+            scope_id = int(addr.scope_id)
         if ipMatch:
             # This could probably be done in a more complex regular expression:
             if not all(0 <= int(part) <= 255 for part in ip.split('.')):
@@ -479,9 +487,15 @@ def parseIP(val: str,
 
     if check:
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                s.settimeout(timeout)
-                s.connect((ip, port))
+            if ipv6:
+                with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as s:
+                    logger.debug(f'{ip}/{scope_id}:{port}')
+                    s.settimeout(timeout)
+                    s.connect((ip, port, 0, scope_id))
+            else:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(timeout)
+                    s.connect((ip, port))
         except TimeoutError as err:
             logger.error(f"Error validating '{ip}:{port}': {err!r}")
             raise ValueError(f"Could not verify address '{ip}:{port}' (timed out)") from None
@@ -496,6 +510,19 @@ def parseIP(val: str,
 
     return ip, port
 
+
+def isIPV6(val: str) -> bool:
+    """
+    Checks that the given IP Address string is a valid IPv6 address by attempting to
+    instantiate an IPv6Address object using the ipaddress library.
+    :param val: The IP Address string to check.
+    :returns: `True` if `val` is a valid IPv6 address.
+    """
+    try:
+        ipaddress.IPv6Address(val)
+        return True
+    except ValueError:
+        return False
 
 #===============================================================================
 #
