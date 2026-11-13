@@ -328,8 +328,8 @@ class DeviceCommandThread(threading.Thread):
             # logger.debug(f'{self.name}: {self.device} '
             #              f'{self.command.__name__} succeeded')
         except Exception as err:
-            self.failed.set()
             self.failure = err
+            self.failed.set()
             logger.error(f'{self.name}: {self.device} '
                          f'{self.command.__name__} failed: {err!r}')
 

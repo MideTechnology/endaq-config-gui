@@ -20,7 +20,7 @@ def get_version(rel_path):
 
 
 INSTALL_REQUIRES = [
-    "endaq-device @ git+https://github.com/MideTechnology/endaq-device.git@develop",
+    "endaq-device @ git+https://github.com/MideTechnology/endaq-device.git@feature/gateway_interface",
     "wxPython>=4.2.0",
 ]
 
@@ -37,11 +37,11 @@ setuptools.setup(
         classifiers=['Development Status :: 5 - Production/Stable',
                      'License :: OSI Approved :: MIT License',
                      'Natural Language :: English',
-                     'Programming Language :: Python :: 3.9',
                      'Programming Language :: Python :: 3.10',
                      'Programming Language :: Python :: 3.11',
                      'Programming Language :: Python :: 3.12',
-                     'Programming Language :: Python :: 3.13'],
+                     'Programming Language :: Python :: 3.13',
+                     ],
         keywords='endaq slamstick config utility gui',
         packages=setuptools.find_packages(),
         package_dir={'': '.'},
