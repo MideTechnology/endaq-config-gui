@@ -765,15 +765,19 @@ class ThreadWatcher(threading.Thread):
         self.callback = callback
 
         super().__init__(daemon=True)
-        self.name = f'{type(self).__name__}{self.name}'
+        self.name = self.name.replace('Thread', 'ThreadWatcher')
 
 
     def __str__(self):
-        return f'{self.name} {self.what!r} ({len(self.threads)} threads)'
+        living = sum(1 for t in self.threads if t.is_alive())
+        return f'{self.name} {self.what!r} ({living}/{len(self.threads)} live threads)'
+
+
+    def __repr__(self):
+        return f'<{type(self).__name__}({self})>'
 
 
     def run(self):
-
         deadline = time() + self.timeout
         while time() < deadline:
             if self.parent.isDead():

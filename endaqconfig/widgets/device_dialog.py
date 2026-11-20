@@ -1592,12 +1592,15 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
 
     def OnThreadsComplete(self, evt):
         """ Handle the thread completion event, posted by a `ThreadWatcher`.
+            In the event of a timeout, some of its threads may still be alive.
         """
+        # The ThreadWatcher passes itself to the handler
         watcher: ThreadWatcher = evt.watcher
-        logger.debug(f'EVT_THREADS_COMPLETE posted from {watcher}')
+        logger.debug(f'EVT_THREADS_COMPLETE posted from {watcher!r}')
 
         if not watcher.dialog:
-            # XXX: Thread management here
+            # No notification
+            # XXX: Thread management here (clean cached threads, etc.)
             return
 
         # TODO: Special-case display if there is only 1 thread
@@ -1662,7 +1665,7 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
             # Remove or restore callbacks
             (self.connector.updateCallback,
              self.connector.connectCallback,
-             self.connector.disconnectCallback) = self._iniialCallbacks
+             self.connector.disconnectCallback) = self._initialCallbacks
             # Disconnect if the connection wasn't pre-existing (i.e., the
             # same as the one provided as the `connector` kwarg)
             if self.connector != self._initialConnector:

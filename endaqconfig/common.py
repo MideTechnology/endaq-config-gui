@@ -128,7 +128,8 @@ def getClipboardText() -> str:
 
 def isOnline(device: Recorder) -> bool:
     """ Is the device in an 'online' state? Note that local USB devices are
-        inherently online.
+        inherently online. Note that sleeping is considered online; use
+        `isSleeping()` for that.
     """
     if device.isVirtual:
         return False
@@ -161,6 +162,8 @@ def isOnline(device: Recorder) -> bool:
 def isSleeping(device: Recorder) -> bool:
     """ Is the device in a 'sleeping' state?
     """
+    if not device.hasCommandInterface:
+        return False
     status = device.command.status[1]
     if status is not None and 300 <= status < 400:
         # Codes 300-399 are 'periodic' variants of positive codes 0-99
@@ -183,7 +186,7 @@ def isLocked(device: Recorder) -> Tuple[bool, bool]:
     """ Has the hardware been 'claimed' for exclusive use via `setLockID()`?
         This version uses only cached values and does not issue a command.
     """
-    if device.apiVersion < 3:
+    if not device.hasCommandInterface or device.apiVersion < 3:
         return False, False
 
     lock = device.command.lockId[1]
@@ -195,7 +198,7 @@ def isLocked(device: Recorder) -> Tuple[bool, bool]:
 def isRecording(device: Recorder) -> bool:
     """ Is the device in a 'recording' state?
     """
-    if not device.command.canRecord:
+    if not device.hasCommandInterface or not device.command.canRecord:
         return False
 
     status = device.command.status[1]
