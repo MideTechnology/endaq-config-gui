@@ -92,7 +92,7 @@ def getStatusDisplay(status: Union[DeviceStatusCode, int]) -> tuple[str, wx.Colo
 #
 # ===========================================================================
 
-class NewControlButtons(wx.Panel):
+class ListControlButtons(wx.Panel):
     """
     Panel containing device control buttons (start/stop recording and config).
     Its icons are also used in device dialog context menus and reboot/shutdown
@@ -356,8 +356,8 @@ class ListContextMenu(wx.Menu):
         self.index = index
         super().__init__()
 
-        NewControlButtons._loadImages()
-        icons = NewControlButtons.ICONS
+        ListControlButtons._loadImages()
+        icons = ListControlButtons.ICONS
 
 
         locked, mine = isLocked(self.device)
@@ -508,7 +508,7 @@ def populateButtonColumn(dev: Recorder,
         :param root: The parent window/dialog.
         :return: A string for use in column sorting ("" in this case).
     """
-    pan = NewControlButtons(root, root.list, dev, index, column)
+    pan = ListControlButtons(root, root.list, dev, index, column)
     root.list.SetItemWindow(index, column, pan, expand=True)
     root.minWidths[root.buttonCol] = pan.GetSize()[0]
     return ""

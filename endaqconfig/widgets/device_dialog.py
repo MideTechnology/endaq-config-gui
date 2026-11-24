@@ -36,7 +36,7 @@ from endaqconfig.widgets import icons
 from endaqconfig.widgets.broker_dialog import BrokerDialog
 from endaqconfig.widgets.controls import (
     _attribFormatter, populateStatusColumn, populateButtonColumn,
-    populateBatteryColumn, NewControlButtons, ListContextMenu,
+    populateBatteryColumn, ListControlButtons, ListContextMenu,
     STATUS_DISPLAY)
 from endaqconfig.widgets.events import (
     EVT_RECORD, EVT_STREAM, EVT_CONFIG, EVT_LOCK_DEVICE, EVT_BLINK,
@@ -363,10 +363,10 @@ class DeviceSelectionDialog(sc.SizedFrame, listmix.ColumnSorterMixin):
         except (TypeError, ValueError):
             defaultPath = ''
 
-        NewControlButtons._loadImages()
-        startIcons = NewControlButtons.ICONS[1]
-        stopIcons = NewControlButtons.ICONS[2]
-        streamIcons = NewControlButtons.ICONS[3]
+        ListControlButtons._loadImages()
+        startIcons = ListControlButtons.ICONS[1]
+        stopIcons = ListControlButtons.ICONS[2]
+        streamIcons = ListControlButtons.ICONS[3]
 
         buttonpane = sc.SizedPanel(pane, -1)
         buttonpane.SetSizerType("horizontal")

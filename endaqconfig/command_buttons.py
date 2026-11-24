@@ -10,7 +10,7 @@ import wx
 from .base import ConfigWidget
 from .base import registerField
 from .common import isCompiled
-from .widgets.controls import NewControlButtons
+from .widgets.controls import ListControlButtons
 from .widgets.shared import promptDeviceReboot, promptDeviceShutdown, ExtraMessageBox
 
 logger = logging.getLogger(__file__)
@@ -132,8 +132,8 @@ class RebootButton(CheckDriftButton):
         self.field = wx.Button(self, -1, self.label)
         self.field.SetToolTip(self.tooltip)
 
-        NewControlButtons._loadImages()
-        icons = NewControlButtons.ICONS[self._ICON_IDX]
+        ListControlButtons._loadImages()
+        icons = ListControlButtons.ICONS[self._ICON_IDX]
         self.field.SetBitmap(icons[0], wx.LEFT)
         self.field.SetBitmapCurrent(icons[0])
         self.field.SetBitmapPressed(icons[2])
