@@ -28,7 +28,7 @@ from endaqconfig.widgets.events import (EvtMQTTConnecting, EvtMQTTConnected,
                                         EvtMQTTDisconnected, EvtMQTTError,
                                         EvtBrokerSelected, EvtConfigWiFiConnectionCheck,
                                         EvtClosingTemp, EvtConfigWiFiScan,
-                                        EvtThreadsComplete)
+                                        EvtThreadComplete, EvtThreadsComplete)
 
 # from .debug_lock import DebugRLock
 
@@ -230,8 +230,10 @@ class DeviceScanThread(threading.Thread):
                     continue
 
                 if dev not in self.updateThreads:
-                    currentThreads[dev] = DeviceCommandThread(dev, updateDeviceStatus,
-                                                              dev, callback=self.stopped)
+                    currentThreads[dev] = DeviceCommandThread(self.parent,
+                                                              dev, updateDeviceStatus,
+                                                              args=(dev,),
+                                                              kwargs={'callback': self.stopped})
 
             self.updateThreads = currentThreads
 
@@ -288,34 +290,53 @@ class DeviceCommandThread(threading.Thread):
     """
 
     def __init__(self,
+                 parent: Optional[wx.Window],
                  device: Recorder,
                  command: Callable,
-                 *args,
-                 **kwargs):
+                 args=None,
+                 kwargs=None,
+                 what: Optional[str] = None,
+                 dialog: bool = False,
+                 ignore: Optional[type] = None,
+                 successCallback: Optional[Callable] = None,
+                 failureCallback: Optional[Callable] = None):
         """ A slightly safer-than-normal thread for asynchronously calling
             simple `Recorder` methods. Note that threads start immediately
             upon instantiation!
 
+            :param parent: The parent window/dialog from which the thread was
+                started.
             :param device: The device running the command.
             :param command: The function/method to call.
-
-            Other arguments/keyword arguments are used when calling `command`
-            (like `functools.partial`).
+            :param args: A tuple/list of positional arguments for the command.
+            :param kwargs: A dict of keyword arguments for the command.
+            :param what: A human-readable description of the command.
+            :param dialog: `True` if the parent should show a dialog if
+                the command failed.
+            :param ignore: An exception type that the `OnThreadComplete`
+                event handler should ignore instead of showing a dialog.
+            :param successCallback: A callback function executed upon success.
+                It must take one or more `DeviceCommandThread` instances.
+            :param failureCallback: A callback function executed upon failure.
+                It must take one or more `DeviceCommandThread` instances.
         """
+        self.parent = parent
         self.device = device
         self.command = command
-        self.args: Tuple[Any] = args
-        self.kwargs: Dict[str, Any] = kwargs
+        self.args: Tuple[Any] = args or tuple()
+        self.kwargs: Dict[str, Any] = kwargs or dict()
+        self.dialog = dialog
+        self.ignore = ignore
+        self.what = what if what is not None else f"executing '{command.__name__}'"
+        self.successCallback = successCallback
+        self.failureCallback = failureCallback
 
         self.completed = threading.Event()  # Set upon successful completion
         self.result: Any = None  # The result of the function (if any)
         self.failed = threading.Event()  # Set if command raises an exception
         self.failure: Optional[Exception] = None  # Exception raised by the command (if any)
 
-        super().__init__(
-                # name=f'{type(self).__name__}_{device.serial} ({command.__name__})',
-                daemon=True
-        )
+        super().__init__(daemon=True)
         self.name = self.name.replace('Thread',
                                       f'{type(self).__name__}_{device.serial} ({command.__name__})')
         self.start()
@@ -332,6 +353,9 @@ class DeviceCommandThread(threading.Thread):
             self.failed.set()
             logger.error(f'{self.name}: {self.device} '
                          f'{self.command.__name__} failed: {err!r}')
+
+        if self.parent:
+            wx.PostEvent(self.parent, EvtThreadComplete(thread=self))
 
 
 # ===========================================================================
@@ -745,16 +769,20 @@ class ThreadWatcher(threading.Thread):
     def __init__(self,
                  parent: "DeviceSelectionDialog",
                  threads: List[DeviceCommandThread],
-                 what: str = 'performing an action',
+                 what: str = 'executing a command',
                  timeout: float = 10.0,
                  dialog: bool = True,
                  ignore: Optional[type] = None,
-                 callback: Optional[Callable] = None):
+                 successCallback: Optional[Callable] = None,
+                 failureCallback: Optional[Callable] = None):
         """
         :param parent: The parent `DeviceSelectionDialog`.
         :param threads: A list of `threading.Thread` objects (e.g. created in
             `DeviceSelectionDialog.startThreads()`)
-        :param callback:
+        :param successCallback: A callback function executed upon successes.
+            It must take one or more `DeviceCommandThread` instances.
+        :param failureCallback: A callback function executed upon failures.
+            It must take one or more `DeviceCommandThread` instances.
         """
         self.parent = parent
         self.threads = threads
@@ -762,7 +790,8 @@ class ThreadWatcher(threading.Thread):
         self.timeout = timeout
         self.dialog = dialog
         self.ignore = ignore
-        self.callback = callback
+        self.successCallback = successCallback
+        self.failureCallback = failureCallback
 
         super().__init__(daemon=True)
         self.name = self.name.replace('Thread', 'ThreadWatcher')
@@ -788,4 +817,27 @@ class ThreadWatcher(threading.Thread):
 
             sleep(0.25)
 
-        wx.PostEvent(self.parent, EvtThreadsComplete(watcher=self))
+        if self.parent:
+            wx.PostEvent(self.parent, EvtThreadsComplete(watcher=self))
+
+
+def makeThreadErrorMessage(t: DeviceCommandThread) -> str:
+    """ Format an error message for a failed device command. Also writes
+        a message to the log.
+    """
+    device = t.device
+    commandName = t.command.__name__
+
+    if t.is_alive() or isinstance(t.failure, TimeoutError):
+        logger.error(f'{commandName} timed out on {device}')
+        cause = "(timed out)"
+
+    elif t.failed.is_set():
+        logger.error(f'{commandName} failed on {device}: {t.failure!r}')
+        cause = "(error)"
+
+    else:
+        logger.error(f"{device} in unknown state after {commandName} (shouldn't happen!)")
+        cause = '(unknown)'
+
+    return f"{t.device.productName} SN:{t.device.serial} {cause}"

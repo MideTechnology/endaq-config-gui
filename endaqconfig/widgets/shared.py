@@ -623,8 +623,8 @@ def promptDeviceReboot(device: Recorder,
     device.command.status = ts, DeviceStatusCode.RESET_PENDING, msg
 
     logger.debug(f'Sending reboot to {device}')
-    thread = DeviceCommandThread(device, device.command.reset,
-                                 timeout=timeout, callback=callback)
+    thread = DeviceCommandThread(parent, device, device.command.reset,
+                                 kwargs={'timeout': timeout, 'callback': callback})
 
     # This will need revising if we use different hardware
     if isGateway(device) and 'Serial' in type(device.command).__name__:
@@ -667,8 +667,8 @@ def promptDeviceShutdown(device: Recorder,
     device.command.status = ts, DeviceStatusCode.SHUTDOWN, msg
 
     logger.debug(f'Sending shutdown to {device}')
-    thread = DeviceCommandThread(device, device.command.shutdown,
-                                 timeout=timeout, callback=callback)
+    thread = DeviceCommandThread(parent, device, device.command.shutdown,
+                                 kwargs={'timeout': timeout, 'callback': callback})
     return thread
 
 
